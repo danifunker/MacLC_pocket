@@ -1,0 +1,3 @@
+[submodule "src/fpga/core/MacPlus_MiSTer"]
+	path = src/fpga/core/MacPlus_MiSTer
+	url = https://github.com/danifunker/MacPlus_MiSTer
