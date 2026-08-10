@@ -13,6 +13,17 @@ git -C ../MacLC_MiSTer show 5a75f9b:rtl/swim.v
 
 ---
 
+## Toolchain
+
+| | Version | Notes |
+|---|---|---|
+| **Quartus Prime Lite** | **18.1.1** (build 646) | The APF template's project files are stamped `ORIGINAL_QUARTUS_VERSION 18.1.1`, and `mf_pllbase` was generated with ACDS 18.1 646. An older Quartus prompts to upgrade the IP, which **regenerates it and discards the retargeted clock frequencies** in `core/mf_pllbase/mf_pllbase_0002.v`. The MiSTer core used 17.0.2 — not interchangeable. Lite is free, no license needed for Cyclone V. |
+| **Verilator** | **5.x** | `verilator/Makefile` passes `--timing`, introduced in Verilator 5.0, and uses the v5 warning names `WIDTHEXPAND`/`WIDTHTRUNC`. A 4.x build will not accept the flags. |
+| SDL2 + OpenGL | dev packages | Only for the interactive GUI harness (`sim_main.cpp`, imgui). The headless paths (`--screenshot`, `--stop-at-frame`, `check_boot.sh`) still link against them. |
+
+On Windows the Makefile has a MinGW branch, but WSL2 is the path of least
+resistance for Verilator. Quartus runs natively on Windows.
+
 ## The budget this port exists to satisfy
 
 | | DE10-Nano (5CSEBA6U23I7) | Pocket (5CEBA4F23C8) |
@@ -128,11 +139,59 @@ cleared on a mode flip so nothing can stick.
 
 ### 1. `src/fpga/core/mac_lc_pocket.sv` — the machine top. **Blocking.**
 
-`core_top.v` instantiates it; it does not exist. This is the port of
-`docs/mister_reference/MacLC.sv.reference` (2,302 lines, kept precisely
-because it is the specification for this file).
+`core_top.v` instantiates it; it does not exist.
 
-Keep, adapting only the edges:
+**Base it on `verilator/sim.v`, not on `MacLC.sv.reference`.** This was
+re-evaluated 2026-08-10 and it is the better starting point by a wide margin:
+
+| | `MacLC.sv.reference` | `verilator/sim.v` |
+|---|---:|---:|
+| lines | 2,302 | **1,097** |
+| MiSTer framework glue | `hps_io`, `CONF_STR`/`status[]`, `video_freak`, `pll_video`+`pll_cfg`, `dbg_probes`, HDMI/UART — all to be deleted | **already absent** |
+| CPU bus glue | reference | **audited byte-identical** (see below) |
+| clock source | instantiates the PLL | **`clk_sys` is an input** — which is what we want, `core_top` owns the PLL |
+| memory model | `sdram` controller | `sim_ram`, **same `.din/.addr/.ds/.we/.oe/.dout` interface as `pocket_sdram`** — a drop-in swap |
+| config inputs | decoded from `status[31:0]` | **already discrete ports**: `cfg_memSize`, `nmi_pulse`, `timestamp` |
+| download stream | `dio_*` from `hps_io` | `ioctl_*`, same shape as `apf_bridge_loader` emits |
+| block devices | `hps_io` slots | `sd_lba[]`/`sd_rd`/`sd_wr`/`sd_buff_*` — the shape `apf_blockdev` must drive |
+
+`docs/verilator_differences.md` explicitly audits the CPU bus glue as
+byte-identical between the two tops — `cpu_berr`, `_cpuVPA`, `_cpuDTACK`, the
+`dtack_en` block, `fc7_berr`, `fc7_iack`, `overlay_trigger`,
+`memoryOverlayOn`. That is the hardest part of the machine top and it is
+already correct in `sim.v`.
+
+**What `sim.v` is missing** is exactly the "intentional FPGA-only additions"
+list in `docs/verilator_differences.md` — that document is, conveniently, the
+gap list:
+
+- `rom_loaded` latch (hold reset from config until the first ROM download
+  begins, so the 68k can't execute whatever the previous core left in SDRAM at
+  the ROM window). Needed on Pocket for the same reason.
+- `pll_locked` 2-FF synchroniser — already provided as `pll_core_locked_sys`
+  by `core_top`.
+- the `sdram_reinit` pulse: edge-triggered, gated on `rom_loaded` and
+  `!dio_download`. The reverted MiSTer attempts that tied `.init` to a level
+  held through the download broke cold boot.
+- PRAM persistence FSM (needs `apf_blockdev` first).
+- `v8_monitor_id`: sim hardwires `4'h6` (640×480); the Pocket must hardwire
+  `4'h2` (12" RGB 512×384), which is now the only timing.
+- RAM size: sim hardwires `configRAMSize = 8'h24` (2 MB). Wire `opt_mem_size`
+  to select 2 MB / 10 MB — and note the 10 MB SIMM path **has never been
+  exercised in simulation**, only on MiSTer hardware.
+
+**The bigger prize.** If `mac_lc_pocket.sv` is derived from `sim.v` with the
+memory interface left as ports, then `sim.v` can *instantiate* it instead of
+duplicating it, and the two-tops divergence class disappears. That class has
+bitten this project repeatedly: `sim.v` once hardwired `.berr(1'b0)`, masking
+the MOVES bus-error fix; `selectASC` was connected in `sim.v` but left
+floating in `MacLC.sv`, so ASC register access was dead on hardware while sim
+audio worked. The port is the right moment to collapse them — it is the only
+time the machine top gets rewritten anyway.
+
+---
+
+Reference material for whichever base is used — keep, adapting only the edges:
 - reset sequencing incl. the `rom_loaded` latch (without it the 68k runs on
   whatever the previous core left in SDRAM at the ROM window)
 - `tg68k` instantiation + VPA/DTACK/BERR/overlay glue, incl. `periph_din_reg`
@@ -215,10 +274,11 @@ not as a result.
    check. This validates the three cuts against the harness that already
    knows what a good boot looks like, before any Pocket-specific code is in
    the way. Anything broken here is broken in the cuts, not the port.
-2. **Write `mac_lc_pocket.sv`** against
-   `docs/mister_reference/MacLC.sv.reference`, then get a Quartus fit. The fit
-   report is the first real answer on whether the budget works — compare its
-   ALM/M10K numbers against the estimates above.
+2. **Write `mac_lc_pocket.sv` from `verilator/sim.v`** (see above for why, and
+   for the gap list), then get a Quartus fit. The fit report is the first real
+   answer on whether the budget works — compare its ALM/M10K numbers against
+   the estimates above. Consider collapsing the two tops while you are in
+   there.
 3. **Write `apf_blockdev`** so SCSI disks mount. Until then the machine can
    only boot from floppy.
 4. Hardware bring-up: video first (it is the one thing with no offline

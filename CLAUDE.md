@@ -37,8 +37,14 @@ Do not re-add any of these without redoing the budget arithmetic in
 ## Build Commands
 
 ### FPGA Build (Quartus)
-openFPGA cores build with **Quartus 17.1** (not the 17.0.2 the MiSTer core
-used), targeting `5CEBA4F23C8`.
+**Quartus Prime Lite 18.1.1** (build 646), targeting `5CEBA4F23C8`.
+
+Not the 17.0.2 the MiSTer core used. The openFPGA template's project files are
+stamped `ORIGINAL_QUARTUS_VERSION 18.1.1` and `mf_pllbase` was generated with
+ACDS 18.1 646, so an older Quartus will prompt to upgrade the IP — which
+regenerates it and silently discards the retargeted clock frequencies in
+`core/mf_pllbase/mf_pllbase_0002.v`. Use 18.1.1. Lite is free and needs no
+license for Cyclone V.
 
 - Project: `src/fpga/ap_core.qpf`
 - Top-level entity: `apf_top` (in `src/fpga/apf/`), which instantiates
