@@ -54,11 +54,22 @@ module  mf_pllbase_0002(
 		//                        divider (PCLK_LIM = 32500 is literally this
 		//                        number), and the CPU's 8.125/16.25 MHz enables.
 		//                        Do not change it without auditing all of those.
-		//  outclk_3  15.667 MHz  clk_pix  — 512x384 12in RGB dot clock. Target is
-		//                        15.664 MHz (640 x 407 total x 60.15 Hz); the
-		//                        fractional PLL lands within ~0.02%, which is far
-		//                        inside what the guest's VBL and the Analogue
-		//                        scaler tolerate.
+		//  outclk_3  15.662651 MHz  clk_pix — 512x384 12in RGB dot clock.
+		//
+		//  ALL FOUR OUTPUTS SHARE ONE VCO, so the pixel clock is not free: with
+		//  65 and 32.5 MHz fixed, VCO = 65 x N and clk_pix = 65 x N / C for
+		//  integer counters. Asking for a "nice" 15.666667 MHz is NOT
+		//  synthesisable and the Fitter rejects it outright:
+		//     Error: PLL Output Counter parameter 'output_clock_frequency' is
+		//     set to an illegal value of '15.666667 MHz'
+		//  Searching N gives N=20 (VCO 1300 MHz) with C=83 -> 15.662651 MHz,
+		//  which is 0.008% from the 15.664 MHz ideal (640 x 407 x 60.15 Hz).
+		//  Resulting frame rate 60.147 Hz. Runners-up were much worse: N=13
+		//  gives 15.648 (-0.10%), N=14 gives 15.690 (+0.16%).
+		//
+		//  If a future change needs a pixel clock this constraint cannot reach,
+		//  give it its OWN PLL — the 5CEBA4 has four and this design uses one,
+		//  which is what MiSTer did with pll_video.
 		// ---------------------------------------------------------------
 		.output_clock_frequency0("65.000000 MHz"),
 		.phase_shift0("0 ps"),
@@ -69,7 +80,7 @@ module  mf_pllbase_0002(
 		.output_clock_frequency2("32.500000 MHz"),
 		.phase_shift2("0 ps"),
 		.duty_cycle2(50),
-		.output_clock_frequency3("15.666667 MHz"),
+		.output_clock_frequency3("15.662651 MHz"),
 		.phase_shift3("0 ps"),
 		.duty_cycle3(50),
 		.output_clock_frequency4("0 MHz"),

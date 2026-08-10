@@ -35,3 +35,9 @@ Thumbs.db
 
 # Boot ROM / disk images: copyrighted Apple content, never commit
 releases/
+
+# Quartus build products under src/fpga (project dir)
+src/fpga/db/
+src/fpga/incremental_db/
+src/fpga/output_files/
+src/fpga/.qsys_edit/
