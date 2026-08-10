@@ -176,12 +176,15 @@ handle the write direction for save-back.
 - **Data-slot `parameters` bitfields in `data.json` are guesses.** The APF
   spec's bit meanings are not documented in the core template and were not
   available offline. Verify before trusting save-back on the SCSI/PRAM slots.
-- **`verilator/sim.v` is broken** — it still wires the removed
-  `dataController_top` ports (11 references: `cd_snd`, `dbg_cda*`, `cdtb_*`,
-  `cd_io_*`, `tb_lba`, `dskReadAddrExt`). The Verilator harness is the most
-  valuable verification asset in the repo (boot check, screenshot oracle,
-  `tb_disk_swap`, the GCR/MFM benches) and fixing it is probably the highest
-  value-per-hour task after `mac_lc_pocket.sv`.
+- **`verilator/sim.v` has been repaired** (`23cd6f5`) — all three cuts are
+  propagated into the second top level. Not built (no Verilator here), so the
+  first person with the toolchain should run `make` in `verilator/` and then
+  `./check_boot.sh --run 100`. That is the earliest point at which any of the
+  cuts get real verification.
+  - One behaviour change to expect: the boot regression used to exercise the
+    disc-less CD target during the ROM's SCSI scan (`cd_enable` was tied on).
+    The scan now finds nothing at ID 3 — which is what a real LC without a
+    CD-ROM drive does.
 - **PRAM save-back** (MiSTer slot `SC2`) needs the same target-command path as
   the disks.
 
@@ -194,12 +197,29 @@ this port has been compiled, simulated, or fitted.** The only automated check
 that ran is:
 
 ```bash
-python scripts/check_hierarchy.py rtl
+python scripts/check_hierarchy.py rtl src/fpga verilator/sim.v
 ```
 
-a regex pass confirming every instantiated module still exists (37 files, 42
-modules, clean). It is a heuristic, not a parser, and it does not check port
+a regex pass confirming every instantiated module still exists (52 files, 60
+modules; the one reported dangling reference is `mac_lc_pocket`, which is the
+documented gap). It is a heuristic, not a parser, and it does not check port
 widths, connectivity, or syntax.
 
 Treat every "estimated" number above as arithmetic on the MiSTer fit report,
 not as a result.
+
+## Suggested order from here
+
+1. **Fix nothing yet — build the Verilator sim first.** `make` in
+   `verilator/`, then `./check_boot.sh --run 100` and the frame-450 screenshot
+   check. This validates the three cuts against the harness that already
+   knows what a good boot looks like, before any Pocket-specific code is in
+   the way. Anything broken here is broken in the cuts, not the port.
+2. **Write `mac_lc_pocket.sv`** against
+   `docs/mister_reference/MacLC.sv.reference`, then get a Quartus fit. The fit
+   report is the first real answer on whether the budget works — compare its
+   ALM/M10K numbers against the estimates above.
+3. **Write `apf_blockdev`** so SCSI disks mount. Until then the machine can
+   only boot from floppy.
+4. Hardware bring-up: video first (it is the one thing with no offline
+   oracle), then input, then audio.
