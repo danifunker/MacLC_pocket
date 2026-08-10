@@ -81,39 +81,12 @@ module ncr5380
 	output      [15:0] sd_buff_din[DEVS],
 	input              sd_buff_wr,
 
-	// ---- BlueSCSI Toolbox dedicated block interface (primary target / ID 0) --
-	input         tb_mounted,
-	output [31:0] tb_lba,
-	output        tb_rd,
-	output        tb_wr,
-	input         tb_ack,
-	output [15:0] tb_buff_din,
-
-	// ---- BlueSCSI Toolbox CD Changer block interface (CD target / ID 3) ------
-	// Same transport shape as tb_* above, dedicated to the cdrom_target so it can
-	// enumerate/switch CD images. docs/BLUESCSI_CD_CHANGER_CONTRACT.md
-	input         cdtb_mounted,
-	output [31:0] cdtb_lba,
-	output        cdtb_rd,
-	output        cdtb_wr,
-	input         cdtb_ack,
-	output [15:0] cdtb_buff_din,
-
-	// CD audio PCM from the CDROM target's playback engine
-	output signed [15:0] cd_snd_l,
-	output signed [15:0] cd_snd_r,
-
-	// ---- CD-ROM target (SCSI ID 3) dedicated block interface ----------------
-	// Own hps_io slot; read-only. cd_enable = OSD "CD-ROM Drive" option: when
-	// off the target never answers selection (bus looks exactly like pre-CD
-	// builds — the A/B lever if the new target ever misbehaves on HW).
-	input         cd_enable,
-	input         cd_img_mounted,
-	output [31:0] cd_io_lba,
-	output        cd_io_rd,
-	output        cd_io_wr,
-	input         cd_io_ack,
-	output [15:0] cd_sd_buff_din,
+	// POCKET CUT: removed with the CD-ROM target and the BlueSCSI Toolbox --
+	//   tb_*     Toolbox block transport (was on disk target ID 0)
+	//   cdtb_*   Toolbox CD Changer transport (was on the CD target)
+	//   cd_snd_* CD audio PCM into the top-level mixer
+	//   cd_*     CD-ROM target's own block-device slot + enable
+	// The Pocket has no CD image slot and no Toolbox host to talk to.
 
 	// JTAG debug: selection/arbitration state for the hardware hang
 	output      [15:0] dbg_scsi,
@@ -153,21 +126,10 @@ module ncr5380
 	//   [15:0]=data_cnt [18:16]=phase [19]=data_complete [20]=io_wr [21]=io_ack
 	//   [22]=io_busy [23]=sd_buff_sel [24]=cmd_write [30:25]=tlen [31]=req
 	output      [31:0] dbg_wr,
-	output      [31:0] dbg_wrfb,  // JTAG WRFB: write first-beat forensics (data-phase-routed)
-	// JTAG CDA0/CDA1: CD-audio engine + CD target command visibility
-	output      [31:0] dbg_cda0,
-	output      [31:0] dbg_cda1,
-	output      [31:0] dbg_cda2,
-	output      [31:0] dbg_cda3,
-	output      [31:0] dbg_cda4,
-	output      [31:0] dbg_cdur
+	output      [31:0] dbg_wrfb   // JTAG WRFB: write first-beat forensics (data-phase-routed)
+	// POCKET CUT: dbg_cda0..4 / dbg_cdur (CD-audio engine visibility) removed.
 );
 	parameter DEVS = 2;
-	// Read-prefetch ring depth for the CD target. 3 => 8 sectors / 4KB = two
-	// 2048-byte CD blocks buffered. Kept smaller than the disks' RING_LOG=5:
-	// the sector-buffer M10K budget is nearly full (scsi.v RING_LOG notes) and
-	// the CD is never the boot device, so latency-hiding matters less.
-	parameter CD_RING_LOG = 3;
 
 	reg  [7:0] mr;        /* Mode Register */
 	reg  [7:0] icr;       /* Initiator Command Register */
@@ -685,120 +647,32 @@ module ncr5380
 	wire     [15:0] target_dout_pair[DEVS];
 	wire     [15:0] target_dout_pair_next[DEVS];
 
-	// BlueSCSI Toolbox per-target transport wires; only index 0 (the primary
-	// ID-6 target, TOOLBOX_ENABLE) drives real values — others tie off to 0.
+	// POCKET CUT: BlueSCSI Toolbox removed. TOOLBOX_ENABLE is 0 on every
+	// target now, so scsi.v's toolbox body folds away and these transport
+	// wires are permanently idle. They stay declared (tied off below) only
+	// because the generate block's port list still names them; the synthesis
+	// result is nothing.
 	wire     [31:0] tb_lba_g[DEVS];
 	wire [DEVS-1:0] tb_rd_g, tb_wr_g;
 	wire     [15:0] tb_buff_din_g[DEVS];
 	reg      [15:0] din_pair;
 	reg      [15:0] din_pair_next;
 
-	wire cd_bsy;
-	wire cd_msg;
-	wire cd_io;
-	wire cd_cd;
-	wire cd_req;
-	wire cd_req_bus;
-	wire [7:0] cd_dout;
-	wire [15:0] cd_dout_pair;
-	wire [15:0] cd_dout_pair_next;
-
-	// CD-ROM target (SCSI ID 3, MAME maclc.cpp attaches NSCSI_CDROM_APPLE
-	// there). Same wedge-hardened scsi.v target as the disks, in CDROM mode:
-	// read-only, 2048-byte logical blocks over hps_io slot VD_CDROM, AppleCD
-	// command set. Supersedes the old scsi_empty_cd stub (since removed
-	// from scsi.v). Responds to selection whenever cd_enable —
-	// media-less selection returns the AppleCD no-disc sense, which is how
-	// the driver's insertion poll works.
-	// TB_ADDRW(11) = 4 KB tb buffer (8 sectors) so LIST CDS holds the full
-	// 100-entry list in one fetch-all-then-serve pass (§4/§10 of the contract).
-	scsi #(.ID(3'd3), .CDROM(1), .CDCHANGER_ENABLE(1), .TB_ADDRW(11), .RING_LOG(CD_RING_LOG)) cdrom_target
-	(
-		.clk    ( clk ),
-		.rst    ( scsi_rst ),
-		.sys_rst( reset ),
-		.cd_snd_l ( cd_snd_l ),
-		.cd_snd_r ( cd_snd_r ),
-		.dbg_cda0 ( dbg_cda0 ),
-		.dbg_cda1 ( dbg_cda1 ),
-		.dbg_cda2 ( dbg_cda2 ),
-		.dbg_cda3 ( dbg_cda3 ),
-		.dbg_cda4 ( dbg_cda4 ),
-		.dbg_cdur ( dbg_cdur ),
-		.sel    ( scsi_sel ),
-		.cd_enable ( cd_enable ),
-		// Selection requires a free bus — a wedged-BUSY device must not let a
-		// second selection create two active targets sharing the broadcast ACK
-		// stream (LBMacTwo corruption fix 4376c8f).
-		.bus_busy ( |target_bsy ),
-		.atn    ( scsi_atn ),
-
-		.ack    ( scsi_ack ),
-		.host_csr_rd ( csr_rd ),
-		.host_data_rd ( i_dma_rd ),
-
-		.bsy    ( cd_bsy  ),
-		.msg    ( cd_msg  ),
-		.cd     ( cd_cd   ),
-		.io     ( cd_io   ),
-		.req    ( cd_req  ),
-		.req_bus( cd_req_bus ),
-		.dout   ( cd_dout ),
-		.dout_pair ( cd_dout_pair ),
-		.dout_pair_next ( cd_dout_pair_next ),
-
-		.din    ( scsi_bus_data ),
-
-		.img_mounted( cd_img_mounted ),
-		.img_blocks( img_size ),
-		.io_lba ( cd_io_lba ),
-		.io_rd  ( cd_io_rd ),
-		.io_wr  ( cd_io_wr ),
-		// io_ack/sd_buff_wr are framed by the SLOT's HPS session (cd_io_ack),
-		// NOT the SCSI bus state: the CD-audio TOC/frame fetches run while the
-		// target is bus-IDLE (cd_bsy=0 is the CA grant condition), so the old
-		// '& cd_bsy' gates starved the blob capture of every write strobe —
-		// blob RAM stayed zeros, MCDA magic never matched (HW 2026-07-17;
-		// fill() provably served 4D 43 44 41). Harmless for data ops: ack
-		// frames those transfers too. scsi.v's idle-phase consumers are safe
-		// (sd_buff_sel held in PHASE_IDLE; rd_hps_blk cmd_read-guarded).
-		.io_ack ( cd_io_ack ),
-
-		.sd_buff_addr( sd_buff_addr ),
-		.sd_buff_addr_hi( sd_buff_addr_hi ),
-		.sd_buff_dout( sd_buff_dout ),
-		.sd_buff_din( cd_sd_buff_din ),
-		// Frame sd_buff_wr by EITHER slot session that fills a buffer inside this
-		// target: cd_io_ack (CD-ROM/CD-audio, slot VD_CDROM) OR cdtb_ack (CD Changer
-		// tb round-trip, slot VD_CD_TOOLBOX). Without the cdtb_ack term every slot-5
-		// fill strobe was blanked, so the tb buffer (tb_hps_wr = sd_buff_wr & tb_ack)
-		// never captured the HPS status/data block -> the core read back its own CDB
-		// -> signature 0x00 != 0xB5 -> boxes. The two slots are serviced disjointly
-		// (one HPS session at a time), so the OR never double-frames. (2026-07-21)
-		.sd_buff_wr( sd_buff_wr & (cd_io_ack | cdtb_ack) ),
-
-		// BlueSCSI Toolbox CD Changer transport (0xD7/D8/DA) -> slot VD_CD_TOOLBOX.
-		.tb_mounted ( cdtb_mounted ),
-		.tb_lba     ( cdtb_lba ),
-		.tb_rd      ( cdtb_rd ),
-		.tb_wr      ( cdtb_wr ),
-		.tb_ack     ( cdtb_ack ),
-		.tb_buff_din( cdtb_buff_din ),
-
-		.dbg_mounted( ),
-		.dbg_phase( ),
-		.dbg_hs( ),
-		.dbg_hs2( ),
-		.dbg_cmd( ),
-		.dbg_dma_word( dma_word_latched ),
-		.dbg_dma_long( dma_longword_latched ),
-		.dbg_dma_lowbyte( dma_write_low_byte ),
-		.dbg_wrsnap( ),
-		.dbg_selsnap( ),
-		.dbg_wrstall( ),
-		.dbg_wrfb( ),
-		.dbg_ring( )
-	);
+	// POCKET CUT: the CD-ROM target (SCSI ID 3) is gone — see the deleted
+	// `cdrom_target` instance below. It was the single most expensive block in
+	// the design (7,762 ALUTs + 17 M10K + 768 MLAB cells, of which cd_audio
+	// alone was 3,076 ALUTs), and the Pocket has no room for it. The bus-merge
+	// logic downstream still references these names, so they are tied to their
+	// idle values and fold away.
+	wire cd_bsy            = 1'b0;
+	wire cd_msg            = 1'b0;
+	wire cd_io             = 1'b0;
+	wire cd_cd             = 1'b0;
+	wire cd_req            = 1'b0;
+	wire cd_req_bus        = 1'b0;
+	wire [7:0]  cd_dout           = 8'h00;
+	wire [15:0] cd_dout_pair      = 16'h0000;
+	wire [15:0] cd_dout_pair_next = 16'h0000;
 
 	generate
 		genvar i;
@@ -807,18 +681,17 @@ module ncr5380
 			// Boot disk = SCSI ID 0 (the conventional Mac internal-drive ID,
 			// highest boot priority across every System version), 2nd disk = ID 1
 			// (standardized with MacIIvi 2026-07-20; was 6/5 — the 7.x SCSI
-			// Manager de-prioritizes ID 6). TOOLBOX_ENABLE(i==0) => Toolbox on the
-			// boot target; the Toolbox driver locates it by INQUIRY page 0x31, not
-			// by ID. NOTE: the boot SCSI ID lives in PRAM — an existing install
-			// blessed for ID 6 needs a PRAM reset / re-bless to boot from ID 0.
-			// TB_ADDRW(12) on the Toolbox target = 8 KB tb buffer (16 sectors).
-			// 11 (4 KB) fixed the 512-byte case — the payload sits at buffer
-			// bytes 16..527, so on a 512-byte buffer it wrapped onto the CDB and
-			// lost 16 bytes per block (MacIIvi 205800b). 12 is what a 4 KB
-			// large-send chunk needs: bytes 16..4111 do NOT fit in 4 KB, and the
-			// extra headroom is what lets the core advertise CAP_LARGE_SEND.
-			scsi #(.ID(i[2:0]), .TOOLBOX_ENABLE(i == 0),
-			       .TB_ADDRW(i == 0 ? 12 : 8)) target
+			// Manager de-prioritizes ID 6). NOTE: the boot SCSI ID lives in PRAM
+			// — an existing install blessed for ID 6 needs a PRAM reset /
+			// re-bless to boot from ID 0.
+			//
+			// POCKET CUT: TOOLBOX_ENABLE is now 0 on BOTH targets (was i==0, the
+			// boot disk). That folds away the Toolbox command set inside scsi.v
+			// and drops the oversized Toolbox transfer buffer on target 0:
+			// TB_ADDRW 12 -> 8 turns two 4 KB dpram halves (32,768 bits each,
+			// ~8 M10K) into two 256-byte ones.
+			scsi #(.ID(i[2:0]), .TOOLBOX_ENABLE(0),
+			       .TB_ADDRW(8)) target
 			(
 				.clk    ( clk ),
 				.rst    ( scsi_rst ),
@@ -860,12 +733,12 @@ module ncr5380
 				.sd_buff_din( sd_buff_din[i] ),
 				.sd_buff_wr( sd_buff_wr & target_bsy[i] ),
 
-				// Toolbox transport: only target 0 (ID 0) is wired to the slot.
-				.tb_mounted ( (i == 0) ? tb_mounted : 1'b0 ),
+				// POCKET CUT: Toolbox transport is dead (TOOLBOX_ENABLE=0).
+				.tb_mounted ( 1'b0 ),
 				.tb_lba     ( tb_lba_g[i] ),
 				.tb_rd      ( tb_rd_g[i] ),
 				.tb_wr      ( tb_wr_g[i] ),
-				.tb_ack     ( (i == 0) ? tb_ack : 1'b0 ),
+				.tb_ack     ( 1'b0 ),
 				.tb_buff_din( tb_buff_din_g[i] ),
 
 				.dbg_mounted( target_mounted[i] ),
@@ -885,11 +758,8 @@ module ncr5380
 		end
 	endgenerate
 
-	// BlueSCSI Toolbox: surface the primary target's transport to the module port.
-	assign tb_lba      = tb_lba_g[0];
-	assign tb_rd       = tb_rd_g[0];
-	assign tb_wr       = tb_wr_g[0];
-	assign tb_buff_din = tb_buff_din_g[0];
+	// POCKET CUT: the Toolbox transport no longer leaves this module — with
+	// TOOLBOX_ENABLE(0) on every target, tb_*_g are permanently idle.
 
 	// JTAG debug: capture the selection/arbitration handshake state.
 	//  [15]    out_en       (initiator driving the data bus?)

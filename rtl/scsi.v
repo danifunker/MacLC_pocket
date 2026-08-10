@@ -1873,41 +1873,14 @@ end
 wire ca_grant = (phase == PHASE_IDLE || (cmd_read && phase == PHASE_DATA_OUT))
                 && !io_rd_d && !io_wr && !io_ack && mounted;
 
-generate if (CDROM != 0) begin : g_cd_audio
-	cd_audio #(.CLK_HZ(32'd32_500_000)) cd_audio_i (   // clk_sys rate; audio pitch verifies it
-		.clk(clk), .rst(sys_rst), .bus_rst(rst),
-		.mounted(mounted), .img_mounted(img_mounted), .img_blocks(img_blocks),
-		.cmd_stb(ca_cmd_stb), .cmd_op(cmd[0]),
-		.cdb1(cmd[1]), .cdb2(cmd[2]), .cdb3(cmd[3]), .cdb4(cmd[4]),
-		.cdb5(cmd[5]), .cdb6(cmd[6]), .cdb7(cmd[7]), .cdb8(cmd[8]), .cdb9(cmd[9]),
-		.read_stb(ca_read_stb), .eject_stb(ca_eject_stb),
-		.ap_ch0(cd_ap_ch0), .ap_vol0(cd_ap_vol0),   // page 0x0E audio ports
-		.ap_ch1(cd_ap_ch1), .ap_vol1(cd_ap_vol1),   // (the volume slider)
-		.ch_grant(ca_grant),
-		.ca_io_active(ca_io_active), .ca_io_rd(ca_io_rd_w), .ca_io_lba(ca_io_lba),
-		.io_ack(io_ack),
-		.sd_buff_addr(sd_buff_addr), .sd_buff_addr_hi(sd_buff_addr_hi),
-		.sd_buff_dout(sd_buff_dout), .sd_buff_wr(sd_buff_wr),
-		.ast_code(ca_ast_code), .cur_ctrl(ca_cur_ctrl), .cur_trk(ca_cur_trk),
-		.abs_m(ca_abs_m), .abs_s(ca_abs_s), .abs_f(ca_abs_f),
-		.rel_m(ca_rel_m), .rel_s(ca_rel_s), .rel_f(ca_rel_f),
-		.toc_base(ca_toc_addr),
-		.toc_q0(ca_toc_q0), .toc_q1(ca_toc_q1), .toc_q2(ca_toc_q2), .toc_q3(ca_toc_q3),
-		.toc_ready(ca_toc_ready),
-		.toc43_base(ca_t43_addr),
-		.toc43_q0(ca_t43_q0), .toc43_q1(ca_t43_q1),
-		.toc43_q2(ca_t43_q2), .toc43_q3(ca_t43_q3),
-		.toc43_len(ca_t43_len),
-		.toc2_base(ca_t2_addr),
-		.toc2_q0(ca_t2_q0), .toc2_q1(ca_t2_q1),
-		.toc2_q2(ca_t2_q2), .toc2_q3(ca_t2_q3),
-		.toc2_len(ca_t2_len),
-		.disc_audio(ca_disc_audio),
-		.snd_l(cd_snd_l), .snd_r(cd_snd_r),
-		.dbg_cda0(dbg_cda0),
-		.dbg_cdur(dbg_cdur)
-	);
-end else begin : g_no_cd_audio
+// POCKET CUT: the `cd_audio` engine instance is deleted along with
+// rtl/cd_audio.sv. scsi.v keeps its CDROM-parameterised bodies (they fold
+// away at CDROM=0 and stripping 171 KB of validated SCSI code was not worth
+// the risk), but a generate branch naming a module that no longer exists is
+// a build hazard even when the branch is never taken -- so the instance goes
+// and the former `else` tie-offs become unconditional.
+// To restore CD support: recover cd_audio.sv + cd_vol_lut.vh from the MiSTer
+// core at 5a75f9b and put this block back as `generate if (CDROM != 0)`.
 	assign ca_io_active = 1'b0;
 	assign ca_io_rd_w   = 1'b0;
 	assign ca_io_lba    = 32'd0;
@@ -1930,7 +1903,7 @@ end else begin : g_no_cd_audio
 	assign cd_snd_r = 16'sd0;
 	assign dbg_cda0 = 32'd0;
 	assign dbg_cdur = 32'd0;
-end endgenerate
+
 
 reg  stb_ack;
 reg  stb_adv;

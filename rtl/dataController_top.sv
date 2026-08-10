@@ -37,12 +37,7 @@ module dataController_top(
 	output [15:0] dbg_scsi4,  // bus-reset count + per-target completion flags
 	output [15:0] dbg_scsi5,  // per-target last-opcode bitmap
 	output [31:0] dbg_ncr,    // host-side pseudo-DMA state + DACK beat count
-	output [31:0] dbg_cda0,   // CD-audio engine TOC/state (JTAG CDA0)
-	output [31:0] dbg_cda1,   // CD target command visibility (JTAG CDA1)
-	output [31:0] dbg_cda2,   // last 0xC1 CDB (JTAG CDA2)
-	output [31:0] dbg_cda3,   // last play-class CDB hi (JTAG CDA3)
-	output [31:0] dbg_cda4,   // last play-class CDB lo (JTAG CDA4)
-	output [31:0] dbg_cdur,   // cd_audio underrun counters (JTAG CDUR)
+	// POCKET CUT: dbg_cda0..4 / dbg_cdur (CD-audio engine probes) removed.
 	output [31:0] dbg_ncr2,   // req_deferred/req_bus + IRQ machine + counters
 	output [31:0] dbg_wr,     // write-stall snapshot (DATA_IN target)
 	output [31:0] dbg_wrfb,   // write first-beat forensics (JTAG WRFB)
@@ -120,34 +115,10 @@ module dataController_top(
 	output           [15:0] sd_buff_din[SCSI_DEVS],
 	input                   sd_buff_wr,
 
-	// ---- BlueSCSI Toolbox dedicated block interface (primary SCSI target) ----
-	input                   tb_mounted,
-	output           [31:0] tb_lba,
-	output                  tb_rd,
-	output                  tb_wr,
-	input                   tb_ack,
-	output           [15:0] tb_buff_din,
-
-	// ---- BlueSCSI Toolbox CD Changer block interface (CD target / ID 3) ------
-	input                   cdtb_mounted,
-	output           [31:0] cdtb_lba,
-	output                  cdtb_rd,
-	output                  cdtb_wr,
-	input                   cdtb_ack,
-	output           [15:0] cdtb_buff_din,
-
-	// CD audio PCM (from the SCSI CDROM target's playback engine)
-	output signed    [15:0] cd_snd_l,
-	output signed    [15:0] cd_snd_r,
-
-	// ---- CD-ROM target (SCSI ID 3) dedicated block interface ----
-	input                   cd_enable,
-	input                   cd_img_mounted,
-	output           [31:0] cd_io_lba,
-	output                  cd_io_rd,
-	output                  cd_io_wr,
-	input                   cd_io_ack,
-	output           [15:0] cd_sd_buff_din,
+	// POCKET CUT: the BlueSCSI Toolbox block interface (tb_*), the Toolbox CD
+	// Changer interface (cdtb_*), the CD audio PCM outputs (cd_snd_*) and the
+	// CD-ROM target's block-device slot (cd_*) are all removed with the CD
+	// target itself. See rtl/ncr5380.sv.
 
 	// ---- PRAM persistence pass-through (to the Egret's pram[]) ----
 	input             [7:0] pram_load_addr,
@@ -438,32 +409,7 @@ module dataController_top(
 		.sd_buff_din(sd_buff_din),
 		.sd_buff_wr(sd_buff_wr),
 
-		// BlueSCSI Toolbox dedicated transport pass-through (primary target).
-		.tb_mounted(tb_mounted),
-		.tb_lba(tb_lba),
-		.tb_rd(tb_rd),
-		.tb_wr(tb_wr),
-		.tb_ack(tb_ack),
-		.tb_buff_din(tb_buff_din),
-
-		// BlueSCSI Toolbox CD Changer transport pass-through (CD target).
-		.cdtb_mounted(cdtb_mounted),
-		.cdtb_lba(cdtb_lba),
-		.cdtb_rd(cdtb_rd),
-		.cdtb_wr(cdtb_wr),
-		.cdtb_ack(cdtb_ack),
-		.cdtb_buff_din(cdtb_buff_din),
-		.cd_snd_l(cd_snd_l),
-		.cd_snd_r(cd_snd_r),
-
-		// CD-ROM target (SCSI ID 3) pass-through.
-		.cd_enable(cd_enable),
-		.cd_img_mounted(cd_img_mounted),
-		.cd_io_lba(cd_io_lba),
-		.cd_io_rd(cd_io_rd),
-		.cd_io_wr(cd_io_wr),
-		.cd_io_ack(cd_io_ack),
-		.cd_sd_buff_din(cd_sd_buff_din),
+		// POCKET CUT: Toolbox / CD Changer / CD-ROM slot pass-throughs removed.
 
 		// JTAG probe feeds (consumed by dbg_probes.sv in the FPGA top)
 		.dbg_scsi(dbg_scsi),
@@ -472,12 +418,6 @@ module dataController_top(
 		.dbg_scsi4(dbg_scsi4),
 		.dbg_scsi5(dbg_scsi5),
 		.dbg_ncr(dbg_ncr),
-		.dbg_cda0(dbg_cda0),
-		.dbg_cda1(dbg_cda1),
-		.dbg_cda2(dbg_cda2),
-		.dbg_cda3(dbg_cda3),
-		.dbg_cda4(dbg_cda4),
-		.dbg_cdur(dbg_cdur),
 		.dbg_ncr2(dbg_ncr2),
 		.dbg_wr(dbg_wr),
 		.dbg_wrfb(dbg_wrfb),

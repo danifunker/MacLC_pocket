@@ -52,7 +52,7 @@ module asc(
 	// Sample rate: MAME streams the ASC at 22257 Hz. 32.5 MHz / 22257 ≈ 1460.
 	localparam SAMPLE_DIV = 16'd1460;
 
-	// FIFO A storage in forced-M10K BRAM (cd_sdp, rtl/cd_audio.sv). As a plain
+	// FIFO A storage in forced-M10K BRAM (cd_sdp, rtl/sdp_ram.sv). As a plain
 	// register array Quartus 17's small-RAM heuristic silently built it from
 	// ~8K registers + mux fabric (discovered in the 2026-07-16 LAB-overflow
 	// hunt). Read side: fifo_a_q continuously tracks fifo_a[rptr_a] with a
