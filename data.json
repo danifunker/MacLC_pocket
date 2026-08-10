@@ -4,43 +4,23 @@
         "data_slots": [
             {
                 "name": "ROM",
-                "id": 0,
+                "id": "0",
                 "required": true,
-                "parameters": "0x03",
+                "parameters": 1,
                 "extensions": ["rom"],
+                "filename": "boot0.rom",
+                "size_maximum": 524288,
                 "address": "0x10000000"
             },
             {
                 "name": "Floppy",
-                "id": 1,
+                "id": "1",
                 "required": false,
-                "parameters": "0x03",
-                "extensions": ["dsk", "img", "image"],
+                "deferload": true,
+                "parameters": 1,
+                "extensions": ["dsk", "img"],
+                "size_maximum": 1474560,
                 "address": "0x20000000"
-            },
-            {
-                "name": "SCSI 0",
-                "id": 2,
-                "required": false,
-                "parameters": "0x07",
-                "extensions": ["hda", "img", "vhd"],
-                "address": "0x30000000"
-            },
-            {
-                "name": "SCSI 1",
-                "id": 3,
-                "required": false,
-                "parameters": "0x07",
-                "extensions": ["hda", "img", "vhd"],
-                "address": "0x38000000"
-            },
-            {
-                "name": "PRAM",
-                "id": 4,
-                "required": false,
-                "parameters": "0x07",
-                "extensions": ["nvr"],
-                "address": "0x3F000000"
             }
         ]
     }

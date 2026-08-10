@@ -7,12 +7,12 @@
             "description": "Apple Macintosh LC (68020, V8, 512x384 8bpp). Ported from the MiSTer core.",
             "author": "danifunker",
             "url": "https://github.com/",
-            "version": "0.1.0-wip",
+            "version": "0.1.0",
             "date_release": "2026-08-09"
         },
         "framework": {
             "target_product": "Analogue Pocket",
-            "version_required": "1.1",
+            "version_required": "2.1",
             "sleep_supported": false,
             "dock": {
                 "supported": true,

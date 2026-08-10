@@ -1,45 +1,7 @@
 {
     "interact": {
         "magic": "APF_VER_1",
-        "variables": [
-            {
-                "name": "Memory",
-                "id": 1,
-                "type": "list",
-                "enabled": true,
-                "persist": true,
-                "address": "0xF1000000",
-                "defaultval": 0,
-                "options": [
-                    { "value": 0, "name": "2 MB" },
-                    { "value": 1, "name": "10 MB" }
-                ]
-            },
-            {
-                "name": "Reset & Apply",
-                "id": 2,
-                "type": "action",
-                "enabled": true,
-                "address": "0xF1000004",
-                "value": 1
-            },
-            {
-                "name": "Reset PRAM & Core",
-                "id": 3,
-                "type": "action",
-                "enabled": true,
-                "address": "0xF1000008",
-                "value": 1
-            },
-            {
-                "name": "Interrupt (NMI / MacsBug)",
-                "id": 4,
-                "type": "action",
-                "enabled": true,
-                "address": "0xF100000C",
-                "value": 1
-            }
-        ],
+        "variables": [],
         "messages": []
     }
 }

@@ -1,0 +1,17 @@
+{
+    "input": {
+        "magic": "APF_VER_1",
+        "controllers": [
+            {
+                "type": "default",
+                "mappings": [
+                    { "id": 1,  "name": "Click / Shift",  "key": "pad_a" },
+                    { "id": 2,  "name": "Space",          "key": "pad_b" },
+                    { "id": 3,  "name": "Return",         "key": "pad_x" },
+                    { "id": 4,  "name": "Escape",         "key": "pad_y" },
+                    { "id": 15, "name": "Kbd/Pointer",    "key": "pad_select" }
+                ]
+            }
+        ]
+    }
+}
