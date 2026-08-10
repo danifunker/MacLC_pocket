@@ -59,7 +59,15 @@
 module pocket_sdram
 (
 	// interface to the Pocket's SDRAM chip
-	inout  reg [15:0]   sd_data,    // 16 bit bidirectional data bus  (dram_dq)
+	//
+	// The data bus is driven by a CONTINUOUS assign from a registered value +
+	// output enable, rather than the procedural `sd_data <= 16'bZ` the MiSTer
+	// original used inside its clocked block. Same hardware, but Verilator
+	// rejects the procedural form ("Unsupported tristate construct: ASSIGNDLY"),
+	// which is why the MiSTer Makefile could never lint or simulate its SDRAM
+	// controller and substituted sim_ram instead. This form lets the real
+	// controller be linted with the rest of the design.
+	inout      [15:0]   sd_data,    // 16 bit bidirectional data bus  (dram_dq)
 	output reg [12:0]   sd_addr,    // 13 bit multiplexed address bus (dram_a)
 	output     [1:0]    sd_dqm,     // two byte masks                 (dram_dqm)
 	output reg [1:0]    sd_ba,      // bank select                    (dram_ba)
@@ -172,9 +180,14 @@ assign sd_dqm = sd_addr[12:11];
 
 reg oe_latch, we_latch;
 
+// Registered data-bus driver + output enable (see the sd_data port comment).
+reg [15:0] sd_dout_r;
+reg        sd_oe_r;
+assign sd_data = sd_oe_r ? sd_dout_r : 16'bZZZZZZZZZZZZZZZZ;
+
 always @(posedge clk_64) begin
 	sd_cmd <= CMD_INHIBIT;  // default: idle
-	sd_data <= 16'bZZZZZZZZZZZZZZZZ;
+	sd_oe_r <= 1'b0;        // default: release the bus
 
 	if(reset != 0) begin
 		// init ladder, one command slot per chipset cycle (~123ns apart):
@@ -220,7 +233,10 @@ always @(posedge clk_64) begin
 		// CAS phase
 		if(t == STATE_CMD_CONT && (we_latch || oe_latch)) begin
 			sd_cmd <= we_latch?CMD_WRITE:CMD_READ;
-			if (we_latch) sd_data <= din;
+			if (we_latch) begin
+				sd_dout_r <= din;
+				sd_oe_r   <= 1'b1;
+			end
 			// always return both bytes in a read. The cpu may not
 			// need it, but the caches need to be able to store everything
 			//

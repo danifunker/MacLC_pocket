@@ -822,42 +822,60 @@ assign dram_cas_n = sdram_cas_n;
 assign dram_we_n  = sdram_we_n;
 assign dram_clk   = clk_mem_90;
 
+// mac_lc_pocket keeps sim.v's port NAMES on purpose (VGA_*, ioctl_*, debug_*,
+// cfg_*, 3-slot sd_*) so that verilator/sim.v can eventually instantiate it
+// instead of duplicating the machine. core_top is where those names are
+// adapted to APF, in one place. See the header of mac_lc_pocket.sv.
+
+    wire [31:0] sd_lba_u [3];
+    wire  [2:0] sd_rd_u, sd_wr_u;
+    wire [15:0] sd_buff_din_u [3];
+    wire        mac_hb, mac_vb, mac_ce_pix;
+    wire [15:0] mac_audio_l, mac_audio_r;
+
+// ---------------------------------------------------------------------------
+// clk_74a -> clk_sys crossings for the option registers
+// ---------------------------------------------------------------------------
+// opt_reset_apply / opt_reset_pram / opt_nmi are single-cycle pulses generated
+// in the bridge's clk_74a domain (74.25 MHz). clk_sys is 32.5 MHz — LESS than
+// half — so a one-cycle pulse there can fall entirely between two clk_sys
+// edges and be missed. A plain 2FF synchroniser is therefore not enough: the
+// pulse is stretched into a level with a toggle, and the edge is recovered on
+// the far side.
+    reg  opt_reset_tgl = 1'b0, opt_pram_tgl = 1'b0, opt_nmi_tgl = 1'b0;
+always @(posedge clk_74a) begin
+    if (opt_reset_apply) opt_reset_tgl <= ~opt_reset_tgl;
+    if (opt_reset_pram)  opt_pram_tgl  <= ~opt_pram_tgl;
+    if (opt_nmi)         opt_nmi_tgl   <= ~opt_nmi_tgl;
+end
+
+    reg [2:0] rst_s, pram_s, nmi_s;
+always @(posedge clk_sys) begin
+    rst_s  <= {rst_s [1:0], opt_reset_tgl};
+    pram_s <= {pram_s[1:0], opt_pram_tgl};
+    nmi_s  <= {nmi_s [1:0], opt_nmi_tgl};
+end
+    wire opt_reset_apply_sys = rst_s [2] ^ rst_s [1];
+    wire opt_reset_pram_sys  = pram_s[2] ^ pram_s[1];
+    wire opt_nmi_sys         = nmi_s [2] ^ nmi_s [1];
+
+// ---------------------------------------------------------------------------
+// Download handshake
+// ---------------------------------------------------------------------------
+// The machine exposes MiSTer's ioctl_wait ("core busy, hold off"), which it
+// raises on each write and drops once the word has actually reached SDRAM via
+// its dioBusControl slot. apf_bridge_loader wants the complementary edge — a
+// 1-cycle "you may retire that word". Take the FALLING edge of ioctl_wait.
+    wire dio_ack_n;                    // = the machine's ioctl_wait
+    reg  dio_wait_d;
+always @(posedge clk_sys) dio_wait_d <= dio_ack_n;
+assign dio_ack = dio_wait_d & ~dio_ack_n;   // dio_ack declared with the loader
+
 mac_lc_pocket machine (
-    .clk_sys        ( clk_sys ),
+    // Pocket-specific
     .clk_mem        ( clk_mem ),
     .clk_pix        ( clk_pix ),
     .pll_locked     ( pll_core_locked_sys ),
-
-    // options (interact.json)
-    .opt_mem_size   ( opt_mem_size ),
-    .opt_reset      ( opt_reset_apply ),
-    .opt_reset_pram ( opt_reset_pram ),
-    .opt_nmi        ( opt_nmi ),
-
-    // ROM / floppy download stream
-    .dio_download   ( dio_download ),
-    .dio_index      ( dio_index ),
-    .dio_addr       ( dio_addr ),
-    .dio_data       ( dio_data ),
-    .dio_wr         ( dio_wr ),
-    .dio_ack        ( dio_ack ),
-
-    // input
-    .ps2_key        ( ps2_key ),
-    .ps2_mouse      ( ps2_mouse ),
-
-    // video
-    .vga_hsync      ( mac_hsync ),
-    .vga_vsync      ( mac_vsync ),
-    .vga_de         ( mac_de ),
-    .vga_r          ( mac_r ),
-    .vga_g          ( mac_g ),
-    .vga_b          ( mac_b ),
-
-    // audio
-    .audio_out      ( mac_audio ),
-
-    // SDRAM
     .sdram_dq       ( dram_dq ),
     .sdram_a        ( sdram_a ),
     .sdram_dqm      ( sdram_dqm ),
@@ -865,8 +883,75 @@ mac_lc_pocket machine (
     .sdram_cke      ( sdram_cke ),
     .sdram_we_n     ( sdram_we_n ),
     .sdram_ras_n    ( sdram_ras_n ),
-    .sdram_cas_n    ( sdram_cas_n )
+    .sdram_cas_n    ( sdram_cas_n ),
+
+    .clk_sys        ( clk_sys ),
+    // Reset is a LEVEL that also arms the SDRAM re-init pulse inside the
+    // machine, so it must be a clean edge, not a held level during downloads.
+    .reset          ( ~pll_core_locked_sys | opt_reset_apply_sys | opt_reset_pram_sys ),
+
+    .ps2_key        ( ps2_key ),
+    .ps2_mouse      ( ps2_mouse ),
+
+    // APF gives epoch seconds; the machine wants sim.v's 33-bit timestamp.
+    .timestamp      ( {1'b0, rtc_epoch_seconds} ),
+
+    .VGA_R          ( mac_r ),
+    .VGA_G          ( mac_g ),
+    .VGA_B          ( mac_b ),
+    .VGA_HS         ( mac_hsync ),
+    .VGA_VS         ( mac_vsync ),
+    .VGA_HB         ( mac_hb ),
+    .VGA_VB         ( mac_vb ),
+    .CE_PIXEL       ( mac_ce_pix ),
+
+    // ASC is mono; both channels carry the same sample.
+    .AUDIO_L        ( mac_audio_l ),
+    .AUDIO_R        ( mac_audio_r ),
+
+    // ROM / floppy download. apf_bridge_loader emits a byte address and a
+    // 1-cycle write strobe, which is exactly ioctl_addr/ioctl_wr's contract.
+    .ioctl_download ( dio_download ),
+    .ioctl_wr       ( dio_wr ),
+    .ioctl_addr     ( dio_addr ),
+    .ioctl_dout     ( dio_data ),
+    .ioctl_index    ( dio_index ),
+    .ioctl_wait     ( dio_ack_n ),
+
+    // Block devices: apf_blockdev is NOT WRITTEN YET, so these are held
+    // inactive. The machine sees no mounted SCSI disks and boots from floppy.
+    .sd_lba         ( sd_lba_u ),
+    .sd_rd          ( sd_rd_u ),
+    .sd_wr          ( sd_wr_u ),
+    .sd_ack         ( 3'b000 ),
+    .sd_buff_addr   ( 8'd0 ),
+    .sd_buff_dout   ( 16'd0 ),
+    .sd_buff_din    ( sd_buff_din_u ),
+    .sd_buff_wr     ( 1'b0 ),
+    .img_mounted    ( 3'b000 ),
+    .img_size       ( 64'd0 ),
+
+    // Simulation observability — unconnected; Quartus strips them.
+    .debug_pc(), .debug_opcode(), .debug_fetch_valid(), .debug_data_addr(),
+    .debug_ram_addr(), .debug_ram_din(), .debug_ram_dout(), .debug_ram_we(),
+    .debug_ram_oe(), .debug_ram_ds(), .debug_selectRAM(), .debug_selectROM(),
+    .debug_selectVIA(), .debug_selectAriel(), .debug_selectPseudoVIA(),
+    .debug_selectSCSI(), .debug_selectSCC(), .debug_selectIWM(),
+    .debug_selectASC(), .debug_selectVRAM(), .debug_cpuAddr(),
+    .debug_cpuDataIn(), .debug_cpuDataOut(), .debug_cpuRW(),
+    .debug_cpuBusControl(), .debug_cpu_as(), .debug_cpu_dtack(),
+
+    // SCC channel A: no serial port is broken out on the Pocket.
+    .serial_txd     ( ),
+    .serial_rxd     ( 1'b1 ),          // idle mark
+
+    .cfg_cpuType    ( 2'b10 ),         // 68020
+    .cfg_memSize    ( opt_mem_size ),  // 0 = 2 MB, 1 = 10 MB
+    .nmi_pulse      ( opt_nmi_sys )
 );
+
+assign mac_audio = mac_audio_l;        // ASC is mono
+assign mac_de    = ~(mac_hb | mac_vb) & mac_ce_pix;
 
 endmodule
 

@@ -1,97 +1,56 @@
 // ============================================================================
 // mac_lc_pocket.sv — the Macintosh LC itself, for the Analogue Pocket.
 //
-// PROVENANCE: derived from verilator/sim.v (module emu) at MacLC_Pocket
-// commit a5568a4, NOT from the MiSTer MacLC.sv. sim.v was the better base by a
-// wide margin: it is half the size, the MiSTer framework glue (hps_io,
-// CONF_STR/status[], video_freak, pll_video/pll_cfg, dbg_probes, HDMI, UART)
-// was already absent, clk_sys already arrived as an input rather than from an
-// internal PLL, and its memory model was instantiated behind the SAME
-// .din/.addr/.ds/.we/.oe/.dout interface that pocket_sdram exposes — so the
-// SDRAM swap is a drop-in. Crucially, docs/verilator_differences.md audits
-// sim.v's CPU bus glue (cpu_berr, _cpuVPA, _cpuDTACK, dtack_en, fc7_berr,
-// fc7_iack, overlay_trigger, memoryOverlayOn) as byte-identical to MacLC.sv,
-// so the hardest part of the machine top arrived already correct.
+// PROVENANCE: derived from verilator/sim.v (module emu) at commit a5568a4,
+// NOT from the MiSTer MacLC.sv. sim.v was the better base by a wide margin:
+// half the size, the MiSTer framework glue (hps_io, CONF_STR/status[],
+// video_freak, pll_video/pll_cfg, dbg_probes, HDMI) already absent, clk_sys
+// already an input rather than an internal PLL, and its memory model already
+// instantiated behind the SAME .din/.addr/.ds/.we/.oe/.dout interface that
+// pocket_sdram exposes. docs/verilator_differences.md audits its CPU bus glue
+// (cpu_berr, _cpuVPA, _cpuDTACK, dtack_en, fc7_berr, fc7_iack,
+// overlay_trigger, memoryOverlayOn) as byte-identical to MacLC.sv, so the
+// hardest part of the machine top arrived already correct — and already
+// validated: the three Pocket cuts pass the boot oracle in this exact body
+// (see docs/PORT_STATUS.md).
 //
-// WHAT WAS ADDED BACK, and why (this list is exactly the "intentional
-// FPGA-only additions" section of docs/verilator_differences.md):
-//   * rom_loaded latch — hold the machine in reset from FPGA config until the
-//     first ROM download begins. Without it the 68k runs through the gap
-//     between PLL lock and the start of the download, executing whatever the
-//     PREVIOUS core left in SDRAM at the ROM window.
+// WHY THE PORT LIST IS STILL sim.v's (VGA_*, ioctl_*, debug_*, cfg_memSize,
+// 3-slot sd_*): deliberately. Renaming them would mean ~1000 lines of edits to
+// a body that currently boots, for zero functional gain, and core_top adapts
+// the handful of names it cares about in one place instead. Keeping them
+// identical is also the precondition for the real prize — letting
+// the sim.v top INSTANTIATE this module rather than duplicating the machine,
+// which retires the two-tops divergence class that has repeatedly cost this
+// project real bugs (sim.v once hardwired .berr(1'b0), masking the MOVES
+// bus-error fix; selectASC was wired in sim but floating on FPGA, so ASC
+// registers were dead in hardware).
+//
+// The debug_* outputs are kept and simply left unconnected by core_top;
+// Quartus strips them. Same for serial_txd/rxd.
+//
+// WHAT WAS ADDED BACK — exactly the "intentional FPGA-only additions" list in
+// docs/verilator_differences.md, none of which sim.v needed:
+//   * rom_loaded latch — hold reset from FPGA config until the first ROM
+//     download begins, so the 68k cannot execute whatever the PREVIOUS core
+//     left in SDRAM at the ROM window.
 //   * sdram_reinit pulse — edge-triggered, gated on rom_loaded and
 //     !dio_download. The reverted MiSTer attempts tied .init to a level that
-//     was ALSO held through the ROM download, which swallowed the download
-//     writes and broke cold boot.
-//   * configRAMSize driven from opt_mem_size (2 MB / 10 MB). sim.v hardwired
-//     2 MB and left cfg_memSize as a dead wire.
+//     was ALSO held through the download, which swallowed the download writes
+//     and broke cold boot.
+//   * configRAMSize driven from cfg_memSize (2 MB / 10 MB). sim.v hardwired
+//     2 MB and left cfg_memSize dead. NOTE the 10 MB SIMM path has never been
+//     exercised in simulation.
 //   * pocket_sdram in place of sim_ram.
-//
-// The `ifdef SIMULATION blocks are deliberately KEPT. SIMULATION is defined
-// only by verilator/Makefile, so they vanish for Quartus, and keeping them is
-// what will let verilator/sim.v eventually instantiate THIS module instead of
-// duplicating the machine — collapsing the two-tops divergence class that has
-// repeatedly cost this project real bugs (sim.v once hardwired .berr(1'b0),
-// masking the MOVES bus-error fix; selectASC was wired in sim but left
-// floating on FPGA, so ASC registers were dead in hardware).
 // ============================================================================
-
-`default_nettype none
 
 module mac_lc_pocket
 (
-	// ---- clocks (all from core_top's mf_pllbase) ----
-	input         clk_sys,      // 32.5 MHz  — the whole machine
-	input         clk_mem,      // 65.0 MHz  — SDRAM state machine (must be 8x clk_8)
-	input         clk_pix,      // 15.667 MHz — 512x384 dot clock
+	// ---- Pocket additions (everything below this block is sim.v's) --------
+	input         clk_mem,      // 65.0 MHz — SDRAM state machine, must be 8x clk_8
+	input         clk_pix,      // 15.667 MHz — 512x384 dot clock (APF video_rgb_clock)
 	input         pll_locked,   // synchronised into clk_sys by core_top
 
-	// ---- options (interact.json, via core_top) ----
-	input         opt_mem_size,   // 0 = 2 MB, 1 = 10 MB. Sampled under reset.
-	input         opt_reset,      // 1-cycle: reset & apply config
-	input         opt_reset_pram, // 1-cycle: reset PRAM & core
-	input         opt_nmi,        // 1-cycle: level-7 NMI (MacsBug)
-
-	// ---- RTC seed (APF rtc_epoch_seconds) ----
-	input [32:0]  timestamp,
-
-	// ---- ROM / floppy download stream (apf_bridge_loader) ----
-	input         dio_download,
-	input  [7:0]  dio_index,
-	input [24:0]  dio_addr,
-	input [15:0]  dio_data,
-	input         dio_wr,
-	output        dio_ack,
-
-	// ---- input (pocket_input) ----
-	input [10:0]  ps2_key,
-	input [24:0]  ps2_mouse,
-
-	// ---- video (to core_top's APF bridge) ----
-	output        vga_hsync,
-	output        vga_vsync,
-	output        vga_de,
-	output [7:0]  vga_r,
-	output [7:0]  vga_g,
-	output [7:0]  vga_b,
-
-	// ---- audio: ASC is mono (the LC has one speaker) ----
-	output signed [15:0] audio_out,
-
-	// ---- SCSI block devices. Shape is unchanged from hps_io so apf_blockdev
-	//      can drive it; NOT YET IMPLEMENTED — core_top ties these off. ----
-	output [31:0] sd_lba[2],
-	output  [1:0] sd_rd,
-	output  [1:0] sd_wr,
-	input   [1:0] sd_ack,
-	input   [7:0] sd_buff_addr,
-	input  [15:0] sd_buff_dout,
-	output [15:0] sd_buff_din[2],
-	input         sd_buff_wr,
-	input   [1:0] img_mounted,
-	input  [31:0] img_size,
-
-	// ---- SDRAM pins (driven out through core_top) ----
+	// SDRAM pins, driven out through core_top
 	inout  [15:0] sdram_dq,
 	output [12:0] sdram_a,
 	output  [1:0] sdram_dqm,
@@ -99,11 +58,97 @@ module mac_lc_pocket
 	output        sdram_cke,
 	output        sdram_we_n,
 	output        sdram_ras_n,
-	output        sdram_cas_n
-);
+	output        sdram_cas_n,
 
-	// sim.v took `reset` as a port; here it is derived from PLL lock.
-	wire reset = ~pll_locked;
+	// ---- sim.v's port list, verbatim -------------------------------------
+	input         clk_sys,
+	input         reset,
+
+	// PS2 keyboard/mouse
+	input [10:0]  ps2_key,
+	input [24:0]  ps2_mouse,
+
+	// RTC timestamp
+	input [32:0]  timestamp,
+
+	// VGA output
+	output [7:0]  VGA_R,
+	output [7:0]  VGA_G,
+	output [7:0]  VGA_B,
+	output        VGA_HS,
+	output        VGA_VS,
+	output        VGA_HB,
+	output        VGA_VB,
+	output        CE_PIXEL,
+
+	// Audio output
+	output [15:0] AUDIO_L,
+	output [15:0] AUDIO_R,
+
+	// ROM/disk loading interface (ioctl)
+	input         ioctl_download,
+	input         ioctl_wr,
+	input [24:0]  ioctl_addr,
+	input [15:0]  ioctl_dout,
+	input [7:0]   ioctl_index,
+	output reg    ioctl_wait = 1'b0,
+
+	// SCSI block device interface. Slots: 0,1 = disks (SCSI 6/5),
+	// 2 = CD-ROM (SCSI 3; FPGA top uses hps_io slot 4 for it — the sim
+	// block-device model has no PRAM/Toolbox slots so the CD sits at 2).
+	output [31:0] sd_lba[3],
+	output [2:0]  sd_rd,
+	output [2:0]  sd_wr,
+	input  [2:0]  sd_ack,
+	input  [7:0]  sd_buff_addr,
+	input  [15:0] sd_buff_dout,
+	output [15:0] sd_buff_din[3],
+	input         sd_buff_wr,
+	input  [2:0]  img_mounted,
+	input  [63:0] img_size,
+
+	// CPU debug outputs
+	output [31:0] debug_pc,
+	output [15:0] debug_opcode,
+	output        debug_fetch_valid,
+	output [31:0] debug_data_addr,
+
+	// RAM debug outputs
+	output [24:0] debug_ram_addr,
+	output [15:0] debug_ram_din,
+	output [15:0] debug_ram_dout,
+	output        debug_ram_we,
+	output        debug_ram_oe,
+	output  [1:0] debug_ram_ds,
+	output        debug_selectRAM,
+	output        debug_selectROM,
+
+	// Peripheral debug outputs
+	output        debug_selectVIA,
+	output        debug_selectAriel,
+	output        debug_selectPseudoVIA,
+	output        debug_selectSCSI,
+	output        debug_selectSCC,
+	output        debug_selectIWM,
+	output        debug_selectASC,
+	output        debug_selectVRAM,
+	output [31:0] debug_cpuAddr,
+	output [15:0] debug_cpuDataIn,    // Data from CPU to peripherals
+	output [15:0] debug_cpuDataOut,   // Data from peripherals to CPU
+	output        debug_cpuRW,        // 1=read, 0=write
+	output        debug_cpuBusControl,
+	output        debug_cpu_as,       // _cpuAS (0 = address strobe asserted)
+	output        debug_cpu_dtack,    // _cpuDTACK (0 = acknowledged)
+
+	// Serial port (SCC Channel A)
+	output        serial_txd,       // SCC Channel A TX output (for sim-side RX)
+	input         serial_rxd,       // SCC Channel A RX input (from sim-side TX)
+
+	// Machine configuration inputs
+	input  [1:0]  cfg_cpuType,      // Unused, kept for sim_main.cpp compatibility
+	input         cfg_memSize,      // 0=1MB, 1=4MB
+	input         nmi_pulse         // --nmi-at-frame: pulse a Level-7 NMI (MacsBug test)
+);
 
 	localparam SCSI_DEVS = 2;
 
@@ -114,9 +159,11 @@ module mac_lc_pocket
 
 	////////////////////   CLOCKS   ///////////////////
 
-	// Clock generation (clk_sys is 32MHz from testbench)
-	wire clk_mem = clk_sys;  // Use same clock for memory
-	wire pll_locked = !reset;
+	// clk_mem and pll_locked are PORTS here (core_top's mf_pllbase owns both).
+	// sim.v declared them internally as clk_mem = clk_sys / pll_locked = !reset,
+	// which is where the simulator's ideal-memory shortcut showed through: on
+	// hardware the SDRAM state machine needs a real 65 MHz, exactly 8x the
+	// 8.125 MHz bus clock, or pocket_sdram's per-cycle wrap breaks.
 
 	// Clock enables - generated by addrController_top
 	wire clk8_en_p, clk8_en_n;
@@ -129,6 +176,10 @@ module mac_lc_pocket
 	);
 	wire clk16_en_p, clk16_en_n;
 	wire clk8;
+
+	// Cleared only by reconfig; the ROM stays in SDRAM across warm resets.
+	reg rom_loaded = 1'b0;
+	always @(posedge clk_sys) if (dio_download && dio_index == 8'd0) rom_loaded <= 1'b1;
 
 	// Reset logic
 	// NOTE: Do NOT include _cpuReset_o here! The RESET instruction drives
@@ -149,7 +200,16 @@ module mac_lc_pocket
 				$display("[F%0d] SIM: dio_download went LOW - ROM download complete", sim_frame_count);
 			end
 
-			if(~pll_locked || reset || dio_download) begin
+			// Gate on the ROM download (index 0) ONLY, not any download.
+			// Floppy images stream into SDRAM on the separate dioBusControl
+			// slot while the CPU keeps running, so mounting one must not
+			// reboot the machine — hot-insert, like real hardware.
+			// !rom_loaded extends the hold from FPGA config until that first
+			// ROM download begins, closing the window in which the 68k would
+			// otherwise execute whatever the PREVIOUS core left in SDRAM at
+			// the ROM window.
+			if(~pll_locked || !rom_loaded || reset ||
+			   (dio_download && dio_index == 8'd0)) begin
 				rst_cnt <= '1;
 				n_reset <= 0;
 			end
@@ -200,7 +260,10 @@ module mac_lc_pocket
 	assign AUDIO_R = asc_sample_r;
 
 	// Mac LC memory configuration
-	wire [7:0] configRAMSize = 8'h24; // 2MB: no SIMM, 2MB board only
+	// POCKET: 2 MB board only, or 2 MB board + 4 MB + 4 MB SIMM = 10 MB.
+	// sim.v hardwired 8'h24 and left cfg_memSize a dead wire; the 10 MB SIMM
+	// path has never been exercised in simulation, only on MiSTer hardware.
+	wire [7:0] configRAMSize = cfg_memSize ? 8'hE4 : 8'h24;
 	wire [7:0] pvia_ram_config_out;   // Active RAM config from pseudovia
 	wire       pvia_ram_configured;   // ROM has programmed V8 config ($0 mirror enable)
 
@@ -592,7 +655,7 @@ module mac_lc_pocket
 
 	ariel_ramdac ariel(
 		.clk_sys(clk_sys),
-		.clk_pix(clk_sys),   // sim: single domain (FPGA: pixel clock)
+		.clk_pix(clk_pix),   // real pixel clock on FPGA (sim.v used clk_sys)
 		.reset(~n_reset),
 		.reg_addr(cpuAddr[10:0]),
 		.uds_n(_cpuUDS),
@@ -675,13 +738,15 @@ module mac_lc_pocket
 	// /2 advance enable (the FPGA now runs the module on a real per-monitor
 	// pixel clock with pix_ce=1 — see rtl/pll_video.v / MacLC.sv). Keeping the
 	// sim on the old grid preserves boot frame counts (screenshot @350 etc).
-	reg sim_pix_ce = 1'b0;
-	always @(posedge clk_sys) sim_pix_ce <= ~sim_pix_ce;
-
+	// POCKET: the V8 scans out on the REAL dot clock with pix_ce tied high,
+	// which is what MacLC.sv does on FPGA. sim.v instead ran the module on
+	// clk_sys with a /2 toggle — 32.5/2 = 16.25 MHz, which would give
+	// 16.25e6 / (640*407) = 62.4 Hz instead of 60.15 Hz, and would hand the
+	// APF scaler a video_rgb_clock that is not the pixel clock.
 	maclc_v8_video v8_video(
-		.clk_sys(clk_sys),
+		.clk_sys(clk_pix),
 		.clk8_en_p(clk8_en_p),
-		.pix_ce(sim_pix_ce),
+		.pix_ce(1'b1),
 		.reset(~n_reset),
 
 		.video_mode(v8_video_mode),
@@ -715,7 +780,10 @@ module mac_lc_pocket
 
 	vram_bram vram_fb(
 		.a_clk(clk_sys),
-		.b_clk(clk_sys),   // sim: single domain (FPGA: b_clk = pixel clock)
+		// True dual-port M10K with independent port clocks, so the CPU->video
+		// crossing lives INSIDE the RAM primitive — no timed cross-domain
+		// paths (see rtl/vram_bram.sv).
+		.b_clk(clk_pix),
 		.a_addr(vram_bram_waddr),
 		.a_din(memoryDataOut),
 		.a_be({~_cpuUDS, ~_cpuLDS}),
@@ -1043,18 +1111,53 @@ module mac_lc_pocket
 	wire [15:0] extra_rom_data_demux = dsk_byte_odd ?
 						   {ram_do_raw[7:0],ram_do_raw[7:0]}:{ram_do_raw[15:8],ram_do_raw[15:8]};
 
-	sim_ram ram
+	// ------------------------------------------------------------------
+	// SDRAM — a drop-in swap for sim_ram (identical din/addr/ds/we/oe/dout).
+	// ------------------------------------------------------------------
+	// The .init policy is load-bearing and was got wrong twice on MiSTer
+	// (reverted d88c098 / 50d0c32): anything tied here that is ALSO asserted
+	// during the ROM download swallows the download writes and breaks cold
+	// boot. Hence exactly two terms — power-on !pll_locked, and the
+	// edge-triggered user-reset pulse below, which is explicitly suppressed
+	// while dio_download is active.
+	pocket_sdram sdram
 	(
-		.clk            ( clk_sys     ),
-		.reset          ( reset       ),
+		.init           ( !pll_locked || sdram_reinit ),
+		.clk_64         ( clk_mem     ),
+		.clk_8          ( clk8        ),
+		.sd_data        ( sdram_dq    ),
+		.sd_addr        ( sdram_a     ),
+		.sd_dqm         ( sdram_dqm   ),
+		.sd_ba          ( sdram_ba    ),
+		.sd_cke         ( sdram_cke   ),
+		.sd_we          ( sdram_we_n  ),
+		.sd_ras         ( sdram_ras_n ),
+		.sd_cas         ( sdram_cas_n ),
 		.din            ( ram_din     ),
-		.addr           ( ram_addr    ),
+		.addr           ( ram_addr[23:0] ),
 		.ds             ( ram_ds      ),
 		.we             ( ram_we      ),
 		.oe             ( ram_oe      ),
-		.dout           ( ram_do_raw  ),
-		.frame_count    ( sim_frame_count )
+		.dout           ( ram_do_raw  )
 	);
+
+	// Dedicated SDRAM re-init pulse on explicit user resets only.
+	// Structurally different from the reverted attempts above: edge-triggered
+	// (never a level held through a download), fires only once the ROM is
+	// already in SDRAM, and suppressed while any download is active. The init
+	// ladder is content-preserving (NOPs + refreshes + MRS, ~126 us) and
+	// n_reset's stretch holds the CPU long past its completion.
+	reg  [3:0] sdram_reinit_cnt = 4'd0;
+	reg        user_reset_d = 1'b0;
+	wire       user_reset_now = reset;   // host-commanded reset (core_top)
+	always @(posedge clk_sys) begin
+		user_reset_d <= user_reset_now;
+		if (user_reset_now && !user_reset_d && rom_loaded && !dio_download)
+			sdram_reinit_cnt <= 4'd15;
+		else if (sdram_reinit_cnt != 0)
+			sdram_reinit_cnt <= sdram_reinit_cnt - 4'd1;
+	end
+	wire sdram_reinit = (sdram_reinit_cnt != 0);
 
 	// RAM debug outputs
 	assign debug_ram_addr = ram_addr;

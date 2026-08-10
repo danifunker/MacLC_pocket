@@ -736,7 +736,7 @@ set_global_assignment -name PARTITION_COLOR 16764057 -section_id Top
 # end ENTITY(mf_pllbase_0002)
 # ---------------------------
 set_global_assignment -name QIP_FILE apf/apf.qip
-set_global_assignment -name VERILOG_FILE core/core_top.v
+set_global_assignment -name SYSTEMVERILOG_FILE core/core_top.sv
 set_global_assignment -name VERILOG_FILE core/core_bridge_cmd.v
 set_global_assignment -name SDC_FILE core/core_constraints.sdc
 set_global_assignment -name QIP_FILE core/mf_pllbase.qip
@@ -746,6 +746,7 @@ set_global_assignment -name SIP_FILE core/mf_pllbase.sip
 # Pocket glue (core/) — the APF-facing edges of the port.
 # ---------------------------------------------------------------------------
 set_global_assignment -name VERILOG_FILE core/pocket_sdram.v
+set_global_assignment -name SYSTEMVERILOG_FILE core/mac_lc_pocket.sv
 set_global_assignment -name VERILOG_FILE core/pocket_input.v
 set_global_assignment -name VERILOG_FILE core/apf_bridge_loader.v
 
