@@ -93,18 +93,19 @@ module dataController_top(
 	// (legacy Mac-Plus audio DMA path removed in Commit C — ASC owns audio now)
 	
 	// misc
-	input [1:0] insertDisk,
-	input [1:0] diskSides,
-	input [1:0] diskMFM,    // disk is MFM-format (ISM path): {ext,int}
-	input [1:0] diskHD,     // disk is 1.44MB HD (vs 720K DD): {ext,int}
-	output [1:0] diskEject,
-	output [1:0] diskMotor,
-	output [1:0] diskAct,
+	// POCKET CUT: one floppy drive. Was {ext,int} pairs feeding two `floppy`
+	// instances in swim.v; the external drive and its SDRAM fetch channel
+	// (dskReadAddrExt/dskReadAckExt) are gone.
+	input insertDisk,
+	input diskSides,
+	input diskMFM,          // disk is MFM-format (ISM path)
+	input diskHD,           // disk is 1.44MB HD (vs 720K DD)
+	output diskEject,
+	output diskMotor,
+	output diskAct,
 
 	output [21:0] dskReadAddrInt,
 	input dskReadAckInt,
-	output [21:0] dskReadAddrExt,
-	input dskReadAckExt,
 
 	// connections to io controller
 	input   [SCSI_DEVS-1:0] img_mounted,
@@ -1005,8 +1006,6 @@ module dataController_top(
 
 		.dskReadAddrInt(dskReadAddrInt),
 		.dskReadAckInt(dskReadAckInt),
-		.dskReadAddrExt(dskReadAddrExt),
-		.dskReadAckExt(dskReadAckExt),
 		.dskReadData(memoryDataIn[7:0]),
 
 		.dbg_ism_flpe(dbg_ism_flpe),

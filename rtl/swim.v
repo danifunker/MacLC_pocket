@@ -69,20 +69,21 @@ module swim
 	input SEL, // from VIA
 	input driveSel, // internal drive select, 0 - upper, 1 - lower
 	output [15:0] dataOut,
-	input [1:0] insertDisk,
-	output [1:0] diskEject,
-	input [1:0] diskSides,
-	input [1:0] diskMFM,    // disk is MFM-format (ISM path): {ext,int}
-	input [1:0] diskHD,     // disk is 1.44MB HD: {ext,int}
+	// POCKET CUT: single (internal) drive. The external-drive instance,
+	// its SDRAM fetch channel, and the {ext,int} bus pairs are gone —
+	// every disk signal below is now the internal drive only.
+	input insertDisk,
+	output diskEject,
+	input diskSides,
+	input diskMFM,          // disk is MFM-format (ISM path)
+	input diskHD,           // disk is 1.44MB HD
 
-	output [1:0] diskMotor,
-	output [1:0] diskAct,
+	output diskMotor,
+	output diskAct,
 
 	// interface to fetch data for internal drive
 	output [21:0] dskReadAddrInt,
 	input dskReadAckInt,
-	output [21:0] dskReadAddrExt,
-	input dskReadAckExt,
 	input [7:0] dskReadData,
 
 	// --- diagnostic passthroughs (PFLP probes; internal drive only) ---
@@ -182,15 +183,14 @@ module swim
 	wire newByteReadyInt;
 	wire [7:0] readDataInt;
 	wire senseInt = readDataInt[7]; // bit 7 doubles as the sense line here
-	wire newByteReadyExt;
-	wire [7:0] readDataExt;
-	wire senseExt = readDataExt[7]; // bit 7 doubles as the sense line here
+	// POCKET CUT: readDataExt/newByteReadyExt are now constants declared next
+	// to the removed floppyExt instance below; senseExt is gone with it.
 
-	// MFM (ISM) read stream from each drive: byte+flags registered at each
-	// 16/32 us delivery, with a one-cep-period strobe (sampled here on cen).
-	wire [7:0] mfm_byte_int, mfm_byte_ext;
-	wire mfm_mark_int, mfm_mark_ext, mfm_crc0_int, mfm_crc0_ext;
-	wire mfm_stb_int, mfm_stb_ext;
+	// MFM (ISM) read stream from the internal drive: byte+flags registered at
+	// each 16/32 us delivery, with a one-cep-period strobe (sampled on cen).
+	wire [7:0] mfm_byte_int;
+	wire mfm_mark_int, mfm_crc0_int;
+	wire mfm_stb_int;
 
 	// F6: in ISM mode the drive select/enable comes from the ISM Mode register
 	// (bit7 gate + the bits2:1 code) — MAME swim1.cpp devsel — NOT from the IWM
@@ -232,7 +232,7 @@ module swim
 	// the media. The devsel wires keep the motor term because the DATA path
 	// (mfm_spinning via .ism_sel, sense/byte muxing) genuinely wants it.
 	wire ism_selonly_int = ism_mode && ism_drive_sel;
-	wire ism_selonly_ext = 1'b0;
+	// POCKET CUT: ism_selonly_ext removed with the floppyExt instance.
 
 	// One CPU bus access = one ISM action. The 68k holds UDS across many cen
 	// ticks, so ISM register semantics (param auto-increment, FIFO pop/push,
@@ -284,12 +284,12 @@ module swim
 		.readData(readDataInt),
 		.advanceDriveHead(advanceDriveHead),
 		.newByteReady(newByteReadyInt),
-		.insertDisk(insertDisk[0]),
-		.diskSides(diskSides[0]),
-		.diskEject(diskEject[0]),
+		.insertDisk(insertDisk),
+		.diskSides(diskSides),
+		.diskEject(diskEject),
 
-		.motor(diskMotor[0]),
-		.act(diskAct[0]),
+		.motor(diskMotor),
+		.act(diskAct),
 
 		.dskReadAddr(dskReadAddrInt),
 		.dskReadAck(dskReadAckInt),
@@ -297,8 +297,8 @@ module swim
 		.ism_active(ism_mode),
 		.ism_action(ism_mode && ism_mode_reg[3]),
 		.ism_sel(ism_devsel_int),
-		.mfm_disk(diskMFM[0]),
-		.mfm_hd(diskHD[0]),
+		.mfm_disk(diskMFM),
+		.mfm_hd(diskHD),
 		.mfm_byte(mfm_byte_int),
 		.mfm_mark(mfm_mark_int),
 		.mfm_crc0(mfm_crc0_int),
@@ -323,55 +323,31 @@ module swim
 		.dbg_mfm_stall_cnt(dbg_mfm_stall[7:0])
 	);
 
-	floppy floppyExt
-	(
-		.clk(clk),
-		.cep(cep),
-		.cen(cen),
-
-		._reset(_reset),
-		.ca0(ca0),
-		.ca1(ca1),
-		.ca2(ca2),
-		.SEL(effSEL),
-		.lstrb(lstrb),
-		._enable(ism_mode ? ~ism_selonly_ext : ~diskEnableExt),
-		.writeData(writeData),
-		.readData(readDataExt),
-		.advanceDriveHead(advanceDriveHead),
-		.newByteReady(newByteReadyExt),
-		.insertDisk(insertDisk[1]),
-		.diskSides(diskSides[1]),
-		.diskEject(diskEject[1]),
-
-		.motor(diskMotor[1]),
-		.act(diskAct[1]),
-
-		.dskReadAddr(dskReadAddrExt),
-		.dskReadAck(dskReadAckExt),
-		.dskReadData(dskReadData),
-		.ism_active(ism_mode),
-		.ism_action(ism_mode && ism_mode_reg[3]),
-		.ism_sel(ism_devsel_ext),
-		.mfm_disk(diskMFM[1]),
-		.mfm_hd(diskHD[1]),
-		.mfm_byte(mfm_byte_ext),
-		.mfm_mark(mfm_mark_ext),
-		.mfm_crc0(mfm_crc0_ext),
-		.mfm_stb(mfm_stb_ext)
-	);
+	// POCKET CUT: `floppy floppyExt` (the external 400K/800K drive) removed.
+	//
+	// The ISM path never reached it anyway — ism_devsel_ext is hardwired 0
+	// ("no external drive on the LC", above), so only the legacy IWM
+	// selectExternalDrive path could address it. With the instance gone,
+	// selecting the external drive now reads the floating-bus value a real
+	// LC sees with nothing plugged in: readData = FF (bit 7 = sense high =
+	// "no disk"), newByteReady = 0. The Sony driver polls the absent second
+	// drive during startup and expects exactly this (its -65 result is the
+	// documented benign case — see the MiSTer core's
+	// docs/sony_driver_mfm_read_reference.md).
+	wire [7:0] readDataExt     = 8'hFF;
+	wire       newByteReadyExt = 1'b0;
+	wire       senseExt        = readDataExt[7];  // = 1 (no disk / no drive)
 
 	wire [7:0] readData = selectExternalDrive ? readDataExt : readDataInt;
 	wire newByteReady = selectExternalDrive ? newByteReadyExt : newByteReadyInt;
 
-	// ISM-selected drive's MFM delivery + sense. Sense in ISM mode is polled
-	// through Handshake bit3 and must follow the ISM devsel (both drives
-	// disabled -> readData floats FF -> pull-up 1, matching hardware).
-	wire [7:0] mfm_byte_sel = ism_devsel_ext ? mfm_byte_ext : mfm_byte_int;
-	wire mfm_mark_sel = ism_devsel_ext ? mfm_mark_ext : mfm_mark_int;
-	wire mfm_crc0_sel = ism_devsel_ext ? mfm_crc0_ext : mfm_crc0_int;
-	wire mfm_stb_sel  = ism_devsel_ext ? mfm_stb_ext  : mfm_stb_int;
-	wire ism_sense    = ism_devsel_ext ? senseExt : senseInt;
+	// ISM-selected drive's MFM delivery + sense. With ism_devsel_ext tied 0
+	// these are unconditionally the internal drive.
+	wire [7:0] mfm_byte_sel = mfm_byte_int;
+	wire mfm_mark_sel = mfm_mark_int;
+	wire mfm_crc0_sel = mfm_crc0_int;
+	wire mfm_stb_sel  = mfm_stb_int;
+	wire ism_sense    = senseInt;
 	// ISM read armed: (mode & 0x18) == 0x08 (ACTION on, WRITE off) — swim1.cpp.
 	wire ism_arm = ism_mode && ism_mode_reg[3] && !ism_mode_reg[4];
 	// MFM delivery additionally requires the MFM read datapath (Setup bit2=0

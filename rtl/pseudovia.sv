@@ -206,10 +206,19 @@ always @(posedge clk_sys) begin
                         end
 
                         3'b100: begin  // $10: Video Config
-                            video_config <= data_in;
+                            // POCKET CUT: clamp the depth field to 8bpp (mode 3).
+                            // The Pocket framebuffer is 192 KB (8bpp @ 512x384);
+                            // mode 4 (16bpp) would need 384 KB and read past the
+                            // end of vram_bram. maclc_v8_video also defaults >3 to
+                            // 8bpp, but clamping at the register keeps the value
+                            // the guest READS BACK consistent with what it gets.
+                            video_config <= (data_in[2:0] > 3'd3)
+                                            ? {data_in[7:3], 3'd3}
+                                            : data_in;
                             `ifdef VERBOSE_TRACE
-                            $display("PVIA: WRITE Video Config = %02x (bpp mode = %d) addr=%h @%0t",
-                                     data_in, data_in[2:0], addr, $time);
+                            $display("PVIA: WRITE Video Config = %02x (bpp mode = %d%s) addr=%h @%0t",
+                                     data_in, data_in[2:0],
+                                     (data_in[2:0] > 3'd3) ? " CLAMPED->3" : "", addr, $time);
                             `endif
                         end
 

@@ -45,7 +45,8 @@ module maclc_v8_video(
 
     // On-chip framebuffer (BRAM) read port (Phase 2): the scanline prefetch now
     // reads from vram_bram instead of the shared SDRAM slot. Registered read.
-    output [17:0] vram_raddr,
+    // POCKET CUT: 17 bits (was 18) — 512x384 @ 8bpp = 98,304 words.
+    output [16:0] vram_raddr,
     input  [15:0] vram_rdata
 );
 
@@ -67,8 +68,15 @@ always @(posedge clk_sys) begin
     tsel_meta  <= test_pattern_sel; tsel_v  <= tsel_meta;
 end
 
-// Bits per pixel and fetch mask configuration
-reg [4:0] bits_per_pixel; // 1, 2, 4, 8, 16
+// Bits per pixel and fetch mask configuration.
+//
+// POCKET CUT: 16bpp (mode 4) is GONE. 512x384 @ 16bpp needs a 384 KB
+// framebuffer = 384 M10K blocks, more than the Pocket's entire 308-block
+// budget. 8bpp is the cap, which is 192 KB / 192 blocks (see vram_bram.sv).
+// Mode 4 now falls through to 8bpp rather than reading past the end of the
+// shrunken framebuffer. pseudovia clamps video_config so the guest should
+// never ask for it, but this default is the load-bearing backstop.
+reg [4:0] bits_per_pixel; // 1, 2, 4, 8
 reg [3:0] fetch_mask;     // When to fetch new word
 
 always @(*) begin
@@ -77,33 +85,26 @@ always @(*) begin
         3'd1: begin bits_per_pixel = 2;  fetch_mask = 4'h7; end // 2bpp: Fetch every 8
         3'd2: begin bits_per_pixel = 4;  fetch_mask = 4'h3; end // 4bpp: Fetch every 4
         3'd3: begin bits_per_pixel = 8;  fetch_mask = 4'h1; end // 8bpp: Fetch every 2
-        3'd4: begin bits_per_pixel = 16; fetch_mask = 4'h0; end // 16bpp: Fetch every 1
-        default: begin bits_per_pixel = 1; fetch_mask = 4'hF; end
+        default: begin bits_per_pixel = 8; fetch_mask = 4'h1; end // incl. former 16bpp
     endcase
 end
 
+// POCKET CUT: single monitor mode — 12" RGB 512x384 (monitor ID 2).
+//
+// The 640x480 VGA mode (ID 6) and the 870-line ID 1 timing are gone. Both
+// cost framebuffer: 640x480 @ 8bpp is 300 KB, over the Pocket's M10K budget
+// on its own. 512x384 is also the mode whose pixel clock (640*407*60.15 =
+// 15.664 MHz) is ALREADY produced by the main PLL as C15M, so committing to
+// it deletes pll_video and the pll_cfg reconfig block (~960 ALUTs + a PLL)
+// along with the clock mux in the top level.
+//
+// monitor_id is still an input (pseudovia reports it to the ROM as the
+// monitor sense value) but no longer selects timing here.
 always @(*) begin
-    // Standard V8 monitor timings
-    case (monid_v)
-        4'h1: begin // 12" RGB (512x384)
-             h_total = 11'd832; h_active = 11'd640; // Note: MAME maps active to 512, but V8 uses 640 timing
-             h_sync_start = 11'd656; h_sync_end = 11'd752;
-             v_total = 10'd918; v_active = 10'd870;
-             v_sync_start = 10'd871; v_sync_end = 10'd877;
-        end
-        4'h2: begin // 12" RGB Alternate
-            h_total = 11'd640; h_active = 11'd512;
-            h_sync_start = 11'd528; h_sync_end = 11'd576;
-            v_total = 10'd407; v_active = 10'd384;
-            v_sync_start = 10'd385; v_sync_end = 10'd388;
-        end
-        default: begin // VGA 640x480 (Monitor ID 6)
-            h_total = 11'd800; h_active = 11'd640;
-            h_sync_start = 11'd656; h_sync_end = 11'd752;
-            v_total = 10'd525; v_active = 10'd480;
-            v_sync_start = 10'd490; v_sync_end = 10'd492;
-        end
-    endcase
+    h_total = 11'd640; h_active = 11'd512;
+    h_sync_start = 11'd528; h_sync_end = 11'd576;
+    v_total = 10'd407; v_active = 10'd384;
+    v_sync_start = 10'd385; v_sync_end = 10'd388;
 end
 
 reg [10:0] h_count;
@@ -188,7 +189,7 @@ end
 // accumulate per scanline to avoid a per-pixel multiply.
 
 // Words (16-bit) per displayed scanline = h_active*bpp/16.
-// 640-wide: 1bpp=40, 2bpp=80, 4bpp=160, 8bpp=320. 512-wide 16bpp=512.
+// 512-wide: 1bpp=32, 2bpp=64, 4bpp=128, 8bpp=256 (the Pocket max).
 //
 // The product MUST be computed at full width before the >>4. words_per_line is
 // only 11 bits, and `(h_active * bits_per_pixel) >> 4` evaluates the multiply in
@@ -198,16 +199,17 @@ end
 // -> ALL WHITE), 16bpp@512 (8192 -> 0). 1/2bpp (<=1280) stayed under 2048, which
 // is why they always rendered full-width. This single truncation was the
 // long-hunted "bpp-dependent video cut" (NOT memory bandwidth/backend).
-wire [15:0] wpl_product = h_active * bits_per_pixel;   // full width (max 640*16=10240)
-assign words_per_line = wpl_product[14:4];             // /16; max 640 fits 11 bits
+// Keep the full-width product even though 512x8=4096 now fits 13 bits.
+wire [15:0] wpl_product = h_active * bits_per_pixel;   // full width (max 512*8=4096)
+assign words_per_line = wpl_product[14:4];             // /16; max 256
 
 // Packed word base of the current (display) scanline.
-reg [17:0] packed_row_start;
+reg [16:0] packed_row_start;
 always @(posedge clk_sys) begin
     if (reset || (pix_en && h_count == h_total - 1 && v_count == v_total - 1))
-        packed_row_start <= 18'd0;
+        packed_row_start <= 17'd0;
     else if (pix_en && h_count == h_total - 1 && v_count < v_active)
-        packed_row_start <= packed_row_start + {7'd0, words_per_line};
+        packed_row_start <= packed_row_start + {6'd0, words_per_line};
 end
 
 // ============================================================
@@ -221,10 +223,11 @@ end
 // and the 1bpp dedup hack are gone, so every depth renders its
 // true horizontal resolution. Async (combinational) read keeps the
 // first pixel of each line correct across the parity flip; the
-// 512-word/buffer array maps to MLAB/LUTRAM (simple dual port).
-// 16bpp@512 = 512 words exactly; 8bpp@640 = 320 (the 640-wide max).
+// 256-word/buffer array maps to MLAB/LUTRAM (simple dual port).
+// POCKET CUT: 8bpp@512 = 256 words is now the max line (was 512 for
+// 16bpp@512), so each buffer halves from 512 to 256 words.
 // ============================================================
-(* ramstyle = "MLAB,no_rw_check" *) reg [15:0] linebuf [0:1023];  // {buf, idx[8:0]}
+(* ramstyle = "MLAB,no_rw_check" *) reg [15:0] linebuf [0:511];   // {buf, idx[7:0]}
 
 // --- Fetch side: prefetch the NEXT scanline into ~disp_buf from vram_bram ---
 // One word per clk_sys, no bus arbitration: the whole line fills in
@@ -232,15 +235,15 @@ end
 // displays. vram_bram reads are registered, so the linebuf write lags the issued
 // address by one cycle (fetch_pend / fetch_wr_idx / fetch_buf_d).
 reg        fetch_buf;
-reg [17:0] fetch_packed_base;
+reg [16:0] fetch_packed_base;
 always @(*) begin
     if (vblank_c) begin   // combinational: registered vblank lags one pix_en and
                           // corrupted the first scanline's prefetch (left-edge artifact)
         fetch_buf         = 1'b0;        // prefetch line 0 into buffer 0
-        fetch_packed_base = 18'd0;
+        fetch_packed_base = 17'd0;
     end else begin
         fetch_buf         = ~v_count[0]; // next line's parity
-        fetch_packed_base = packed_row_start + {7'd0, words_per_line};
+        fetch_packed_base = packed_row_start + {6'd0, words_per_line};
     end
 end
 
@@ -249,7 +252,7 @@ reg [9:0] fetch_wr_idx;   // write-phase index (1 cycle behind = BRAM read laten
 reg       fetch_pend;     // a read was issued last cycle (its data is valid now)
 reg       fetch_buf_d;    // fetch_buf aligned to the write phase
 
-assign vram_raddr = fetch_packed_base + {8'd0, fetch_idx};
+assign vram_raddr = fetch_packed_base + {7'd0, fetch_idx};
 
 // SDRAM video path retired in Phase 2 — video reads the on-chip framebuffer.
 
@@ -271,25 +274,25 @@ always @(posedge clk_sys) begin
         end
         // Write phase: commit the word whose read was issued last cycle.
         if (fetch_pend)
-            linebuf[{fetch_buf_d, fetch_wr_idx[8:0]}] <= vram_rdata;
+            linebuf[{fetch_buf_d, fetch_wr_idx[7:0]}] <= vram_rdata;
     end
 end
 
 // --- Display side: read the current line from buffer v_count[0] at
 // the pixel rate. px_in_word counts down the pixels left in the word. ---
 reg [15:0] pixel_shift;
-reg [15:0] video_data;     // current word (for 16bpp direct color)
-reg [8:0]  disp_idx;       // next word to load from the line buffer
+reg [7:0]  disp_idx;       // next word to load from the line buffer
 reg [3:0]  px_in_word;     // pixels remaining in the loaded word
 
 wire [15:0] disp_word = linebuf[{v_count[0], disp_idx}];  // async read
 
+// POCKET CUT: 8bpp (2 px/word) is the densest mode; the 16bpp 1-px/word
+// case is gone.
 wire [3:0] px_per_word =
     (bits_per_pixel == 5'd1)  ? 4'd15 :   // 16 px/word
     (bits_per_pixel == 5'd2)  ? 4'd7  :   //  8
     (bits_per_pixel == 5'd4)  ? 4'd3  :   //  4
-    (bits_per_pixel == 5'd8)  ? 4'd1  :   //  2
-                                4'd0;     // 16bpp: 1 px/word
+                                4'd1;     //  2 (8bpp)
 
 // Display side gates on hblank_c/vblank_c (declared up top): the registered blanks
 // lag one pix_en, which left col 0 showing the primed pixel_shift (=0 -> 0x7F white
@@ -310,14 +313,12 @@ always @(posedge clk_sys) begin
         disp_idx    <= 0;
         px_in_word  <= 0;
         pixel_shift <= 16'h0000;
-        video_data  <= 16'h0000;
     end else if (pix_en) begin
         if (hblank_c || vblank_c) begin
             // Prime for the first pixel of the next line.
             disp_idx    <= 0;
             px_in_word  <= 0;
             pixel_shift <= 16'h0000;
-            video_data  <= 16'h0000;
         end else if (px_in_word == 0) begin
             // Load a fresh word (async read of word disp_idx), advance pointer.
             // The word's FIRST pixel is displayed THIS cycle via pix_word; store
@@ -327,10 +328,8 @@ always @(posedge clk_sys) begin
                 5'd1:  pixel_shift <= {disp_word[14:0], 1'b0};
                 5'd2:  pixel_shift <= {disp_word[13:0], 2'b0};
                 5'd4:  pixel_shift <= {disp_word[11:0], 4'b0};
-                5'd8:  pixel_shift <= {disp_word[7:0],  8'b0};
-                default: pixel_shift <= disp_word;
+                default: pixel_shift <= {disp_word[7:0],  8'b0};   // 8bpp
             endcase
-            video_data  <= disp_word;
             disp_idx    <= disp_idx + 1'b1;
             px_in_word  <= px_per_word;
         end else begin
@@ -339,8 +338,7 @@ always @(posedge clk_sys) begin
                 5'd1:  pixel_shift <= {pixel_shift[14:0], 1'b0};
                 5'd2:  pixel_shift <= {pixel_shift[13:0], 2'b0};
                 5'd4:  pixel_shift <= {pixel_shift[11:0], 4'b0};
-                5'd8:  pixel_shift <= {pixel_shift[7:0],  8'b0};
-                5'd16: ;
+                default: pixel_shift <= {pixel_shift[7:0],  8'b0}; // 8bpp
             endcase
         end
     end
@@ -392,31 +390,23 @@ assign pixel_index = tbyp_v ? pixel_index_test : pixel_index_real;
 assign palette_addr = pixel_index;
 
 // Pipeline delay: palette RAM read is synchronous (1-cycle latency),
-// so delay de, video_mode, and video_data to align with palette_data output.
+// so delay de to align with palette_data output.
+//
+// POCKET CUT: every surviving mode (1/2/4/8 bpp) is palette-indexed, so the
+// 16bpp X-5-5-5 direct-color bypass is gone along with the video_data /
+// video_data_d1 / video_mode_d1 pipeline that only fed it.
 reg        de_d1;
-reg [2:0]  video_mode_d1;
-reg [15:0] video_data_d1;
 
 always @(posedge clk_sys) begin
-    de_d1         <= de_raw;
-    video_mode_d1 <= video_mode;
-    video_data_d1 <= video_data;
+    de_d1 <= de_raw;
 end
 
 always @(posedge clk_sys) begin
     de <= de_d1;  // Align DE output with RGB (1-cycle palette latency)
     if (de_d1) begin
-        if (video_mode_d1 == 3'd4) begin
-            // 16bpp Direct Color (X-5-5-5)
-            vga_r <= {video_data_d1[14:10], 3'b000};
-            vga_g <= {video_data_d1[9:5],   3'b000};
-            vga_b <= {video_data_d1[4:0],   3'b000};
-        end else begin
-            // Palette Lookup
-            vga_r <= palette_data[23:16];
-            vga_g <= palette_data[15:8];
-            vga_b <= palette_data[7:0];
-        end
+        vga_r <= palette_data[23:16];
+        vga_g <= palette_data[15:8];
+        vga_b <= palette_data[7:0];
     end else begin
         vga_r <= 8'd0;
         vga_g <= 8'd0;

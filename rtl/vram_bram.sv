@@ -7,8 +7,19 @@
 // sharing + read latency. On-chip BRAM is true dual-port and single-cycle, so the
 // CPU can write port A while video reads port B every clock with zero contention.
 //
-// SIZE: DEPTH = 196,608 words (384 KB) = the largest supported framebuffer,
-// 16bpp @ 512x384. 640x480 @ 16bpp is not a Mac LC mode and is out of scope.
+// SIZE (POCKET): DEPTH = 98,304 words (192 KB) = 8bpp @ 512x384, the largest
+// framebuffer this port supports. 1/2/4 bpp use less (12K/24K/49K words).
+//
+// WHY IT SHRANK: the MiSTer build carried 196,608 words (384 KB) for 16bpp @
+// 512x384. On the DE10-Nano's 5CSEBA6U23I7 that fit — 384 of 553 M10K blocks,
+// 76% of the whole design's block RAM. The Pocket's 5CEBA4F23C8N has only 308
+// M10K TOTAL, so the 16bpp framebuffer alone would have overflowed the device
+// with nothing left for the SCSI buffers, TG68K, or the APF framework. Halving
+// to 8bpp costs 192 blocks and brings VRAM to 192, which leaves ~116 for
+// everything else. This is the single largest saving in the Pocket port.
+//
+// Each M10K in x8 mode is 1024x8, so a lane of 98,304x8 = 96 blocks; two lanes
+// (lo/hi) = 192 blocks.
 //
 // INFERENCE: this MUST map to M10K block RAM. A single 16-bit array written with
 // a sub-word *byte enable* (mem[a][7:0] <= ...) did NOT infer as block RAM in
@@ -25,8 +36,8 @@
 // the same word can only produce one transiently stale pixel).
 // ============================================================================
 module vram_bram #(
-    parameter integer DEPTH = 196608,   // 16bpp @ 512x384 = 384KB / 2 bytes
-    parameter integer AW    = 18         // ceil(log2(DEPTH))
+    parameter integer DEPTH = 98304,    // 8bpp @ 512x384 = 192KB / 2 bytes
+    parameter integer AW    = 17         // ceil(log2(DEPTH))
 )(
     // Port A — CPU write (byte-masked), a_clk (= clk_sys) domain. a_dout is
     // reserved for a later phase (CPU VRAM reads still come from SDRAM today).
