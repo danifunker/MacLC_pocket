@@ -253,17 +253,68 @@ ghdl synth -fsynopsys -fexplicit --latches --out=verilog
 
 ```bash
 cd verilator && make clean && make
-./obj_dir/Vemu --screenshot 450 --stop-at-frame 451 2>/dev/null 1>/dev/null
+./obj_dir/Vemu --headless --no-cpu-trace --screenshot 730 --stop-at-frame 731 >/dev/null 2>&1
 ```
 
-Check `screenshot_frame_0450.png` — it must show the **50% dither grey desktop
-with the arrow cursor top-left** (boot reached cursor-visible state). A uniform
-flat grey at 450 means the boot stalled — Egret communication is the first
-suspect. Corroborate with `bash check_boot.sh` (stages + ADVANCING).
-(Re-calibrated 2026-08-05: the old criterion was the memory-test line pattern
-at frame 350, timed against VIA timers that counted 2× slow — the via6522.sv
-timer fix moved every timer-paced boot delay earlier, so the pattern now
-passes before frame 180 and 350 lands in a featureless VRAM-fill phase.)
+Check the screenshot — it must show the **50% dither grey desktop with the
+arrow cursor top-left** (boot reached cursor-visible state). A uniform flat
+grey means the boot stalled — Egret communication is the first suspect.
+Corroborate with `bash check_boot.sh` (stages + ADVANCING).
+
+### ★ THE FRAME NUMBER IS RESOLUTION-DEPENDENT (learned 2026-08-10)
+
+**The oracle frame is 730 in this fork, not the 450 the MiSTer core uses.**
+Cost several hours to work out, so read this before trusting any frame count.
+
+The sim counts VIDEO frames, and the Pocket cut changed the video mode, which
+changed how long a frame lasts:
+
+| mode | h_total x v_total | pixel clocks/frame |
+|---|---|---|
+| 640x480 (MiSTer, monitor ID 6) | 800 x 525 | 420,000 |
+| 512x384 (Pocket, monitor ID 2) | 640 x 407 | 260,480 |
+
+Ratio 1.612. So a Pocket frame is 1.612x SHORTER in guest time, and frame N
+here is only frame N/1.612 of the MiSTer timeline. 450 x 1.612 = 725, hence
+730.
+
+Confirmed empirically: the first CPU VRAM write lands at **F92** on the MiSTer
+core and **F148** here — 92 x 1.612 = 148.3 — with byte-identical waddr/data/be
+in both. The guest is not slower; the ruler changed.
+
+The failure mode this creates is nasty: sampling frame 450 here lands ~170
+guest-frames EARLY, in the featureless VRAM-fill phase, and produces a uniform
+flat grey that is indistinguishable from the documented stalled-boot signature.
+It reads as a video regression when nothing is wrong.
+
+**Never compare frame numbers across resolutions.** If you change the video
+mode again, rescale the oracle by the pixel-clocks-per-frame ratio, and
+sanity-check it against the frame at which the first `VRAM->BRAM` write
+appears.
+
+(Re-calibrated 2026-08-05 on MiSTer: the old criterion was the memory-test
+line pattern at frame 350, timed against VIA timers that counted 2x slow — the
+via6522.sv timer fix moved every timer-paced boot delay earlier, so the pattern
+now passes before frame 180 and 350 lands in a featureless VRAM-fill phase.)
+
+### Reading the debug output
+
+`$display` output goes to **stdout**, not stderr. `--no-cpu-trace` only
+disables the per-instruction `cpu_trace.log`; it does NOT silence `$display`.
+Redirecting stdout to /dev/null and grepping stderr yields an empty file that
+looks exactly like "the instrumentation never fired".
+
+The most useful probe already exists in `sim.v` under `SIMULATION`:
+
+```
+[F148] VRAM->BRAM write #0 waddr=00000 data=5368 be=00 wpl=32
+```
+
+`wpl` (= words_per_line) identifies the active video mode directly —
+1bpp@512 = 32, 4bpp@512 = 128, 8bpp@512 = 256 — so one grep confirms depth,
+packing and draw activity without rendering anything. It prints writes #0-4
+and then every 50,000th, so a full 512x384 1bpp desktop fill (12,288 words)
+shows only the first five.
 
 **SR edge-detection patterns (history + FPGA caveat):**
 - `cb2_latched` (shift-in: capturing CB2 at the CB1 rising edge) — **removed; do not re-introduce.** Shift-in uses live `cb2_i`. Re-introducing it hung the 4th Egret SR transfer in Verilator (CPU stuck polling IFR bit 2 at `0xA14E5E`).
