@@ -6,7 +6,7 @@
                 "name": "ROM",
                 "id": 0,
                 "required": true,
-                "parameters": "0x02",
+                "parameters": "0x03",
                 "extensions": ["rom"],
                 "address": "0x10000000"
             },

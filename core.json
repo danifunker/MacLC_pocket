@@ -5,7 +5,7 @@
             "platform_ids": ["maclc"],
             "shortname": "Macintosh LC",
             "description": "Apple Macintosh LC (68020, V8, 512x384 8bpp). Ported from the MiSTer core.",
-            "author": "Dani Sarfati",
+            "author": "danifunker",
             "url": "https://github.com/",
             "version": "0.1.0-wip",
             "date_release": "2026-08-09"

@@ -41,3 +41,9 @@ src/fpga/db/
 src/fpga/incremental_db/
 src/fpga/output_files/
 src/fpga/.qsys_edit/
+
+# Packaged SD-card payload: bitstream is a build product, ROM/disk images are
+# copyrighted Apple content. The JSONs in dist/Cores are copies of the roots.
+dist/Cores/
+dist/Assets/
+dist/assets/maclc/
