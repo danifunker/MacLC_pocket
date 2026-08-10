@@ -40,8 +40,15 @@ fi
 
 mkdir -p "$DEST" "dist/Platforms/_images" "dist/Assets/${PLATFORM}/common"
 
+# Ship the JSONs with CRLF line endings.
+#
+# Every JSON in the reference core (Pocket-Amiga) is CRLF; ours are LF because
+# .gitattributes pins them that way for readable diffs. JSON does not care
+# about line endings in principle, but the Pocket's parser is not ours to
+# assume about, and matching a known-good core costs nothing. The repo stays
+# LF; only the shipped copies are converted.
 for f in core.json video.json audio.json data.json input.json interact.json variants.json; do
-    cp "$f" "$DEST/"
+    sed 's/$/\r/' "$f" > "$DEST/$f"
 done
 [ -f dist/icon.bin ] && cp dist/icon.bin "$DEST/" || true
 

@@ -1,7 +1,46 @@
 {
     "interact": {
         "magic": "APF_VER_1",
-        "variables": [],
+        "variables": [
+            {
+                "name": "Memory",
+                "id": 100,
+                "type": "list",
+                "enabled": true,
+                "persist": true,
+                "address": "0xf1000000",
+                "defaultval": 0,
+                "mask": "0xFFFFFFFE",
+                "options": [
+                    {
+                        "value": "0x00000000",
+                        "name": "2 MB"
+                    },
+                    {
+                        "value": "0x00000001",
+                        "name": "10 MB"
+                    }
+                ]
+            },
+            {
+                "name": "Reset & Apply",
+                "id": 101,
+                "type": "action",
+                "enabled": true,
+                "address": "0xf1000004",
+                "value": 1,
+                "mask": "0xFFFFFFFE"
+            },
+            {
+                "name": "Interrupt (NMI / MacsBug)",
+                "id": 102,
+                "type": "action",
+                "enabled": true,
+                "address": "0xf100000c",
+                "value": 1,
+                "mask": "0xFFFFFFFE"
+            }
+        ],
         "messages": []
     }
 }
