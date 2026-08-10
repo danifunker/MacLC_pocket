@@ -250,8 +250,7 @@ module emu
 	// floppy disk image interface
 	wire dskReadAckInt;
 	wire [21:0] dskReadAddrInt;
-	wire dskReadAckExt;
-	wire [21:0] dskReadAddrExt;
+	// POCKET CUT: the external drive's fetch channel is gone (one drive).
 
 	// dtack generation for 16 MHz mode
 	reg  dtack_en, mem_latch_d;
@@ -554,13 +553,11 @@ module emu
 
 
 		.dskReadAddrInt(dskReadAddrInt),
-		.dskReadAckInt(dskReadAckInt),
-		.dskReadAddrExt(dskReadAddrExt),
-		.dskReadAckExt(dskReadAckExt)
+		.dskReadAckInt(dskReadAckInt)
 	);
 
-	wire [1:0] diskEject;
-	wire [1:0] diskMotor, diskAct;
+	wire diskEject;
+	wire diskMotor, diskAct;
 
 	// Video Mode Selection - from PVIA video_config register (bits 2:0 = bpp mode)
 	wire [7:0] pvia_video_config;
@@ -750,19 +747,16 @@ module emu
 	wire [31:0] scsi_lba[2];
 	wire [1:0]  scsi_rd, scsi_wr;
 	wire [15:0] scsi_buff_din[2];
-	wire [31:0] cd_lba;
-	wire        cd_rd;
-	wire [15:0] cd_buff_din;
 	assign sd_lba[0] = scsi_lba[0];
 	assign sd_lba[1] = scsi_lba[1];
-	assign sd_lba[2] = cd_lba;
+	assign sd_lba[2] = 32'd0;
 	assign sd_rd[1:0] = scsi_rd;
-	assign sd_rd[2]   = cd_rd;
+	assign sd_rd[2]   = 1'b0;
 	assign sd_wr[1:0] = scsi_wr;
 	assign sd_wr[2]   = 1'b0;
 	assign sd_buff_din[0] = scsi_buff_din[0];
 	assign sd_buff_din[1] = scsi_buff_din[1];
-	assign sd_buff_din[2] = cd_buff_din;
+	assign sd_buff_din[2] = 16'd0;
 
 	dataController_top #(SCSI_DEVS) dc0
 	(
@@ -797,9 +791,6 @@ module emu
 		.dbg_scsi4(),
 		.dbg_scsi5(),
 		.dbg_ncr(),
-		.dbg_cda0(),
-		.dbg_cda1(),
-		.dbg_cda2(),
 		.dbg_ncr2(),
 		.dbg_wr(),
 		.selectSCC(selectSCC),
@@ -831,15 +822,13 @@ module emu
 		.vid_alt(vid_alt),
 
 
-		.insertDisk({dsk_ext_ins, dsk_int_ins}),
-		.diskSides({dsk_ext_ds, dsk_int_ds}),
-		.diskMFM({dsk_ext_mfm, dsk_int_mfm}),
-		.diskHD({dsk_ext_hd, dsk_int_hd}),
+		.insertDisk(dsk_int_ins),
+		.diskSides(dsk_int_ds),
+		.diskMFM(dsk_int_mfm),
+		.diskHD(dsk_int_hd),
 		.diskEject(diskEject),
 		.dskReadAddrInt(dskReadAddrInt),
 		.dskReadAckInt(dskReadAckInt),
-		.dskReadAddrExt(dskReadAddrExt),
-		.dskReadAckExt(dskReadAckExt),
 		.diskMotor(diskMotor),
 		.diskAct(diskAct),
 
@@ -856,16 +845,11 @@ module emu
 		.sd_buff_din(scsi_buff_din),
 		.sd_buff_wr(sd_buff_wr),
 
-		// CD-ROM target (SCSI ID 3) block interface — sim slot 2.
-		// cd_enable tied on: the sim boot regression now exercises the
-		// disc-less CD target during the ROM SCSI scan.
-		.cd_enable(1'b1),
-		.cd_img_mounted(img_mounted[2]),
-		.cd_io_lba(cd_lba),
-		.cd_io_rd(cd_rd),
-		.cd_io_wr(),           // read-only target: never writes
-		.cd_io_ack(sd_ack[2]),
-		.cd_sd_buff_din(cd_buff_din),
+		// POCKET CUT: the CD-ROM target (SCSI ID 3) and its slot-2 block
+		// interface are gone. The old sim boot regression deliberately
+		// exercised the disc-less CD target during the ROM's SCSI scan; with
+		// no CD target the scan simply finds nothing at ID 3, which is what
+		// a real LC without a CD-ROM drive does.
 
 		// PRAM persistence — tied off (step 1); FSM wired in step 2
 		.pram_load_wr(1'b0),
@@ -898,10 +882,11 @@ module emu
 	wire [5:0] dio_menu = dio_index[5:0];
 
 	// Floppy disk image tracking
-	reg dsk_int_ds, dsk_ext_ds;
-	reg dsk_int_ss, dsk_ext_ss;
-	reg dsk_int_mfm, dsk_ext_mfm;  // MFM-format image (ISM path): 720K or 1.44MB
-	reg dsk_int_hd,  dsk_ext_hd;   // 1.44MB HD (vs 720K DD)
+	// POCKET CUT: single drive -- the dsk_ext_* twins are gone.
+	reg dsk_int_ds;
+	reg dsk_int_ss;
+	reg dsk_int_mfm;  // MFM-format image (ISM path): 720K or 1.44MB
+	reg dsk_int_hd;   // 1.44MB HD (vs 720K DD)
 	// DiskCopy 4.2 header skip — mirror of MacLC.sv (rationale there).
 	reg dc42_name_ok;
 	reg dc42_skip;
@@ -912,11 +897,9 @@ module emu
 	// so this only delays that mount; it is here to keep the two tops from
 	// diverging (docs/verilator_differences.md).
 	localparam [25:0] DSK_EMPTY_CY = 26'h3FFFFFF;
-	reg [25:0] dsk_int_empty_cy, dsk_ext_empty_cy;
+	reg [25:0] dsk_int_empty_cy;
 	wire dsk_int_empty = (dsk_int_empty_cy != DSK_EMPTY_CY);
-	wire dsk_ext_empty = (dsk_ext_empty_cy != DSK_EMPTY_CY);
 	wire dsk_int_ins = !dsk_int_empty && (dsk_int_ds || dsk_int_ss || dsk_int_mfm);
-	wire dsk_ext_ins = !dsk_ext_empty && (dsk_ext_ds || dsk_ext_ss || dsk_ext_mfm);
 
 	always @(posedge clk_sys) begin
 		reg old_down;
@@ -949,7 +932,7 @@ module emu
 			         (dio_addr == 368640) || (dio_addr == 737280) || (dc42_skip && (dc42_disk_format == 8'd2 || dc42_disk_format == 8'd3)),
 			         (dio_addr == 737280) || (dc42_skip && dc42_disk_format == 8'd3));
 		end
-		if(diskEject[0]) begin
+		if(diskEject) begin
 			dsk_int_ds <= 0;
 			dsk_int_ss <= 0;
 			dsk_int_mfm <= 0;
@@ -957,43 +940,14 @@ module emu
 		end
 	end
 
-	always @(posedge clk_sys) begin
-		reg old_down;
-		old_down <= dio_download;
-		if(~old_down && dio_download && dio_menu == 6'd2) begin
-			dsk_ext_ds  <= 0;
-			dsk_ext_ss  <= 0;
-			dsk_ext_mfm <= 0;
-			dsk_ext_hd  <= 0;
-			dsk_ext_empty_cy <= 26'd0;
-		end
-		else if(dio_download && dio_menu == 6'd2)
-			dsk_ext_empty_cy <= 26'd0;
-		else if(dsk_ext_empty_cy != DSK_EMPTY_CY)
-			dsk_ext_empty_cy <= dsk_ext_empty_cy + 26'd1;
-
-		if(old_down && ~dio_download && dio_menu == 6'd2) begin
-			dsk_ext_ds <= (dio_addr == 409600) ||
-			              (dc42_skip && (dio_addr == 409642 || dio_addr == 419242));
-			dsk_ext_ss <= (dio_addr == 204800) ||
-			              (dc42_skip && (dio_addr == 204842 || dio_addr == 209642));
-			dsk_ext_mfm <= (dio_addr == 368640) || (dio_addr == 737280) ||
-			               (dc42_skip && (dc42_disk_format == 8'd2 || dc42_disk_format == 8'd3));
-			dsk_ext_hd  <= (dio_addr == 737280) ||
-			               (dc42_skip && dc42_disk_format == 8'd3);
-		end
-		if(diskEject[1]) begin
-			dsk_ext_ds <= 0;
-			dsk_ext_ss <= 0;
-			dsk_ext_mfm <= 0;
-			dsk_ext_hd <= 0;
-		end
-	end
+	// POCKET CUT: the external drive's media-state block (download-size
+	// sniffing for 400K/800K/720K/1.44M, the DC42 header cases and the
+	// empty-hold timer) is deleted with the drive itself.
 
 	// Download addresses (SDRAM word addresses):
 	//   ROM:      $500000 + offset
-	//   Floppy 1: $600000 + offset
-	//   Floppy 2: $700000 + offset
+	//   Floppy:   $600000 + offset
+	// POCKET CUT: the $700000 second-floppy region is unused now.
 	reg [22:0] dio_a;
 	reg [15:0] dio_data;
 	reg        dio_write;
@@ -1019,8 +973,7 @@ module emu
 			// Don't byte-swap for sim_ram (original swaps for SDRAM byte ordering)
 			dio_data <= ioctl_dout;
 			case (dio_index[1:0])
-				2'b01:   dio_a <= 23'h600000 + {3'b0, dio_flp_a};  // Floppy 1
-				2'b10:   dio_a <= 23'h700000 + {3'b0, dio_flp_a};  // Floppy 2
+				2'b01:   dio_a <= 23'h600000 + {3'b0, dio_flp_a};  // Floppy
 				default: dio_a <= {5'b10100, dio_addr[17:0]};      // ROM at $500000 (must match addrController rom_sdram_word)
 			endcase
 			ioctl_wait <= 1;
@@ -1040,8 +993,7 @@ module emu
 	// memoryAddr[22:0] is already the SDRAM word address from addrController
 	// Download path uses dio_a_comb[22:0] directly
 	wire [22:0] dio_a_comb;
-	assign dio_a_comb = (ioctl_index[1:0] == 2'b01) ? 23'h600000 + {3'b0, ioctl_addr[20:1]} :  // Floppy 1
-	                    (ioctl_index[1:0] == 2'b10) ? 23'h700000 + {3'b0, ioctl_addr[20:1]} :  // Floppy 2
+	assign dio_a_comb = (ioctl_index[1:0] == 2'b01) ? 23'h600000 + {3'b0, ioctl_addr[20:1]} :  // Floppy
 	                    {5'b10100, ioctl_addr[18:1]};                                            // ROM at $500000 (must match addrController rom_sdram_word)
 
 	wire [24:0] ram_addr = download_cycle ? {2'b00, dio_a_comb[22:0]} :
@@ -1054,7 +1006,7 @@ module emu
 	wire  [1:0] ram_ds   = download_cycle ? 2'b11                 : { !_memoryUDS, !_memoryLDS };
 	// Use ioctl_wr directly as write enable during download (bypass registered dio_write)
 	wire        ram_we   = download_cycle ? 1'b1                  : !_ramWE;
-	wire        ram_oe   = download_cycle ? 1'b0                  : (!_ramOE || !_romOE || dskReadAckInt || dskReadAckExt);
+	wire        ram_oe   = download_cycle ? 1'b0                  : (!_ramOE || !_romOE || dskReadAckInt);
 	wire [15:0] ram_do_raw;
 	// --- Force cold-boot path (warm-reset hang workaround) — keep in sync with MacLC.sv.
 	// Patch the boot ROM's warm-vs-cold `bne.w` at ROM byte $4655E (SDRAM word
@@ -1063,12 +1015,12 @@ module emu
 	// guarded on the address AND opcode so other ROMs are untouched.
 	wire [15:0] ram_do_patched =
 		(!_romOE && memoryAddr == 23'h52322F && ram_do_raw == 16'h6600) ? 16'h6000 : ram_do_raw;
-	wire [15:0] ram_do   = download_cycle ? 16'hffff : (dskReadAckInt || dskReadAckExt) ? extra_rom_data_demux : ram_do_patched;
+	wire [15:0] ram_do   = download_cycle ? 16'hffff : dskReadAckInt ? extra_rom_data_demux : ram_do_patched;
 	// Disk byte-parity select: must be dskReadAddr[0], NOT memoryAddr[0] (which
 	// is dskReadAddr[1] after the >>1 word conversion drops bit 0). See the long
 	// note at the matching demux in MacLC.sv — the old bit selected the wrong
 	// byte on odd addresses and corrupted every floppy sector. Keep in sync.
-	wire dsk_byte_odd = dskReadAckExt ? dskReadAddrExt[0] : dskReadAddrInt[0];
+	wire dsk_byte_odd = dskReadAddrInt[0];
 	wire [15:0] extra_rom_data_demux = dsk_byte_odd ?
 						   {ram_do_raw[7:0],ram_do_raw[7:0]}:{ram_do_raw[15:8],ram_do_raw[15:8]};
 
