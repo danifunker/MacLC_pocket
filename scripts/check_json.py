@@ -119,27 +119,72 @@ if v:
                 problems.append('video.scaler_modes[%d]: missing %s' % (i, k))
 
 # ------------------------------------------------- input / interact / other --
+if v:
+    modes = v.get('video', {}).get('scaler_modes', [])
+    if len(modes) > 8:
+        problems.append('video.scaler_modes: %d, max 8' % len(modes))
+    for i, mo in enumerate(modes):
+        if mo.get('rotation') not in (0, 90, 180, 270):
+            problems.append('video.scaler_modes[%d].rotation must be 0/90/180/270,'
+                            ' got %r' % (i, mo.get('rotation')))
+
+# --------------------------------------------------------------- input.json --
+VALID_KEYS = {
+    'pad_btn_a', 'pad_btn_b', 'pad_btn_x', 'pad_btn_y',
+    'pad_trig_l', 'pad_trig_r', 'pad_btn_start', 'pad_btn_select',
+}
 inp = load('input.json')
 if inp:
-    for ctl in inp.get('input', {}).get('controllers', []):
-        for mp in ctl.get('mappings', []):
+    ctls = inp.get('input', {}).get('controllers', [])
+    if len(ctls) > 4:
+        problems.append('input.controllers: %d, max 4' % len(ctls))
+    for ci, ctl in enumerate(ctls):
+        if ctl.get('type') != 'default':
+            problems.append('input.controllers[%d].type must be "default"' % ci)
+        maps = ctl.get('mappings', [])
+        if len(maps) > 8:
+            problems.append('input.controllers[%d].mappings: %d, max 8'
+                            % (ci, len(maps)))
+        for mp in maps:
+            maxlen('input.controllers[%d].mappings' % ci, 'name',
+                   mp.get('name'), 19)
             key = mp.get('key', '')
-            if not key.startswith('pad_'):
-                notes.append('input.json: key %r does not look like a pad_* name'
-                             % key)
+            if key not in VALID_KEYS:
+                problems.append('input.json: key %r is not a documented keycode'
+                                ' (%s)' % (key, ', '.join(sorted(VALID_KEYS))))
 
+# ------------------------------------------------------------ interact.json --
+VALID_TYPES = {'radio', 'check', 'slider_u32', 'list', 'number_u32', 'action'}
 it = load('interact.json')
 if it:
-    for var in it.get('interact', {}).get('variables', []):
+    varsl = it.get('interact', {}).get('variables', [])
+    if len(varsl) > 16:
+        problems.append('interact.variables: %d entries, max 16 shown'
+                        % len(varsl))
+    seen = set()
+    for var in varsl:
         w = 'interact.variables[%s]' % var.get('name')
+        maxlen(w, 'name', var.get('name'), 23)
+        if var.get('type') not in VALID_TYPES:
+            problems.append('%s.type %r not one of %s'
+                            % (w, var.get('type'), sorted(VALID_TYPES)))
+        vid = var.get('id')
+        try:
+            n = int(str(vid), 0)
+            if not 0 <= n <= 0xFFFF:
+                problems.append('%s.id %s out of 16-bit range' % (w, vid))
+            if n in seen:
+                problems.append('%s.id %s is duplicated — ids must be unique,'
+                                ' persistence is keyed on them' % (w, vid))
+            seen.add(n)
+        except Exception:
+            problems.append('%s.id %r is neither integer nor hex string'
+                            % (w, vid))
+        for o in var.get('options', []):
+            maxlen(w + '.options', 'name', o.get('name'), 23)
         if 'mask' not in var:
             notes.append('%s: no "mask" field (the reference core always sets one)'
                          % w)
-        if var.get('type') == 'list':
-            for o in var.get('options', []):
-                if not isinstance(o.get('value'), str):
-                    notes.append('%s: list option value should be a hex STRING'
-                                 % w)
 
 load('audio.json')
 load('variants.json')

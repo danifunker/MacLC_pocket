@@ -32,7 +32,7 @@
                 "mask": "0xFFFFFFFE"
             },
             {
-                "name": "Interrupt (NMI / MacsBug)",
+                "name": "Interrupt (NMI)",
                 "id": 102,
                 "type": "action",
                 "enabled": true,
