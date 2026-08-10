@@ -2,11 +2,25 @@
 """Generate dist/platforms/_images/maclc.bin — the platform art the Pocket
 shows on the core's About / platform screen.
 
-FORMAT (derived from the reference cores, not from documentation): a raw
-521 x 165 array of little-endian 16-bit RGB565 pixels, no header. That is
-exactly 171,930 bytes, which is the size of both the stock core-template's
-ex_platform.bin and Pocket-Amiga's amiga.bin. The Amiga image's dominant pixel
-value is 0x0001 (essentially black), so a dark background is the house style.
+FORMAT — reverse-engineered from Pocket-Amiga's amiga.bin, because guessing at
+it produced garbage twice. 171,930 bytes factors as both 521*165*2 and
+521*110*3, and NEITHER of those layouts decodes to a picture. The real layout
+was found by scanning candidate row strides for row-to-row similarity: the
+clear winner is a 330-byte stride over 521 rows, i.e.
+
+    165 pixels per row, 521 rows, little-endian RGB565, no header
+
+The image is therefore stored COLUMN-MAJOR — a 521x165 landscape picture
+rotated 90 degrees. Decoding amiga.bin that way renders "Commodore AMIGA"
+correctly; getting the rotation direction backwards renders it upside-down and
+mirrored, which is a useful tell if this ever needs re-deriving.
+
+Mapping, with (x, y) in display space (x across 521, y down 165):
+
+    storage[r * 165 + c]  =  display(520 - r, c)
+
+The Amiga image's dominant pixel value is 0x0001 (essentially black), so a dark
+background is the house style.
 
 Draws a Macintosh LC: the flat "pizza box" case with its 12" RGB monitor on
 top, in Apple's Platinum grey, with the six-colour stripe as an accent.
@@ -111,10 +125,20 @@ for i, c in enumerate(STRIPES):
 rect(360, 118, 470, 120, PLAT_DARK)
 
 # ------------------------------------------------------------------ write ---
+# Emit column-major / rotated, per the FORMAT note above:
+#   storage[r*165 + c] = display(520 - r, c)
+SW = H          # 165 pixels per stored row
+SH = W          # 521 stored rows
+store = [0] * (SW * SH)
+for r in range(SH):
+    for c in range(SW):
+        store[r * SW + c] = fb[c * W + (W - 1 - r)]
+
 out = os.path.join(os.path.dirname(__file__), '..',
                    'dist', 'platforms', '_images', 'maclc.bin')
 out = os.path.normpath(out)
 os.makedirs(os.path.dirname(out), exist_ok=True)
 with open(out, 'wb') as fh:
-    fh.write(struct.pack('<%dH' % (W * H), *fb))
-print('wrote %s (%d bytes, %dx%d RGB565)' % (out, W * H * 2, W, H))
+    fh.write(struct.pack('<%dH' % (SW * SH), *store))
+print('wrote %s (%d bytes, %dx%d displayed, stored %dx%d column-major RGB565)'
+      % (out, SW * SH * 2, W, H, SW, SH))

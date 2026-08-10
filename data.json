@@ -4,17 +4,16 @@
         "data_slots": [
             {
                 "name": "ROM",
-                "id": "0",
-                "required": true,
+                "id": "200",
+                "required": false,
                 "parameters": 1,
                 "extensions": ["rom"],
-                "filename": "boot0.rom",
                 "size_maximum": 524288,
                 "address": "0x10000000"
             },
             {
                 "name": "Floppy",
-                "id": "1",
+                "id": "210",
                 "required": false,
                 "deferload": true,
                 "parameters": 1,

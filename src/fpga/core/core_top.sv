@@ -590,16 +590,24 @@ end
 // over the bridge, then the session ends. apf_bridge_loader needs to know
 // which slot is live so it can set dio_index; latch it here.
 //
-// Slot ids must match data.json:  0 = ROM, 1 = Floppy, 2/3 = SCSI, 4 = PRAM.
-// Only 0 and 1 stream into SDRAM; the SCSI slots are block devices served on
-// demand and are NOT handled by the loader.
+// Slot ids must match data.json. They are 200 (ROM) and 210 (Floppy), NOT 0
+// and 1: every data slot in the reference core (Pocket-Amiga) is numbered from
+// 200 up, and low ids appear to be reserved — a plausible cause of the
+// "Load error in 'core'" seen with ids 0/1.
+//
+// The Mac side still wants MiSTer's dio_index convention (0 = ROM, 1 = floppy,
+// and mac_lc_pocket decodes dio_index[1:0] for the DC42/floppy paths), so the
+// APF slot id is translated here rather than propagated inward.
+localparam [15:0] SLOT_ROM    = 16'd200;
+localparam [15:0] SLOT_FLOPPY = 16'd210;
+
 reg  [15:0] loader_slot_id;
 reg         loader_active;
 always @(posedge clk_74a) begin
     if (dataslot_requestwrite) begin
-        loader_slot_id <= dataslot_requestwrite_id;
-        loader_active  <= (dataslot_requestwrite_id == 16'd0) ||
-                          (dataslot_requestwrite_id == 16'd1);
+        loader_slot_id <= (dataslot_requestwrite_id == SLOT_FLOPPY) ? 16'd1 : 16'd0;
+        loader_active  <= (dataslot_requestwrite_id == SLOT_ROM) ||
+                          (dataslot_requestwrite_id == SLOT_FLOPPY);
     end else if (dataslot_allcomplete) begin
         loader_active <= 1'b0;
     end
