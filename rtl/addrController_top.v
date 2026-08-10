@@ -1,0 +1,312 @@
+module addrController_top(
+	// clocks:
+	input clk,
+	output clk8,
+	output clk8_en_p,
+	output clk8_en_n,
+	output clk16_en_p,
+	output clk16_en_n,
+
+	// system config:
+	input [7:0] ram_config,       // V8 RAM config byte WRITTEN by ROM (pseudovia reg $01)
+	input [7:0] ram_config_phys,  // PHYSICAL hardware RAM config (configRAMSize) — never
+	                              // changes; gives the real installed SIMM size.
+	input       ram_configured,  // 1 once ROM programs V8 config (enables $0 mirror)
+
+	// 68000 CPU memory interface:
+	input _cpuReset,
+	input [31:0] cpuAddr,
+	input _cpuUDS,
+	input _cpuLDS,
+	input _cpuRW,
+	input _cpuAS,
+	// Function code: FC[1]=1 distinguishes program access (FC=2/6) from
+	// data access (FC=1/5). We gate overlay-disable on it so an incidental
+	// data read of $A0xxxxx (e.g. TG68-driven access to $ABC146 before the
+	// boot ROM is ready to leave the overlay mirror) doesn't prematurely
+	// clear overlay and crash the CPU through zero-RAM.
+	// Note: this is STRICTER than MAME (which clears on any non-debugger
+	// read), but MAME's behavior caused us to wild-execute through RAM=0
+	// (build 20260601_073828 confirmed: overlay-trigger=$ABC146 → opcode
+	// $0000 wild branch). The FC[1] gate is the empirically-correct fit
+	// for our TG68 + SDRAM stack even though it diverges from MAME.
+	input [2:0] cpuFC,
+
+	// RAM/ROM:
+	output [22:0] memoryAddr,  // 23-bit SDRAM word address
+	output _memoryUDS,
+	output _memoryLDS,
+	output _romOE,
+	output _ramOE,
+	output _ramWE,
+	output dioBusControl,
+	output cpuBusControl,
+	output memoryLatch,
+
+	// peripherals:
+	output selectSCSI,
+	output selectSCSIDMA,
+	output selectSCC,
+	output selectIWM,
+	output selectASC,
+	output selectVIA,
+	output selectRAM,
+	output selectROM,
+
+	// LC Peripherals
+	output selectAriel,
+	output selectPseudoVIA,
+	output selectVRAM,
+	output selectUnmapped,
+
+	// On-chip framebuffer (BRAM) write mirror — Phase 1 of the VRAM-in-BRAM plan.
+	input  [10:0] words_per_line, // active words/line (from v8_video) for packing
+	output [17:0] vram_waddr,     // packed BRAM word address for a CPU VRAM write
+	output        vram_we,        // 1-cyc strobe: commit the CPU VRAM write to BRAM
+
+	// misc
+	output memoryOverlayOn,
+	output [23:0] overlay_trigger_addr,  // debug: address that caused overlay disable
+
+	// interface to read dsk image from ram
+	input [21:0] dskReadAddrInt,
+	output dskReadAckInt,
+	input [21:0] dskReadAddrExt,
+	output dskReadAckExt
+);
+
+	// Legacy Mac-Plus sound DMA removed in Commit C.
+	// Extra-slot 2 is now idle; ASC owns all audio output.
+
+	// ============================================================
+	// Bus cycle / clock generation
+	// ============================================================
+	assign dioBusControl = extraBusControl;
+
+	reg [1:0] busCycle;
+	reg [1:0] busPhase;
+	reg [1:0] extra_slot_count;
+
+	always @(posedge clk) begin
+		busPhase <= busPhase + 1'd1;
+		if (busPhase == 2'b11)
+			busCycle <= busCycle + 2'd1;
+	end
+	assign memoryLatch = busPhase == 2'd3;
+	assign clk8 = !busPhase[1];
+	assign clk8_en_p = busPhase == 2'b11;
+	assign clk8_en_n = busPhase == 2'b01;
+	assign clk16_en_p = !busPhase[0];
+	assign clk16_en_n = busPhase[0];
+
+	reg extra_slot_advance;
+	always @(posedge clk)
+		if (clk8_en_n) extra_slot_advance <= (busCycle == 2'b11);
+
+	always @(posedge clk) begin
+		if(clk8_en_p && extra_slot_advance) begin
+			extra_slot_count <= extra_slot_count + 2'd1;
+		end
+	end
+
+	// H1 (perf): video scanout reads the on-chip BRAM framebuffer (vram_bram),
+	// not SDRAM, so the CPU owns slots 00/01/11 (3 of 4 slots). The remaining
+	// "extra" slot (10) serves floppy disk reads. NOTE: the dtack glue in
+	// MacLC.sv/sim.v must assert per-cpu-slot (the 3 slots 11,00,01 are
+	// CONTIGUOUS, so a rising-edge detector would see only one edge per round
+	// and HALVE throughput).
+	assign cpuBusControl = (busCycle == 2'b00) || (busCycle == 2'b01) || (busCycle == 2'b11);
+	wire extraBusControl = (busCycle == 2'b10);
+
+	// ============================================================
+	// Memory control signals
+	// ============================================================
+	assign _romOE = ~(cpuBusControl && selectROM && _cpuRW);
+
+	assign _ramOE = ~(cpuBusControl && (selectRAM || selectVRAM) && _cpuRW);
+
+	// RAM Write Enable: Active for RAM or VRAM writes
+	assign _ramWE = ~(cpuBusControl && (selectRAM || selectVRAM) && !_cpuRW);
+
+	assign _memoryUDS = cpuBusControl ? _cpuUDS : 1'b0;
+	assign _memoryLDS = cpuBusControl ? _cpuLDS : 1'b0;
+
+	// ============================================================
+	// V8-style RAM address translation
+	// All outputs are 23-bit SDRAM word addresses
+	//
+	// SDRAM Layout (word addresses):
+	//   $000000-$0FFFFF  Motherboard RAM (2MB)
+	//   $100000-$4FFFFF  SIMM RAM (up to 8MB)
+	//   $500000-$53FFFF  ROM (512KB)
+	//   $580000-$5BFFFF  VRAM (512KB)
+	//   $600000-$6FFFFF  Floppy disk image 1 (2MB)
+	//   $700000-$7FFFFF  Floppy disk image 2 (2MB)
+	// ============================================================
+
+	// Decode SIMM size from the PHYSICAL config, NOT the ROM-written register.
+	// MAME sizes the SIMM from m_ram_size (physical), and only the install ENABLE
+	// / motherboard placement use the writable config register. For a 2MB machine
+	// (configRAMSize=$24, bits[7:6]=00) there is NO SIMM, so $0 must never route to
+	// the SIMM SDRAM region — it stays a true mirror of $800000. Using the written
+	// register here (which transiently becomes $C4 during the ROM's RAM probe)
+	// fabricated a phantom 8MB SIMM at $0, turning $0 into a SEPARATE bank instead
+	// of a $800000 mirror; the boot's bank scan then recorded a phantom $0 entry and
+	// the march clobbered the descriptor table at $9FFFEC.
+	// NOTE: 8MB = $800000 needs bit 23, so this field MUST be 24 bits wide.
+	// A 23-bit field silently truncated $800000 to 0, killing the 8MB/10MB config.
+	wire [23:0] simm_byte_size = (ram_config_phys[7:6] == 2'b00) ? 24'h000000 :  // 0MB
+	                              (ram_config_phys[7:6] == 2'b01) ? 24'h200000 :  // 2MB
+	                              (ram_config_phys[7:6] == 2'b10) ? 24'h400000 :  // 4MB
+	                                                                24'h800000;   // 8MB
+	wire [22:0] simm_word_size = simm_byte_size[23:1];
+
+	// CPU address classification for RAM
+	wire motherboard_high = (cpuAddr[23:21] == 3'b100);  // $800000-$9FFFFF
+	wire in_simm = (cpuAddr[22:0] < simm_byte_size);     // Below SIMM size
+
+	// CPU byte addr -> word addr
+	wire [21:0] cpu_word = cpuAddr[22:1];
+
+	// Motherboard mirror offset: (cpu_word - simm_words) mod 2MB
+	// (dead when the SIMM fills the whole lower bank, e.g. 8MB, but kept width-clean)
+	wire [22:0] mb_mirror_offset_raw = {1'b0, cpu_word} - simm_word_size;
+	wire [19:0] mb_mirror_offset = mb_mirror_offset_raw[19:0];  // Wrap to 2MB (1M words)
+
+	// V8 RAM translation to SDRAM word address
+	wire [22:0] ram_sdram_word =
+		motherboard_high ? {3'b000, cpuAddr[20:1]} :                          // → Motherboard at SDRAM $000000
+		in_simm          ? (23'h100000 + {1'b0, cpu_word}) :                  // → SIMM at SDRAM $100000+
+		                   {3'b000, mb_mirror_offset};                        // → Motherboard mirror at SDRAM $000000+
+
+	// ROM translation: SDRAM word $500000 + offset within 512KB
+	wire [22:0] rom_sdram_word = {5'b10100, cpuAddr[18:1]};  // $500000 + offset
+	// NOTE: 5'b10100 == $14, giving base $14<<18 = $500000. The old 5'b01010 ($0A)
+	// placed ROM at $280000 — INSIDE the 8MB SIMM SDRAM region ($100000-$4FFFFF),
+	// so a 10MB RAM fill overwrote the ROM image and crashed the boot. $500000 sits
+	// safely between the SIMM ($100000-$4FFFFF) and VRAM ($580000). Must match the
+	// download mapping in MacLC.sv and verilator/sim.v.
+
+	// VRAM CPU access: CPU $F40000-$FBFFFF → SDRAM word $580000+
+	// Offset from VRAM start = cpuAddr[19:0] - $40000
+	wire [19:0] vram_cpu_offset = cpuAddr[19:0] - 20'h40000;
+	wire [22:0] vram_sdram_word = 23'h580000 + {5'b0, vram_cpu_offset[18:1]};
+
+	// ---- On-chip framebuffer (BRAM) write mirror (Phase 1) ----
+	// The V8 scans 1-8bpp at a fixed 1024-byte (512-word) stride, but only the
+	// first words_per_line words of each line are visible. Pack out the stride gap
+	// (packed = line*words_per_line + col) so 640-wide modes fit the 384KB BRAM;
+	// for 16bpp@512 (words_per_line=512) packing == the natural word offset.
+	wire [9:0]  vram_line = vram_cpu_offset[19:10];   // scanline (stride 1024B)
+	wire [8:0]  vram_colw = vram_cpu_offset[9:1];     // word within the line (0..511)
+	wire [18:0] vram_packed = vram_line * words_per_line + {10'd0, vram_colw};
+	wire        vram_col_visible = ({2'b0, vram_colw} < words_per_line);
+	assign vram_waddr = vram_packed[17:0];
+	// One write per CPU VRAM bus cycle (memoryLatch), only for visible columns
+	// (off-screen stride padding is dropped so it can't corrupt the next line).
+	assign vram_we = selectVRAM && !_cpuRW && cpuBusControl && memoryLatch && vram_col_visible;
+
+	// Floppy disk addresses: byte offset → SDRAM word
+	wire [22:0] dsk_int_sdram_word = 23'h600000 + {2'b0, dskReadAddrInt[21:1]};
+	wire [22:0] dsk_ext_sdram_word = 23'h700000 + {2'b0, dskReadAddrExt[21:1]};
+
+	// CPU address mux (selects based on address decode)
+	wire [22:0] cpu_sdram_word = selectVRAM ? vram_sdram_word :
+	                              selectROM ? rom_sdram_word :
+	                              selectRAM ? ram_sdram_word :
+	                              23'h0;
+
+	wire [22:0] addr_mux = cpu_sdram_word;
+
+	// ============================================================
+	// Extra bus slots (disk reads, sound)
+	// ============================================================
+	assign dskReadAckInt = (extraBusControl == 1'b1) && (extra_slot_count == 0);
+	assign dskReadAckExt = (extraBusControl == 1'b1) && (extra_slot_count == 1);
+	// extra_slot_count == 2 is now idle (legacy sound DMA removed)
+
+	// Final SDRAM word address output
+	assign memoryAddr =
+		dskReadAckInt ? dsk_int_sdram_word :
+		dskReadAckExt ? dsk_ext_sdram_word :
+		addr_mux;
+
+	// ============================================================
+	// Address decoder
+	// ============================================================
+	addrDecoder ad(
+		.address({cpuAddr[23:1], 1'b0}),
+		._cpuAS(_cpuAS),
+		._cpuRW(_cpuRW),
+		.memoryOverlayOn(memoryOverlayOn),
+		.ram_config(ram_config),
+		.ram_config_phys(ram_config_phys),
+		.ram_configured(ram_configured),
+		.selectRAM(selectRAM),
+		.selectROM(selectROM),
+		.selectSCSI(selectSCSI),
+		.selectSCSIDMA(selectSCSIDMA),
+		.selectSCC(selectSCC),
+		.selectIWM(selectIWM),
+		.selectASC(selectASC),
+		.selectVIA(selectVIA),
+		.selectAriel(selectAriel),
+		.selectPseudoVIA(selectPseudoVIA),
+		.selectVRAM(selectVRAM),
+		.selectUnmapped(selectUnmapped)
+	);
+
+	// ============================================================
+	// ROM Overlay Register
+	// ============================================================
+	// At reset, ROM is overlaid at $000000 so the CPU reads the reset
+	// vector from ROM.  The overlay is disabled when the CPU first
+	// accesses the ROM area ($A0xxxx).
+	//
+	// The disable is deferred until _cpuAS goes high (bus cycle ends),
+	// so the instruction/data read that triggered it completes with
+	// overlay still active.  The next bus cycle sees overlay OFF.
+	// ============================================================
+	reg rom_overlay = 1;
+	reg overlay_disable_pending = 0;
+	reg [23:0] overlay_trigger_addr_r = 0;
+
+	assign memoryOverlayOn = rom_overlay;
+	assign overlay_trigger_addr = overlay_trigger_addr_r;
+
+	// Overlay disables on first INSTRUCTION FETCH in $A00000-$AFFFFF.
+	// MAME clears overlay on any read (v8.cpp:rom_switch_r), but in our
+	// TG68 + SDRAM stack the boot ROM's data read of $ABC146 happens
+	// while PC is still in the $0xxxxx overlay mirror; if that data
+	// read clears overlay, the next code fetch at $0xxxxx returns RAM=0
+	// and the CPU wild-branches through ORI.B #0,D0. Gating on FC[1]=1
+	// (program access) holds overlay until the boot ROM does its real
+	// JMP-to-ROM, at which point overlay clears safely.
+	// NOTE: do NOT gate on cpuFC[1]. The TG68 presents FC=000 at the clk_sys
+	// posedge where addrController samples _cpuAS low, so a cpuFC[1] gate can
+	// never fire and the overlay never clears (RAM never appears → garbage
+	// RAM descriptor, SP=0, no video). Matches MAME (v8 rom_switch_r clears on
+	// any ROM-region read). The premature-$ABC146 concern that motivated the
+	// gate was a symptom of other bugs (cmp.l flag race, sim/FPGA core split),
+	// now fixed; the first live $A access is legit program exec at $A02E3E.
+	wire overlay_trigger = !_cpuAS && (cpuAddr[23:20] == 4'hA);
+
+	always @(posedge clk) begin
+		if (!_cpuReset) begin
+			rom_overlay <= 1'b1;
+			overlay_disable_pending <= 1'b0;
+			overlay_trigger_addr_r <= 24'h0;
+		end else begin
+			if (overlay_trigger && rom_overlay) begin
+				overlay_disable_pending <= 1'b1;
+				overlay_trigger_addr_r <= cpuAddr;
+			end
+
+			if (overlay_disable_pending && _cpuAS) begin
+				rom_overlay <= 1'b0;
+				overlay_disable_pending <= 1'b0;
+			end
+		end
+	end
+
+endmodule

@@ -1,0 +1,2 @@
+trace /tmp/maincpu.tr,maincpu
+go

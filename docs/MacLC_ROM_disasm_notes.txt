@@ -1,0 +1,29 @@
+Key observations from the header:
+
+  - ROM checksum: 0x350EACF0
+  - Reset vector offset: 0x0000002A → entry at 0x4080002A which jumps to 0x4080008C
+  - Early boot: MMU/cache setup at 0x4080005C, then reset instruction at 0x408000AA, followed by hardware init subroutine calls
+
+  The file is at releases/boot1_disasm.txt — ready to reference whenever needed. Note that since objdump treats everything as
+  code (including data tables), some regions will show nonsensical instructions where there's actually data (strings, lookup
+  tables, trap dispatch tables, etc.).
+
+You're right — the 68020 has no built-in MMU, and the Mac LC doesn't include an external 68851 PMMU either. That was actually
+   a notable limitation of the LC (no virtual memory support).
+
+  Looking back at that code more carefully:
+
+  4080005c: movec %cacr,%d0        ← cache control (this IS valid 68020)
+  40800066: movec %d0,%cacr
+  4080006e: f012 4000   pmove ...  ← F-line opcode
+  40800072: f000 2400   pflusha    ← F-line opcode
+
+  The movec %cacr instructions are real 68020 cache control. But the f0xx opcodes that objdump decoded as pmove/pflusha are
+  F-line instructions — on a 68020 without a PMMU, these would trigger an F-line emulator exception (vector $2C).
+
+  This is almost certainly MMU detection code — the ROM tries the PMMU instructions, and if the CPU traps, the exception
+  handler knows there's no MMU and skips that path. Mac ROMs commonly do this since the same ROM code runs across models with
+  different capabilities.
+
+  So on the actual Mac LC hardware, that code would immediately trap and fall through to the real boot path at 0x408000AA
+  (reset). Good catch — I should not have characterized it as "MMU setup" without that caveat.

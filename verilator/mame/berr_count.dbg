@@ -1,0 +1,20 @@
+; berr_count.dbg — count SCSI blind-transfer primitive calls and bus-error
+; handler entries during a maclc boot (ground truth for the 7.x death at
+; dack=14592 — see docs/findings_pds_phantom_card_2026-06-12.md, PFR rev2).
+;
+; Usage (from the repo root, adjust paths per your MAME setup):
+;   mame maclc -hard1 MacLC_7-1.hda -debug -debugscript verilator/mame/berr_count.dbg
+; Let it boot fully (or fail), then check the console: each bp prints a line
+; per hit; the final counts are the answer.
+;
+;   bp1 = $A08CFA  ROM blind-transfer primitive (installs temp BERR handler)
+;   bp2 = $A09BB0  exception-handler tail near the observed RTE (fires only
+;                  if a bus-error-class exception actually dispatches there)
+;
+; Both breakpoints CONTINUE automatically (printf + g), so the boot runs at
+; full speed; you're just collecting hit counts.
+bpset 0xa08cfa,1,{printf "PRIMITIVE call %d\n",temp0; temp0 = temp0 + 1; g}
+bpset 0xa09bb0,1,{printf "HANDLER-TAIL hit %d\n",temp1; temp1 = temp1 + 1; g}
+; track writes to the bus-error vector (handler installs/restores):
+wpset 0x8,4,w,1,{printf "VEC2 write %08X\n",wpdata; g}
+g

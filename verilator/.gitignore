@@ -1,0 +1,25 @@
+# Build artifacts
+obj_dir/
+obj_tb_*/
+*.o
+*.d
+
+# ROM files (copyrighted)
+*.rom
+
+# Log files
+*.log
+
+# IDE files
+*.ini
+
+# Submodules
+Musashi/
+
+# Visual Studio files
+*.vcxproj
+*.vcxproj.*
+*.sln
+floppy_all.hex
+track0.hex
+tb_pops.txt
