@@ -32,3 +32,6 @@ scratch/
 # OS junk
 .DS_Store
 Thumbs.db
+
+# Boot ROM / disk images: copyrighted Apple content, never commit
+releases/

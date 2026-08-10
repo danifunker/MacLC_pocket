@@ -86,7 +86,7 @@ V_SRC = \
 	$(RTL)/floppy_track_encoder.v \
 	$(RTL)/mfm_track_encoder.v \
 	$(RTL)/scsi.v \
-	$(RTL)/cd_audio.sv \
+	$(RTL)/sdp_ram.sv \
 	$(RTL)/ncr5380.sv \
 	$(RTL)/scc.v \
 	$(RTL)/pll/pll_0002.v \

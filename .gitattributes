@@ -1,0 +1,69 @@
+# Line-ending policy.
+#
+# WHY THIS FILE EXISTS (learned 2026-08-10): the MiSTer repo had a
+# .gitattributes and it was dropped during the Pocket import. Every shell
+# script then checked out with CRLF on this Windows box, and WSL refused to
+# run them — `./check_boot.sh` fails with "cannot execute: required file not
+# found", which is bash's unhelpful way of saying the `#!/bin/bash\r` shebang
+# names a nonexistent interpreter. The Verilator harness runs under WSL, so
+# LF is not cosmetic here, it is what makes the verification loop work.
+#
+# Scope note: the MiSTer version of this file pinned only exact paths, to
+# avoid renormalising a repo with a historical mix of endings. This fork was
+# imported as a flat snapshot from a single tree, so there is no such history
+# to protect and the patterns can be broad.
+
+# Anything executed by a shell (WSL, MSYS, CI) must be LF.
+*.sh        text eol=lf
+*.bash      text eol=lf
+
+# Python and TCL are read by interpreters that mostly tolerate CRLF, but
+# keeping them LF avoids surprises in shebang'd scripts.
+*.py        text eol=lf
+*.tcl       text eol=lf
+
+# RTL and constraints: LF keeps diffs against ../MacLC_MiSTer readable.
+# NOTE *.vhd is TEXT here — rtl/tg68k/ carries the CPU core's original VHDL
+# (TG68K_ALU.vhd etc.). The other meaning of .vhd, a Virtual Hard Disk image,
+# only ever appears under the gitignored releases/, so it is never tracked and
+# there is no conflict.
+*.v         text eol=lf
+*.sv        text eol=lf
+*.vh        text eol=lf
+*.vhd       text eol=lf
+*.sdc       text eol=lf
+*.qip       text eol=lf
+*.srf       text eol=lf
+
+# Docs and config.
+*.md        text eol=lf
+*.json      text eol=lf
+Makefile    text eol=lf
+
+# Quartus rewrites these with CRLF on every compile on a Windows build box;
+# pinning them stops that showing up as a whole-file diff.
+*.qsf       text eol=crlf
+*.qpf       text eol=crlf
+
+# ROM/firmware images that LOOK binary but are ASCII text: one hex byte per
+# line, consumed by $readmemh (rtl/egret_rom.hex, rtl/egret/egret_rom.hex,
+# rtl/egret/egret.pram, verilator/rtl/*.hex). They must be eol=lf, not
+# `binary` — marking them binary makes git store whatever the working tree
+# happens to hold, which on a Windows checkout is CRLF, and that is how they
+# silently ended up CRLF from the import until 2026-08-10. $readmemh tolerated
+# the trailing \r, so nothing broke loudly; the files just stopped matching
+# upstream byte-for-byte.
+*.hex       text eol=lf
+*.pram      text eol=lf
+
+# Genuine binaries — never touch.
+*.rom       binary
+*.bin       binary
+*.rbf       binary
+*.rbf_r     binary
+*.png       binary
+*.dsk       binary
+*.img       binary
+*.hda       binary
+*.nvr       binary
+*.stp       binary
