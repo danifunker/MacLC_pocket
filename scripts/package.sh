@@ -8,8 +8,16 @@
 #   /Assets/maclc/common/        where the user puts boot0.rom and disk images
 #
 # The bitstream MUST be named bitstream.rbf_r and match the "filename" field in
-# core.json. The _r suffix is not decoration: it marks the reversed-bit-order
-# RBF that the Pocket's loader expects.
+# core.json. The _r suffix is not decoration: it marks the REVERSED-BIT-ORDER
+# RBF that the Pocket's loader expects, and Quartus does NOT produce it.
+#
+# ★ Every byte of the .rbf must have its BITS reversed (0b10110010 -> 0b01001101).
+# Merely renaming ap_core.rbf to bitstream.rbf_r produces a core that the Pocket
+# rejects at load time with:
+#       Load error in 'core'  General error
+# Verified against the stock core-template bitstream: its first non-FF bytes are
+# 56 56 56 56 6c 2f, and bit-reversing those gives 6a 6a 6a 6a 36 f4 — byte for
+# byte what Quartus emits in a plain .rbf.
 #
 # Usage:  bash scripts/package.sh
 # Requires: src/fpga/output_files/ap_core.rbf (run quartus_asm first)
@@ -37,7 +45,15 @@ for f in core.json video.json audio.json data.json input.json interact.json vari
 done
 [ -f dist/icon.bin ] && cp dist/icon.bin "$DEST/" || true
 
-cp "$RBF" "$DEST/bitstream.rbf_r"
+# Bit-reverse every byte (see the header note — this is what _r means).
+python3 - "$RBF" "$DEST/bitstream.rbf_r" <<'PY'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+table = bytes(int(format(b, '08b')[::-1], 2) for b in range(256))
+data = open(src, 'rb').read()
+open(dst, 'wb').write(data.translate(table))
+print("bit-reversed %d bytes" % len(data))
+PY
 
 echo "packaged $(du -h "$DEST/bitstream.rbf_r" | cut -f1) bitstream into $DEST"
 echo
