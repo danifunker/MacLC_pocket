@@ -30,21 +30,50 @@ module  mf_pllbase_0002(
 		.fractional_vco_multiplier("true"),
 		.reference_clock_frequency("74.25 MHz"),
 		.operation_mode("normal"),
-		.number_of_clocks(5),
-		.output_clock_frequency0("12.287999 MHz"),
+		.number_of_clocks(4),
+		// ---------------------------------------------------------------
+		// MacLC Pocket clock plan (retargeted from the APF template's
+		// 12.288/133.12 MHz defaults). Reference is clk_74a = 74.25 MHz.
+		//
+		//  outclk_0  65.000 MHz  clk_mem  — SDRAM state machine. Must be
+		//                        EXACTLY 8x the 8.125 MHz bus clock: pocket_sdram
+		//                        runs 8 states per chipset cycle and resyncs on
+		//                        clk_8, so any other ratio breaks the wrap.
+		//  outclk_1  65.000 MHz  clk_mem_90 — clk_mem shifted 3846 ps (90 deg at
+		//                        65 MHz), driven onto the SDRAM's dram_clk pin so
+		//                        the chip samples mid-eye. The MiSTer core got the
+		//                        same effect from an altddio_out on clk_mem; on
+		//                        the Pocket a phase-shifted PLL output is the
+		//                        house style and lets the shift be retuned on
+		//                        hardware without touching the controller.
+		//                        UNVALIDATED: 90 deg is the conventional starting
+		//                        point, not a measured value.
+		//  outclk_2  32.500 MHz  clk_sys  — everything else. clk_mem/2. The whole
+		//                        design is timed against 32.5 MHz: the Egret HC05,
+		//                        the VIA timers, v8_clocks' 3.672 MHz Bresenham
+		//                        divider (PCLK_LIM = 32500 is literally this
+		//                        number), and the CPU's 8.125/16.25 MHz enables.
+		//                        Do not change it without auditing all of those.
+		//  outclk_3  15.667 MHz  clk_pix  — 512x384 12in RGB dot clock. Target is
+		//                        15.664 MHz (640 x 407 total x 60.15 Hz); the
+		//                        fractional PLL lands within ~0.02%, which is far
+		//                        inside what the guest's VBL and the Analogue
+		//                        scaler tolerate.
+		// ---------------------------------------------------------------
+		.output_clock_frequency0("65.000000 MHz"),
 		.phase_shift0("0 ps"),
 		.duty_cycle0(50),
-		.output_clock_frequency1("12.287999 MHz"),
-		.phase_shift1("20345 ps"),
+		.output_clock_frequency1("65.000000 MHz"),
+		.phase_shift1("3846 ps"),
 		.duty_cycle1(50),
-		.output_clock_frequency2("133.119993 MHz"),
+		.output_clock_frequency2("32.500000 MHz"),
 		.phase_shift2("0 ps"),
 		.duty_cycle2(50),
-		.output_clock_frequency3("133.119992 MHz"),
-		.phase_shift3("6573 ps"),
+		.output_clock_frequency3("15.666667 MHz"),
+		.phase_shift3("0 ps"),
 		.duty_cycle3(50),
-		.output_clock_frequency4("133.119990 MHz"),
-		.phase_shift4("5634 ps"),
+		.output_clock_frequency4("0 MHz"),
+		.phase_shift4("0 ps"),
 		.duty_cycle4(50),
 		.output_clock_frequency5("0 MHz"),
 		.phase_shift5("0 ps"),
