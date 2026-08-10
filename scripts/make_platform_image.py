@@ -74,46 +74,55 @@ def frame(x0, y0, x1, y1, c):
 # horizontal rainbow bands are applied through it, so the stripe boundaries are
 # exactly horizontal the way the real mark is.
 
-LOGO_H = 118                      # height of the apple body in pixels
-CXp, CYp = W // 2, H // 2 + 4     # centre of the mark
+LOGO_H = 132                       # apple body height in pixels
+CXp, CYp = W // 2, H // 2 + 6      # centre of the body
+
+HALF_W = LOGO_H * 0.455            # body half-width; the mark is slightly
+HALF_H = LOGO_H * 0.5              # taller than it is wide
 
 def in_apple(px_, py):
-    """Coverage test in a normalised space where the body spans y in [-1, 1]."""
-    x = (px_ - CXp) / (LOGO_H * 0.42)
-    y = (py - CYp) / (LOGO_H * 0.5)
+    """Coverage test. x,y normalised so the body spans roughly [-1, 1]."""
+    x = (px_ - CXp) / HALF_W
+    y = (py - CYp) / HALF_H
 
-    # Leaf: a slim ellipse rotated ~40 degrees, sitting above the body.
-    lx, ly = x - 0.16, y + 1.16
-    ca, sa = 0.766, 0.643                       # cos/sin 40 deg
+    # --- leaf: slim ellipse, rotated, sitting above the right shoulder ---
+    lx, ly = x - 0.20, y + 1.10
+    ca, sa = 0.707, 0.707                        # 45 degrees
     rx, ry = lx * ca + ly * sa, -lx * sa + ly * ca
-    if (rx / 0.17) ** 2 + (ry / 0.42) ** 2 <= 1.0:
+    if (rx / 0.155) ** 2 + (ry / 0.38) ** 2 <= 1.0:
         return True
 
-    if y < -0.86:                               # above the body proper
-        return False
-
-    # Body: two overlapping lobes give the apple its shouldered shape.
+    # --- body: four overlapping lobes give the shouldered apple silhouette ---
     def lobe(ox, oy, rxr, ryr):
         return ((x - ox) / rxr) ** 2 + ((y - oy) / ryr) ** 2 <= 1.0
-    inside = (lobe(-0.42, -0.10, 0.62, 0.74) or lobe(0.42, -0.10, 0.62, 0.74)
-              or lobe(-0.34, 0.42, 0.66, 0.62) or lobe(0.34, 0.42, 0.66, 0.62))
+
+    inside = (lobe(-0.40, -0.16, 0.63, 0.70) or   # upper left shoulder
+              lobe( 0.40, -0.16, 0.63, 0.70) or   # upper right shoulder
+              lobe(-0.36,  0.40, 0.66, 0.62) or   # lower left
+              lobe( 0.36,  0.40, 0.66, 0.62))     # lower right
     if not inside:
         return False
 
-    # Cleft between the shoulders.
-    if y < -0.52 and abs(x) < 0.17 - (y + 0.86) * 0.22:
-        return False
+    # --- cleft between the shoulders, tapering closed as it descends ---
+    if y < -0.42:
+        t = (-0.42 - y) / 0.58                    # 0 at the waist, 1 at the top
+        if abs(x) < 0.30 * t * t:
+            return False
 
-    # The bite: a circle removed from the right-hand side.
-    if ((x - 0.86) / 0.40) ** 2 + ((y + 0.02) / 0.46) ** 2 <= 1.0:
+    # --- the bite: a circle removed from the right edge, above centre ---
+    if ((x - 1.02) / 0.34) ** 2 + ((y + 0.06) / 0.36) ** 2 <= 1.0:
         return False
     return True
 
-# Six bands, green at the top, ordered as Apple had them.
-band_h = LOGO_H / 6.0
-top = CYp - LOGO_H * 0.5 - int(LOGO_H * 0.30)   # include the leaf
-for py in range(max(0, top), min(H, CYp + LOGO_H)):
-    band = int((py - (CYp - LOGO_H * 0.5)) / band_h)
+# Six horizontal bands, green at the top, in Apple's order. The bands are cut
+# across the whole mark (leaf included) so the boundaries line up exactly, as
+# they do on the real logo.
+# The six bands divide the BODY exactly; the leaf sits above the body and so
+# takes band 0 (green), which is what the real mark does.
+band_h = (HALF_H * 2.0) / 6.0
+band_top = CYp - HALF_H
+for py in range(max(0, int(band_top - LOGO_H * 0.42)), min(H, int(CYp + HALF_H) + 2)):
+    band = int((py - band_top) / band_h)
     band = 0 if band < 0 else (5 if band > 5 else band)
     col = STRIPES[band]
     for px_ in range(W):
