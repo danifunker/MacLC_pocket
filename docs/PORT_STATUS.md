@@ -249,6 +249,35 @@ handle the write direction for save-back.
 
 ---
 
+## Verification actually performed (2026-08-10)
+
+Verilator 5.020 under WSL. **The three cuts pass the project's own boot
+oracle.**
+
+| check | result |
+|---|---|
+| `verilator --lint-only` over the whole RTL | clean, exit 0 |
+| `make` (full sim build) | exit 0 |
+| `check_boot.sh` @ 200 frames | **PASS** — all 5 stages, 4.70M instructions, ADVANCING (34 unique PCs in last 1000) |
+| frame-730 screenshot (see the frame-scaling note in CLAUDE.md) | **PASS** — 512×384 two-value 50% dither (98,337 / 98,271) with the arrow cursor top-left |
+| `tb_vram_scan` vs unmodified MiSTer RTL | **identical output** — video cut is behaviourally equivalent at 512×384 |
+
+Artifacts: `scratch/screenshots/f730_pocket_cut_guesttime_match.png`.
+
+Two false alarms en route, both recorded so they are not re-run:
+
+- A blank frame-450 screenshot looked exactly like the documented
+  stalled-boot signature. It was **sampling ~170 guest-frames early** — the
+  oracle frame is resolution-dependent (450 × 1.612 = 730). See CLAUDE.md.
+- "Zero VRAM writes in 200 frames" was an artifact of redirecting stdout to
+  /dev/null while grepping stderr; `$display` goes to **stdout**.
+
+Still unproven by any of this: SDRAM timing (the sim uses an ideal
+zero-latency RAM — "boots in Verilator" ≠ "boots on FPGA" for anything
+bus-timing sensitive), the 10 MB SIMM path, and everything Pocket-specific
+(`core_top`, `pocket_sdram`, `pocket_input`, `apf_bridge_loader`), none of
+which the sim exercises at all.
+
 ## Verification available here
 
 Neither Quartus nor Verilator is installed on this machine, so **nothing in
