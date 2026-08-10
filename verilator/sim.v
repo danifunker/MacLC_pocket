@@ -567,9 +567,19 @@ module emu
 	// Use actual video mode from pseudovia (ROM configures this via register 0x10)
 	wire [2:0] v8_video_mode = pvia_video_config[2:0];
 
-	// Monitor ID Selection - 640x480 VGA (default, matches MacLC.sv default and
-	// MAME's V8 screen). 512x384 is OSD-selectable on FPGA; sim uses the default.
-	wire [3:0] v8_monitor_id = 4'h6;
+	// Monitor ID: 12" RGB, 512x384.
+	//
+	// POCKET CUT: this MUST be 4'h2 now. maclc_v8_video no longer decodes
+	// monitor_id for timing -- the scanout is hardwired to 512x384 -- but
+	// monitor_id is still the sense value pseudovia reports to the ROM, and
+	// the guest lays out QuickDraw from it. Leaving the inherited 4'h6
+	// (640x480 VGA) produced a genuinely mismatched machine: the guest built
+	// a 640-wide framebuffer with a 1024-byte stride while the hardware
+	// scanned 512 wide, so addrController's packing dropped the right 128
+	// columns and the bottom 96 lines of everything the guest drew. It still
+	// rendered a plausible-looking desktop, which is exactly what makes this
+	// worth a comment -- the failure is a silent crop, not a blank screen.
+	wire [3:0] v8_monitor_id = 4'h2;
 
 	ariel_ramdac ariel(
 		.clk_sys(clk_sys),
