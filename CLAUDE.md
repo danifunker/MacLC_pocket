@@ -4,30 +4,71 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Macintosh LC emulation core for the MiSTer FPGA platform. It's based on the MacPlus core by Sorgelig, which originated from the Plus Too project. The core emulates the Motorola 68000 CPU and various Macintosh peripherals.
+This is a Macintosh LC emulation core **for the Analogue Pocket (openFPGA)**.
+It emulates a 68020 and the LC's V8 ASIC, Egret, SWIM, SCSI and ADB.
+
+It is a **fork of the MiSTer core** at `../MacLC_MiSTer`, imported as a flat
+snapshot (no upstream history) from commit `5a75f9b` on branch
+`ariel-ramdac-m10k`. That core is in turn based on MacPlus by Sorgelig, which
+originated from Plus Too. To diff any file against upstream:
+
+```bash
+git -C ../MacLC_MiSTer show 5a75f9b:rtl/swim.v
+```
+
+**Read [docs/PORT_STATUS.md](docs/PORT_STATUS.md) first.** It records what the
+port has and has not done, and why. As of 2026-08-09 the project **does not
+compile** — `src/fpga/core/mac_lc_pocket.sv` (the machine top) is not written.
+
+### What this fork cut, and why
+
+The Pocket's Cyclone V 5CEBA4F23C8 has 18,480 ALMs and **308 M10K blocks**
+against the DE10-Nano's 41,910 and 553. The last MiSTer fit used 28,459 ALMs
+and 502 M10K; `emu` alone was ~20,900 ALMs = 113% of the Pocket. So:
+
+- **Video is 512×384, 8bpp max.** No 16bpp, no 640×480. The 16bpp framebuffer
+  was 384 M10K blocks — more than the Pocket has in total.
+- **One floppy drive.** The external drive is gone.
+- **No CD-ROM and no BlueSCSI Toolbox.** `cdrom_target` was 7,762 ALUTs.
+
+Do not re-add any of these without redoing the budget arithmetic in
+`docs/PORT_STATUS.md`.
 
 ## Build Commands
 
-**See [BUILD.md](BUILD.md) for the full scripted CLI build/deploy flow** (setup,
-`scripts/build_only.sh` modes, status output, running multiple builds on one host,
-and porting the toolchain to other cores).
-
 ### FPGA Build (Quartus)
-The project uses Intel Quartus 17.0.2 Lite Edition.
+openFPGA cores build with **Quartus 17.1** (not the 17.0.2 the MiSTer core
+used), targeting `5CEBA4F23C8`.
 
-**GUI:**
-- Open `MacLC.qpf` in Quartus
-- Compile to generate RBF output in `output_files/`
-- Deploy RBF to MiSTer SD card root
+- Project: `src/fpga/ap_core.qpf`
+- Top-level entity: `apf_top` (in `src/fpga/apf/`), which instantiates
+  `core_top`
+- Output: `src/fpga/output_files/ap_core.rbf` → rename to `bitstream.rbf_r`
+  and place in `dist/Cores/<author>.<core>/`
 
-**CLI (see [BUILD.md](BUILD.md)):**
+`BUILD.md` still describes the MiSTer flow and does not apply here.
+
+### Structural check (no toolchain needed)
 ```bash
-bash scripts/setup_env.sh     # first time: create scripts/local.env, then set QUARTUS_BIN
-bash scripts/build_only.sh    # full compile -> output_files/MacLC.rbf + status summary
-bash scripts/deploy_screenshot.sh   # optional: push + launch on the MiSTer
+python scripts/check_hierarchy.py rtl src/fpga
 ```
+Regex pass confirming every instantiated module exists. It is a heuristic, not
+a parser — it does not check port widths, connectivity, or syntax. It is the
+only automated check that runs without Quartus or Verilator.
 
 ### Verilator Simulation
+
+> **BROKEN in this fork as of 2026-08-09.** `verilator/sim.v` still wires the
+> `dataController_top` ports the CD/Toolbox and second-floppy cuts removed
+> (`cd_snd_*`, `dbg_cda*`, `cdtb_*`, `cd_io_*`, `tb_lba`, `dskReadAddrExt` —
+> 11 references). It will not build until sim.v is updated.
+>
+> Fixing it is high value: this harness is the only functional verification
+> the project has (boot check, screenshot oracle, `tb_disk_swap`, the GCR/MFM
+> benches, MAME comparison). The Pocket has no HPS, so there is no on-target
+> introspection to fall back on. Everything below describes the harness as it
+> worked on MiSTer and should work again after the port.
+
 ```bash
 cd verilator
 make        # Build simulator
@@ -72,27 +113,43 @@ Full process + gotchas: **`docs/mame_compare.md`** (memory tap, maincpu trace,
 PC-stream divergence diff; macOS has no `timeout`, debugger defaults to the Egret
 HC05 not the 68020, MAME PCs are 8-digit `00Axxxxx`, etc.).
 
-## Framework Files Are OFF-LIMITS (`sys/`)
+## Framework Files Are OFF-LIMITS (`src/fpga/apf/`)
 
-**NEVER modify files under `sys/` (the MiSTer framework: sys_top.v, ascal.vhd,
-osd.v, hps_io, pll_hdmi, .sdc files, etc.).** The only permitted change is a
-wholesale update of framework files taken directly from the upstream MiSTer
-template repo. If a fit, timing, or resource problem traces into the framework,
-reconcile it from OUR side — `rtl/`, `MacLC.sv`, `MacLC.qsf`, `MacLC.sdc` —
-never by patching the framework in place.
+**NEVER modify files under `src/fpga/apf/`** (the openFPGA framework:
+`apf_top.v`, `io_bridge_peripheral.v`, `io_pad_controller.v`, `common.v`,
+`mf_datatable`, `apf_constraints.sdc`). The only permitted change is a
+wholesale update taken directly from `open-fpga/core-template`. If a fit,
+timing, or resource problem traces into the framework, reconcile it from OUR
+side — `rtl/`, `src/fpga/core/`, `ap_core.qsf` — never by patching the
+framework in place.
 
-Why (learned 2026-07-17): a night of framework edits (RAM attributes in
-ascal.vhd/osd.v, a PALETTE generic in sys_top.v) produced STA-met builds with
-dead video and confounded every hardware A/B for hours. Framework internals
-(scaler pipeline, clock-domain handoffs) have invariants that are not visible
-from this repo; local edits there create failure modes that pass STA and only
-show up on hardware.
+This rule is inherited from the MiSTer core, where it was learned the hard way
+(2026-07-17): a night of framework edits produced STA-met builds with dead
+video and confounded every hardware A/B for hours. Framework internals have
+invariants that are not visible from this repo; local edits there create
+failure modes that pass STA and only show up on hardware. The reasoning
+transfers directly to APF.
+
+`src/fpga/core/core_bridge_cmd.v` came from the template too and should be
+treated the same way, even though it lives outside `apf/`.
 
 ## Architecture
 
-### Top-Level Module
-- `MacLC.sv` - Main system module (module name: `emu`)
-- Entry point for the MiSTer framework via `sys/sys_top.v`
+### Top-Level Modules
+- `src/fpga/apf/apf_top.v` — framework top (off-limits)
+- `src/fpga/core/core_top.v` — **our** APF chassis: bridge, data slots, video
+  and audio contracts, gamepad, clocks, SDRAM pins. Not the machine.
+- `src/fpga/core/mac_lc_pocket.sv` — the Macintosh itself. **Not yet written.**
+  Its specification is `docs/mister_reference/MacLC.sv.reference`, the MiSTer
+  top kept verbatim for exactly this purpose.
+
+### Pocket glue (`src/fpga/core/`)
+- `pocket_sdram.v` — SDRAM controller, adapted from `rtl/sdram.v`. The state
+  machine is deliberately byte-for-byte identical; only the chip and the clock
+  output changed.
+- `pocket_input.v` — gamepad → `ps2_key`/`ps2_mouse`. This is the whole input
+  port: everything right of those two buses is platform-independent.
+- `apf_bridge_loader.v` — bridge writes → the MiSTer-shaped `dio_*` stream.
 
 ### RTL Structure (`/rtl`)
 
@@ -100,9 +157,18 @@ show up on hardware.
 - `tg68k/` - TG68K CPU core (68000)
 
 **Memory & Storage:**
-- `sdram.v` - SDRAM controller
-- `scsi.v`, `ncr5380.sv` - SCSI hard drive interface
-- `floppy.v`, `floppy_track_encoder.v` - Floppy drive emulation
+- `sdram.v` - MiSTer SDRAM controller. **Not built in this fork** — kept as the
+  reference `src/fpga/core/pocket_sdram.v` was adapted from. Diff the two
+  before touching either.
+- `scsi.v`, `ncr5380.sv` - SCSI hard drive interface. `scsi.v` still contains
+  all the CD-ROM/Toolbox code, gated off by `CDROM`/`TOOLBOX_ENABLE`/
+  `CDCHANGER_ENABLE` = 0; it folds away at synthesis. Left in deliberately —
+  it is 171 KB of heavily validated target and stripping it was not worth the
+  risk.
+- `floppy.v`, `floppy_track_encoder.v` - Floppy drive emulation (one drive)
+- `sdp_ram.sv` - `cd_sdp`/`cd_sdp_mlab` simple-dual-port RAMs, extracted from
+  the deleted `cd_audio.sv` because `asc.sv` uses `cd_sdp` for FIFO A. The
+  forced-M10K `ramstyle` in them is load-bearing.
 
 **I/O Peripherals:**
 - `via6522.sv` - Versatile Interface Adapter (parallel I/O, timers)
@@ -110,37 +176,50 @@ show up on hardware.
 - `swim.v` - SWIM floppy controller (IWM + ISM personalities)
 - `scc.v` - Serial Communication Controller
 - `adb.sv` - Apple Desktop Bus
-- `ps2_kbd.sv`, `ps2_mouse.v` - Keyboard/mouse input
+- `adb_device.sv` - translates `ps2_key`/`ps2_mouse` to ADB. **The platform
+  seam**: everything downstream of it is identical on MiSTer and Pocket.
+- `ps2_mouse.v` - PS/2 mouse decode (`ps2_kbd.sv` was dropped — no PS/2 port)
 - `egret/` - Egret system controller (68HC05 + 341S0851 firmware): ADB, RTC, PRAM
-- `uart/` - UART TX/RX modules
+- `uart/` - UART TX/RX modules (used by `scc.v`)
 
 **Video Subsystem:**
 - `maclc_v8_video.sv` - Mac LC Video Engine (V8)
-- `ariel_ramdac.sv` - Video DAC
+- `ariel_ramdac.sv` - Video DAC (256-entry palette — exactly 8bpp)
+- `vram_bram.sv` - on-chip framebuffer, 192 KB / ~192 M10K blocks
 - `addrController_top.v`, `addrDecoder.v` - Address generation
 - `dataController_top.sv` - Data control
 
-### System Framework (`/sys`)
-Standard MiSTer framework files (video scaling, HPS I/O, audio output). Generally should not need modification for core-specific work.
+### System Framework (`src/fpga/apf/`)
+openFPGA framework from `open-fpga/core-template`. See the OFF-LIMITS rule above.
 
 ## Key Technical Details
 
-- **Target FPGA:** Cyclone V (MiSTer DE10-Nano)
-- **System clock:** Generated via `rtl/pll.v`
-- **Memory:** 1MB/4MB RAM configurations, DDR3 SDRAM interface
-- **Video modes:** 1/2/4/8/16 bpp
-- **CPU speeds:** 8 MHz (original) or 16 MHz
+- **Target FPGA:** Cyclone V `5CEBA4F23C8` (Analogue Pocket) — 18,480 ALMs,
+  308 M10K, 66 DSP
+- **Clocks** (from `clk_74a` = 74.25 MHz via `mf_pllbase`):
+  65 MHz `clk_mem` · 65 MHz +90° for `dram_clk` · **32.5 MHz `clk_sys`** ·
+  15.667 MHz `clk_pix`
+  - 32.5 MHz is not negotiable: `v8_clocks.sv` has `PCLK_LIM = 32500` literally
+    in its Bresenham divider, and the VIA/Egret timings assume it.
+  - 65 MHz must stay exactly 8× the 8.125 MHz bus clock or `pocket_sdram`'s
+    state-machine wrap breaks.
+- **Memory:** 2 MB / 10 MB RAM configs in the Pocket's SDRAM (driven as a
+  16 MB subset of the 64 MB part). No DDR3 — there is no HPS.
+- **Video modes:** 1/2/4/8 bpp at 512×384 only
+- **CPU speeds:** 8 MHz (original) or 16 MHz. Note the inherited limitation:
+  **floppy won't read at 16 MHz.**
 
 ## File Locations
 
-- `files.qip` - Lists all RTL source files for Quartus
-- `MacLC.qsf` - Quartus project settings
-- `releases/` - Pre-built RBF files and ROM images. Only release-quality and
-  provenance artifacts belong here (dated `MacLC_YYYYMMDD.rbf` releases and the
-  hash-named build they were copied from) — probe/A-B/experiment RBFs do not.
+- `src/fpga/ap_core.qsf` - Quartus project settings **and** the RTL file list
+  (this fork has no `files.qip`; the list is inline in the .qsf)
+- `docs/PORT_STATUS.md` - what the port has and has not done. Start here.
+- `docs/mister_reference/MacLC.sv.reference` - the MiSTer top, kept as the
+  specification for `mac_lc_pocket.sv`. Not compiled.
+- `dist/` - the SD-card tree; `output/` - the packaged bitstream
 - `scratch/` - **(gitignored) ALL session scratch goes here**: screenshots,
-  build/launch logs, probe RBFs, captures, analysis dumps. Never leave scratch
-  work in the repo root and never commit it.
+  build/launch logs, captures, analysis dumps. Never leave scratch work in the
+  repo root and never commit it.
 
 ## CPU Conversion Notes
 
@@ -300,26 +379,13 @@ Re-verify boot (the screenshot check above) after ANY SR change.
   screen). Now true 4:3 (both LC monitor modes are 4:3). Offline gate:
   `scripts/aspect_check.py` (faithful model of sys/video_freak.sv
   `video_scale_int`; also demos the old failures with `--show-broken`).
-- CD-ROM (SCSI ID 3, OSD slot `SC4`): data, mixed-mode, and audio CDs.
-  CD audio + the AppleCD Audio Player (listing, transport, FF/RW scan)
-  fully working as of 2026-07-20 (standard SCSI-2 dialect on the
-  CDU-8004 identity; BlueSCSI + Snow are the byte oracles; command gaps
-  logged in docs/SCSI_CMD_GAPS.md). The **volume slider** works as of
-  2026-07-29 (MODE SELECT/SENSE page 0x0E scales the CD-DA PCM),
-  alongside 0x42 sub-channel formats 2/3, 0x44 READ HEADER, 0x45 PLAY
-  AUDIO, 0xBB SET CD SPEED and mode page 0x2A — see
-  the CD command notes in rtl/scsi.v.
-- **★ The CD boot-attach stays ATTACHED during gates — never detach
-  `MACLC.s4` as a gating step (user ruling 2026-08-09).** The open
-  CUE/CHD-at-boot-attach hang fires intermittently on ANY build —
-  including known-good ones — and has repeatedly been misread as "this
-  build fails the hardware gate". Two boots of the same RBF can differ,
-  so one boot is never a verdict: on a load hang, retry the boot rather
-  than blaming the build (or detaching the CD). Flat 2048-byte images (ISO/TOAST)
-  work on a stock Main_MiSTer; CUE/BIN (2352) and CHD need the Main
-  fork's `support/maclc/maclc_cd` layer (branch
-  `add-bluescsi-toolbox-for-MacLC`) — the validated binary ships in
-  `releases/MiSTer`. The guest System needs the Apple CD-ROM extension
-  (or a third-party CD driver) to mount discs. Serving law for any new
-  DataIn command: transfer EXACTLY what the initiator arms (see
-  docs/SCSI_CMD_GAPS.md).
+- ~~CD-ROM (SCSI ID 3)~~ **REMOVED in the Pocket fork.** The CD target,
+  cd_audio, the AppleCD command set and the BlueSCSI Toolbox / CD Changer are
+  all gone -- 7,762 ALUTs and 17 M10K the Pocket does not have. The MiSTer
+  core's CD work (SCSI-2 dialect on the CDU-8004 identity, mode page 0x0E
+  volume, sub-channel formats, the Main_MiSTer `maclc_cd` translation layer)
+  is intact upstream at 5a75f9b if it ever needs to come back; see
+  docs/PORT_STATUS.md for what it would cost.
+- ~~"Original" aspect 256:171~~ moot here: the Pocket declares a single
+  512x384 4:3 scaler mode in video.json and Analogue's scaler handles fitting.
+  `sys/video_freak.sv` and `scripts/aspect_check.py` do not exist in this fork.
