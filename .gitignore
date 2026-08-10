@@ -47,3 +47,8 @@ src/fpga/.qsys_edit/
 dist/Cores/
 dist/Assets/
 dist/assets/maclc/
+
+# Local build crib: absolute paths and host-specific toolchain details that
+# would be wrong on any other machine. Portable guidance lives in CLAUDE.md
+# and docs/PORT_STATUS.md.
+BUILDING.local.md
