@@ -53,7 +53,15 @@ done
 [ -f dist/icon.bin ] && cp dist/icon.bin "$DEST/" || true
 
 # Bit-reverse every byte (see the header note — this is what _r means).
-python3 - "$RBF" "$DEST/bitstream.rbf_r" <<'PY'
+# Git Bash on Windows often has `python` but not `python3`; WSL/Linux usually
+# the reverse. Pick whichever exists so this runs unchanged on both.
+PY_BIN="$(command -v python3 || command -v python)"
+if [ -z "$PY_BIN" ]; then
+    echo "ERROR: no python3/python on PATH — needed to bit-reverse the RBF."
+    exit 1
+fi
+
+"$PY_BIN" - "$RBF" "$DEST/bitstream.rbf_r" <<'PY'
 import sys
 src, dst = sys.argv[1], sys.argv[2]
 table = bytes(int(format(b, '08b')[::-1], 2) for b in range(256))

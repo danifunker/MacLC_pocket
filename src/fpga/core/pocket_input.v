@@ -85,6 +85,8 @@ module pocket_input #(
 	localparam [8:0] SC_ENTER  = 9'h05A;  // -> ADB 0x24
 	localparam [8:0] SC_SPACE  = 9'h029;  // -> ADB 0x31
 	localparam [8:0] SC_ESC    = 9'h076;  // -> ADB 0x35
+	localparam [8:0] SC_N      = 9'h031;  // -> ADB 0x2D
+	localparam [8:0] SC_CMD    = 9'h011;  // LEFT ALT -> ADB 0x37 (Command)
 
 	// ---- Button bit positions in cont1_key -------------------------------
 	localparam integer B_UP     = 0;
@@ -95,13 +97,19 @@ module pocket_input #(
 	localparam integer B_B      = 5;
 	localparam integer B_X      = 6;
 	localparam integer B_Y      = 7;
+	localparam integer B_L1     = 8;
+	localparam integer B_R1     = 9;
 	localparam integer B_SELECT = 14;
 	localparam integer B_START  = 15;
 
 	// KBD-mode key slots, in scan order. Index 0..7 maps to the eight
 	// keyboard-producing buttons; the D-pad four are first so PTR mode can
 	// simply skip them.
-	localparam integer NKEYS = 8;
+	// Slots 0..3 are the D-pad (suppressed in PTR mode, where it drives the
+	// mouse). Slot 4 is A, which is the mouse BUTTON in PTR mode and so is also
+	// suppressed there. Slots 5..9 type in BOTH modes -- Command in particular
+	// has to work while pointing, since the Mac uses it with the mouse.
+	localparam integer NKEYS = 10;
 
 	function [8:0] key_for;
 		input integer idx;
@@ -111,10 +119,12 @@ module pocket_input #(
 				1: key_for = SC_DOWN;
 				2: key_for = SC_LEFT;
 				3: key_for = SC_RIGHT;
-				4: key_for = SC_LSHIFT; // A -> Shift  (Prince of Persia: draw/step)
+				4: key_for = SC_ENTER;  // A (far right) -> Return / mouse click
 				5: key_for = SC_SPACE;  // B -> Space
-				6: key_for = SC_ENTER;  // X -> Return
-				7: key_for = SC_ESC;    // Y -> Escape
+				6: key_for = SC_LSHIFT; // X -> Shift (Prince of Persia careful step)
+				7: key_for = SC_N;      // Y (far left) -> N
+				8: key_for = SC_ESC;    // L trigger -> Escape
+				9: key_for = SC_CMD;    // Start -> Command
 				default: key_for = 9'h000;
 			endcase
 		end
@@ -133,6 +143,8 @@ module pocket_input #(
 				5: button_for = keys[B_B];
 				6: button_for = keys[B_X];
 				7: button_for = keys[B_Y];
+				8: button_for = keys[B_L1];
+				9: button_for = keys[B_START];
 				default: button_for = 1'b0;
 			endcase
 		end
@@ -180,18 +192,20 @@ module pocket_input #(
 	// emit the key-up events — that is the clean-release guarantee.
 
 	reg  [NKEYS-1:0] held;             // as last reported to the Mac
-	reg  [2:0]       scan;
+	reg  [3:0]       scan;             // 0..NKEYS-1 (10 slots -> 4 bits)
 	reg              releasing;        // draining held keys after a mode flip
 
-	wire [NKEYS-1:0] want_raw = { button_for(7, keys), button_for(6, keys),
+	wire [NKEYS-1:0] want_raw = { button_for(9, keys), button_for(8, keys),
+	                              button_for(7, keys), button_for(6, keys),
 	                              button_for(5, keys), button_for(4, keys),
 	                              button_for(3, keys), button_for(2, keys),
 	                              button_for(1, keys), button_for(0, keys) };
 
-	// In PTR mode the D-pad drives the mouse, so slots 0..3 must read as
-	// released; B/X/Y still type, A becomes the mouse button.
+	// In PTR mode the D-pad drives the mouse and A is the mouse button, so
+	// slots 0..4 must read as released. B/X/Y/L/Start keep typing in both
+	// modes -- Command especially, which is used together with the mouse.
 	wire [NKEYS-1:0] want = releasing ? {NKEYS{1'b0}}
-	                      : mode_ptr  ? {want_raw[7:5], 1'b0, 4'b0000}
+	                      : mode_ptr  ? {want_raw[9:5], 5'b00000}
 	                                  : want_raw;
 
 	wire scan_bit_held = held[scan];
@@ -201,14 +215,17 @@ module pocket_input #(
 		if (reset) begin
 			ps2_key   <= 11'd0;
 			held      <= {NKEYS{1'b0}};
-			scan      <= 3'd0;
+			scan      <= 4'd0;
 			releasing <= 1'b0;
 		end else begin
 			// A mode flip starts a drain pass; it ends when nothing is held.
 			if (mode_flip)      releasing <= 1'b1;
 			else if (held == 0) releasing <= 1'b0;
 
-			scan <= scan + 3'd1;
+			// NKEYS is 10, not a power of two, so the wrap must be explicit --
+			// a free-running 4-bit counter would index slots 10..15, which do
+			// not exist and would emit key_for()'s default 9'h000.
+			scan <= (scan == NKEYS-1) ? 4'd0 : scan + 4'd1;
 
 			if (scan_bit_want != scan_bit_held) begin
 				// Emit exactly one event and record the new state.
@@ -272,12 +289,15 @@ module pocket_input #(
 	// the sign set would move the cursor by (256 - n) in the wrong direction.
 	// So the byte is just dx[7:0] and the sign bit is just dx[8].
 	//
-	// Mac screen Y grows downward, and so does the delta adb_device expects,
-	// so "D-pad down" is positive.
+	// Y SIGN: this used to assume "Mac screen Y grows downward and so does the
+	// delta adb_device expects, so D-pad down is positive". That was wrong --
+	// on hardware the cursor moved inverted. adb_device takes the PS/2
+	// convention, where POSITIVE dy is UP. Do not 'correct' this back without
+	// testing on hardware.
 	wire signed [8:0] dx = dir_left  ? -$signed({1'b0, step}) :
 	                       dir_right ?  $signed({1'b0, step}) : 9'sd0;
-	wire signed [8:0] dy = dir_up    ? -$signed({1'b0, step}) :
-	                       dir_down  ?  $signed({1'b0, step}) : 9'sd0;
+	wire signed [8:0] dy = dir_up    ?  $signed({1'b0, step}) :
+	                       dir_down  ? -$signed({1'b0, step}) : 9'sd0;
 
 	// ps2_mouse[7:0] is the PS/2 status byte:
 	//   [7] y overflow  [6] x overflow  [5] y sign  [4] x sign

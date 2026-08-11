@@ -75,6 +75,28 @@ module  mf_pllbase_0002(
 		.phase_shift0("0 ps"),
 		.duty_cycle0(50),
 		.output_clock_frequency1("65.000000 MHz"),
+		// dram_clk. 3846 ps = 90deg at 65 MHz (T = 15384.6 ps).
+		//
+		// I briefly set this to 7692 ps (180deg) to match what MiSTer's
+		// altddio_out(datain_h=0,datain_l=1) produced. That was reasoning by
+		// analogy and it made things WORSE. Once the SDRAM pins were actually
+		// constrained (see core_constraints.sdc) STA could finally measure it,
+		// and the read path is the binding one. With phase phi:
+		//
+		//   read  budget = T - phi - tAC(5.9)   -> routing + setup
+		//     phi=90deg : 15.38 - 3.85 - 5.9 = 5.63 ns
+		//     phi=180deg: 15.38 - 7.69 - 5.9 = 1.79 ns
+		//   cmd   budget = phi - output_delay(2.0)
+		//     phi=90deg : 1.85 ns
+		//     phi=180deg: 5.69 ns
+		//
+		// Every failing path was dram_dq[*] -> pocket_sdram|dout[*] (reads) at
+		// -5.1 ns; no command path failed. 90deg buys the read side 3.85 ns and
+		// costs the command side, which had margin to spare. The remaining read
+		// deficit is attacked with FAST_INPUT_REGISTER in ap_core.qsf.
+		//
+		// This is now a MEASURED choice, not a guessed one -- re-check the
+		// dram_dq -> dout slack in ap_core.sta.rpt after any change here.
 		.phase_shift1("3846 ps"),
 		.duty_cycle1(50),
 		.output_clock_frequency2("32.500000 MHz"),

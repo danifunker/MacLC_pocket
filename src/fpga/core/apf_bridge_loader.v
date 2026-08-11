@@ -169,12 +169,22 @@ module apf_bridge_loader #(
 	// ------------------------------------------------------------------
 	wire empty = (rptr_sys == wptr_sys);
 
+	// Declared before rd_data's load enable uses it.
+	reg valid;
+
 	reg [FIFO_DW-1:0] rd_data;
-	always @(posedge clk_sys) rd_data <= fifo[rptr_sys[FIFO_AW-1:0]];
+	// Load ONLY on the cycle we advance rptr_sys. An unconditional reload here
+	// looks harmless but is not: dio_wr (= valid) stays asserted until the
+	// SDRAM arbiter grants a download slot, which is many cycles later, and
+	// mac_lc_pocket re-latches ioctl_dout/ioctl_addr on EVERY cycle ioctl_wr is
+	// high. With an unconditional reload, rd_data has already advanced to the
+	// next FIFO entry by the second cycle, so the word that actually reaches
+	// SDRAM is not the one that was popped — the ROM lands with roughly half
+	// its words missing and the 68020 executes garbage.
+	always @(posedge clk_sys) if (!valid && !empty) rd_data <= fifo[rptr_sys[FIFO_AW-1:0]];
 
 	// One-deep output register so dio_data/dio_addr are stable while the
 	// SDRAM arbiter waits for a download slot.
-	reg valid;
 	always @(posedge clk_sys) begin
 		if (reset) begin
 			rptr_sys <= 0;

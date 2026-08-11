@@ -64,6 +64,14 @@ module mac_lc_pocket
 	input         clk_sys,
 	input         reset,
 
+	// ---- Pocket additions -------------------------------------------------
+	// Zero the Egret PRAM, then let the machine reboot. See the FSM below.
+	input         pram_reset,
+	// Built-in video test pattern: [2] = bypass VRAM, [1:0] = pattern select.
+	// Bring-up witness — proves the video contract and the interact write path
+	// independently of whether the Mac itself is running.
+	input  [2:0]  test_pattern,
+
 	// PS2 keyboard/mouse
 	input [10:0]  ps2_key,
 	input [24:0]  ps2_mouse,
@@ -146,14 +154,16 @@ module mac_lc_pocket
 
 	// Machine configuration inputs
 	input  [1:0]  cfg_cpuType,      // Unused, kept for sim_main.cpp compatibility
-	input         cfg_memSize,      // 0=1MB, 1=4MB
+	input         cfg_memSize,      // 0 = 2 MB (0x24), 1 = 10 MB (0xE4)
 	input         nmi_pulse         // --nmi-at-frame: pulse a Level-7 NMI (MacsBug test)
 );
 
 	localparam SCSI_DEVS = 2;
 
 	// Configuration
-	wire      status_mem = cfg_memSize;      // 0=1MB, 1=4MB
+	// 0 = 2 MB, 1 = 10 MB. The old "0=1MB, 1=4MB" comment here was inherited
+	// text and wrong — see configRAMSize below for what is actually driven.
+	wire      status_mem = cfg_memSize;
 	localparam [1:0] status_cpu = 2'b10;     // 68020
 	// Mac LC always runs at C15M (~15.67 MHz) - use 16 MHz clock enables
 
@@ -181,6 +191,36 @@ module mac_lc_pocket
 	reg rom_loaded = 1'b0;
 	always @(posedge clk_sys) if (dio_download && dio_index == 8'd0) rom_loaded <= 1'b1;
 
+	// ---- "Reset PRAM": zero the Egret's pram[] --------------------------------
+	// MiSTer's "Reset PRAM & Core" (R6) works by writing zeros through
+	// egret_wrapper's pram_load_* port and rebooting. This port was tied off at
+	// import (pram_load_wr=0, pram_ready=1), so the menu action did nothing but
+	// an ordinary reset.
+	//
+	// egret_wrapper requires pram_load_wr to fire BEFORE pram_ready rises (see
+	// its comment at line ~146 and the gate at ~767), so pram_ready drops for the
+	// duration of the zeroing. 256 writes at clk_sys is ~8 us, far inside the
+	// ~2 ms n_reset stretch that the same button also triggers, so the Egret is
+	// held in reset throughout and re-copies the zeroed PRAM on release.
+	reg       pram_zero_busy = 1'b0;
+	reg [7:0] pram_zero_addr = 8'd0;
+	reg       pram_ready_r   = 1'b1;
+	always @(posedge clk_sys) begin
+		if (pram_reset) begin
+			pram_zero_busy <= 1'b1;
+			pram_zero_addr <= 8'd0;
+			pram_ready_r   <= 1'b0;
+		end else if (pram_zero_busy) begin
+			// pram_load_wr is pram_zero_busy itself, so the byte at
+			// pram_zero_addr is written on this very cycle; advance after.
+			if (pram_zero_addr == 8'd255) begin
+				pram_zero_busy <= 1'b0;
+				pram_ready_r   <= 1'b1;
+			end
+			pram_zero_addr <= pram_zero_addr + 8'd1;
+		end
+	end
+
 	// Reset logic
 	// NOTE: Do NOT include _cpuReset_o here! The RESET instruction drives
 	// reset_n low to reset peripherals, but should NOT reset the CPU itself.
@@ -201,9 +241,15 @@ module mac_lc_pocket
 			end
 
 			// Gate on the ROM download (index 0) ONLY, not any download.
-			// Floppy images stream into SDRAM on the separate dioBusControl
-			// slot while the CPU keeps running, so mounting one must not
-			// reboot the machine — hot-insert, like real hardware.
+			// Mounting a floppy must NOT reboot the machine — hot-insert, like
+			// real hardware, and the MiSTer media-change logic (CSTIN/DiskChg,
+			// see CLAUDE.md) depends on it.
+			//
+			// A reset-on-any-download workaround for the Pocket floppy hang was
+			// tried here and removed: it cost hot-insert. The hang is instead
+			// addressed by making the floppy a `deferload` slot that
+			// apf_blockdev copies into SDRAM at a pace the CORE sets, so
+			// nothing is ever pushed at the bus faster than it can absorb.
 			// !rom_loaded extends the hold from FPGA config until that first
 			// ROM download begins, closing the window in which the 68k would
 			// otherwise execute whatever the PREVIOUS core left in SDRAM at
@@ -752,6 +798,10 @@ module mac_lc_pocket
 		.video_mode(v8_video_mode),
 		.monitor_id(v8_monitor_id),
 
+		// Were left unconnected at import. v8_video 2FF-syncs both internally.
+		.test_bypass_vram(test_pattern[2]),
+		.test_pattern_sel(test_pattern[1:0]),
+
 		.hsync(v8_hsync),
 		.vsync(v8_vsync),
 		.hblank(v8_hblank),
@@ -773,9 +823,12 @@ module mac_lc_pocket
 	// On-chip framebuffer (BRAM). Video reads port B (Phase 2); CPU VRAM writes
 	// are mirrored into port A. Single clk_sys domain => coherent. Must match MacLC.sv.
 	wire [10:0] v8_words_per_line;
-	wire [17:0] vram_bram_waddr;
+	// 17 bits: addrController_top.vram_waddr and maclc_v8_video.vram_raddr are
+	// both [16:0] since the video cut. These were left at [17:0] from the 16bpp
+	// build, so the MSB was undriven on one end and truncated on the other.
+	wire [16:0] vram_bram_waddr;
 	wire        vram_bram_we;
-	wire [17:0] v8_vram_raddr;
+	wire [16:0] v8_vram_raddr;
 	wire [15:0] v8_vram_rdata;
 
 	vram_bram vram_fb(
@@ -938,14 +991,15 @@ module mac_lc_pocket
 		// no CD target the scan simply finds nothing at ID 3, which is what
 		// a real LC without a CD-ROM drive does.
 
-		// PRAM persistence — tied off (step 1); FSM wired in step 2
-		.pram_load_wr(1'b0),
-		.pram_load_addr(8'd0),
-		.pram_load_data(8'd0),
+		// PRAM: save-back still needs apf_blockdev, but the LOAD side is now
+		// driven by the pram_zero FSM below so "Reset PRAM" is real.
+		.pram_load_wr(pram_zero_busy),
+		.pram_load_addr(pram_zero_addr),
+		.pram_load_data(8'h00),
 		.pram_save_addr(8'd0),
 		.pram_save_data(),
 		.pram_wr_stb(),
-		.pram_ready(1'b1),
+		.pram_ready(pram_ready_r),
 
 		// PFLP floppy diagnostics — FPGA-only (feed ISSP probes in MacLC.sv);
 		// explicitly unconnected here
@@ -956,8 +1010,74 @@ module mac_lc_pocket
 		.dbg_flp_side(),
 		.dbg_flp_step_cnt(),
 		.dbg_iwm_latch(),
-		.dbg_flp_byte_stb()
+		.dbg_flp_byte_stb(),
+
+		// ---- Egret / VIA shift-register taps, for SignalTap --------------
+		// These were left unconnected at import. They are the exact signal set
+		// CLAUDE.md names for the suspected FPGA-only boot failure: the real
+		// HC05 toggles CB1 faster than the VIA's E rate, ext_fall_edge_pending
+		// (a single-bit latch) coalesces edges, SR bytes corrupt, the boot
+		// ROM's Egret handshake never completes and memoryOverlayOn never
+		// clears. Nothing reproduces this in simulation, because the
+		// behavioural Egret drives CB1 slowly.
+		.via_sr_dbg_bit_cnt(dbg_sr_bit_cnt),
+		.via_sr_dbg_edge_pending(dbg_sr_edge_pending),
+		.via_sr_dbg_fall_pending(dbg_sr_fall_pending),
+		.via_sr_dbg_shift_reg(dbg_sr_shift_reg),
+		.via_sr_dbg_active(dbg_sr_active),
+		.via_sr_dbg_dir(dbg_sr_dir),
+		.via_sr_dbg_cb1(dbg_sr_cb1),
+		.via_sr_dbg_cb2(dbg_sr_cb2),
+		.egret_dbg_running(dbg_eg_running),
+		.egret_dbg_port_test_done(dbg_eg_port_test_done),
+		.egret_dbg_handshake_done(dbg_eg_handshake_done),
+		.egret_dbg_treq(dbg_eg_treq),
+		.egret_dbg_tip(dbg_eg_tip),
+		.egret_dbg_byteack(dbg_eg_byteack),
+		.egret_dbg_reset_680x0(dbg_eg_reset_680x0),
+		.egret_dbg_cpu_reset_out(dbg_eg_cpu_reset_out)
 	);
+
+	// ---- SignalTap capture bundle -----------------------------------------
+	// A `preserve`d register so the Fitter cannot optimise these nodes away;
+	// SignalTap taps dbg_boot_bus inside this instance.
+	//
+	// SAMPLING NOTE: clk_sys is 32.5 MHz, so a 1024-deep capture spans only
+	// ~31 us — far shorter than the Egret handshake, which runs for
+	// milliseconds. Capture with a STORAGE QUALIFIER (store only when
+	// dbg_sr_active or on a change of dbg_sr_cb1) or the window will close
+	// long before anything interesting happens.
+	wire [2:0] dbg_sr_bit_cnt;
+	wire       dbg_sr_edge_pending, dbg_sr_fall_pending;
+	wire [7:0] dbg_sr_shift_reg;
+	wire       dbg_sr_active, dbg_sr_dir, dbg_sr_cb1, dbg_sr_cb2;
+	wire       dbg_eg_running, dbg_eg_port_test_done, dbg_eg_handshake_done;
+	wire       dbg_eg_treq, dbg_eg_tip, dbg_eg_byteack;
+	wire       dbg_eg_reset_680x0, dbg_eg_cpu_reset_out;
+
+	(* preserve *) reg [31:0] dbg_boot_bus;
+	always @(posedge clk_sys) dbg_boot_bus <= {
+		4'd0,
+		memoryOverlayOn,          // [27] the documented failure: never clears
+		n_reset,                  // [26]
+		rom_loaded,               // [25]
+		dbg_eg_cpu_reset_out,     // [24]
+		dbg_eg_reset_680x0,       // [23]
+		dbg_eg_byteack,           // [22]
+		dbg_eg_tip,               // [21]
+		dbg_eg_treq,              // [20]
+		dbg_eg_handshake_done,    // [19] boot handshake completed?
+		dbg_eg_port_test_done,    // [18]
+		dbg_eg_running,           // [17]
+		dbg_sr_cb2,               // [16]
+		dbg_sr_cb1,               // [15] the edge that coalesces
+		dbg_sr_dir,               // [14]
+		dbg_sr_active,            // [13]
+		dbg_sr_fall_pending,      // [12] the suspect latch
+		dbg_sr_edge_pending,      // [11]
+		dbg_sr_shift_reg,         // [10:3]
+		dbg_sr_bit_cnt            // [2:0]
+	};
 
 	//////////////////////// DOWNLOADING ///////////////////////////
 
