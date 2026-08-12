@@ -1768,20 +1768,28 @@ module mac_lc_pocket
 	// Latch every CPU write into the SCC window ($F040xx): count + rolling
 	// 3-byte window. Pairs with the STM console injector — commands echoed and
 	// answered by the monitor land here. See scripts/read_scc.tcl.
+	// ★ v2: capture BOTH directions with address tags. Entry format (12 bits):
+	//   [11]   1 = CPU read, 0 = CPU write
+	//   [10:9] cpuAddr[2:1]: 0=ctl-B 1=ctl-A 2=data-B 3=data-A
+	//   [7:0]  the byte (write: CPU data out; read: periph_din_reg upper lane —
+	//          SCC sits on the upper byte on the LC)
 	reg [7:0]  scc_wr_cnt  = 8'd0;
 	reg [23:0] scc_last3   = 24'd0;
 	reg        scc_wr_pend = 1'b0;
-	reg [7:0]  scc_wr_byte = 8'd0;
+	reg [11:0] scc_wr_ent  = 12'd0;
 	always @(posedge clk_sys) begin
-		if (!_cpuAS && !_cpuRW && (cpuAddr[23:8] == 16'hF040)) begin
+		if (!_cpuAS && (cpuAddr[23:8] == 16'hF040)) begin
 			scc_wr_pend <= 1'b1;
-			if (!_cpuUDS)      scc_wr_byte <= cpuDataOut[15:8];
-			else if (!_cpuLDS) scc_wr_byte <= cpuDataOut[7:0];
+			if (_cpuRW)
+				scc_wr_ent <= { 1'b1, cpuAddr[2:1], 1'b0, periph_din_reg[15:8] };
+			else
+				scc_wr_ent <= { 1'b0, cpuAddr[2:1], 1'b0,
+				                !_cpuUDS ? cpuDataOut[15:8] : cpuDataOut[7:0] };
 		end else if (scc_wr_pend) begin
 			scc_wr_pend <= 1'b0;
 			scc_wr_cnt  <= scc_wr_cnt + 8'd1;
-			scc_last3   <= { scc_last3[15:0], scc_wr_byte };
-			scc_ring[scc_wr_cnt] <= scc_wr_byte;   // ring[k] = k-th byte written
+			scc_last3   <= { scc_last3[15:0], scc_wr_ent[7:0] };
+			scc_ring[scc_wr_cnt] <= scc_wr_ent;
 		end
 	end
 	wire [31:0] dbg_scc_tx = { scc_wr_cnt, scc_last3 };
@@ -1790,9 +1798,9 @@ module mac_lc_pocket
 	// JTAG via a source-selected index (see scripts/stm_console.tcl). This is
 	// what makes the STM console conversational — complete responses, not a
 	// 3-byte tail.
-	reg [7:0] scc_ring [0:255];
+	reg [11:0] scc_ring [0:255];
 	wire [7:0] scc_rd_idx;
-	reg  [7:0] scc_ring_q = 8'd0;
+	reg  [11:0] scc_ring_q = 12'd0;
 	always @(posedge clk_sys) scc_ring_q <= scc_ring[scc_rd_idx];
 
 	wire [31:0] dbg_irq_state = {
@@ -1913,7 +1921,7 @@ module mac_lc_pocket
 	) cp_stmc (.probe(stm_sent_cnt), .source(stm_src), .source_clk(clk_sys), .source_ena(1'b1));
 
 	altsource_probe #(
-		.instance_id ("SCCR"), .probe_width (16), .source_width (8),
+		.instance_id ("SCCR"), .probe_width (20), .source_width (8),
 		.sld_auto_instance_index ("YES")
 	) cp_sccr (.probe({scc_wr_cnt, scc_ring_q}), .source(scc_rd_idx), .source_clk(clk_sys), .source_ena(1'b1));
 

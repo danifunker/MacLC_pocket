@@ -15,14 +15,14 @@ start_insystem_source_probe -device_name $dev -hardware_name $hw
 
 proc rd_sccr {} { global idx
     scan [read_probe_data -instance_index $idx(SCCR) -value_in_hex] %x v
-    return [expr {$v & 0xFFFF}] }
+    return [expr {$v & 0xFFFFF}] }
 proc ring_at {i} { global idx
     write_source_data -instance_index $idx(SCCR) -value [format "0x%02X" [expr {$i & 0xFF}]] -value_in_hex
     # one dummy read lets the registered ring output settle
     read_probe_data -instance_index $idx(SCCR) -value_in_hex
-    return [expr {[rd_sccr] & 0xFF}] }
+    return [expr {[rd_sccr] & 0xFFF}] }
 
-set before [expr {[rd_sccr] >> 8}]
+set before [expr {[rd_sccr] >> 12}]
 puts "write-count before: $before"
 
 if {$cmd ne ""} {
@@ -39,24 +39,28 @@ if {$cmd ne ""} {
     set stable 0
     set last -1
     for {set i 0} {$i < 120 && $stable < 6} {incr i} {
-        set now [expr {[rd_sccr] >> 8}]
+        set now [expr {[rd_sccr] >> 12}]
         if {$now == $last} { incr stable } else { set stable 0; set last $now }
     }
 }
-set after [expr {[rd_sccr] >> 8}]
+set after [expr {[rd_sccr] >> 12}]
 set n [expr {($after - $before) & 0xFF}]
 if {$cmd eq ""} { set n 96; }
 if {$n == 0} { puts "no new bytes"; set n 24 }
 if {$n > 250} { set n 250 }
 set start [expr {($after - $n) & 0xFF}]
-puts "reading $n bytes ending at count $after:"
-set hexline ""
-set ascline ""
+puts "reading $n entries ending at count $after:  (r/w port byte)"
+set line ""
+set ports {ctB ctA dtB dtA}
 for {set k 0} {$k < $n} {incr k} {
-    set b [ring_at [expr {($start + $k) & 0xFF}]]
-    append hexline [format "%02X " $b]
-    if {$b >= 32 && $b < 127} { append ascline [format %c $b] } else { append ascline "." }
-    if {[expr {($k + 1) % 24}] == 0} { puts "  $hexline  $ascline"; set hexline ""; set ascline "" }
+    set e [ring_at [expr {($start + $k) & 0xFF}]]
+    set rw [expr {($e >> 11) & 1}]
+    set pt [lindex $ports [expr {($e >> 9) & 3}]]
+    set b  [expr {$e & 0xFF}]
+    set a "."
+    if {$b >= 32 && $b < 127} { set a [format %c $b] }
+    append line [format "%s-%s-%02X(%s) " [expr {$rw ? "R" : "W"}] $pt $b $a]
+    if {[expr {($k + 1) % 6}] == 0} { puts "  $line"; set line "" }
 }
-if {$hexline ne ""} { puts "  $hexline  $ascline" }
+if {$line ne ""} { puts "  $line" }
 end_insystem_source_probe
