@@ -336,7 +336,7 @@ module mac_lc_pocket
 			// when that workaround stopped working, so it is backed out until
 			// the regression is bisected. The generator above is left in place
 			// and simply drives nothing; re-add `cold_rst ||` here to retry.
-			if(~pll_locked || !rom_loaded || reset || jboot_rst ||
+			if(~pll_locked || !rom_loaded || reset || jboot_rst || romv_run ||
 			   (dio_download && dio_index == 8'd0)) begin
 				rst_cnt <= '1;
 				n_reset <= 0;
@@ -420,7 +420,13 @@ module mac_lc_pocket
 		stm_go_d <= stm_src[8];
 		if (stm_bitn == 4'd0) begin
 			stm_line <= 1'b1;
-			if (stm_go_d != stm_src[8]) begin
+			// ★ RISING edge only. ISSP sources reset to 0 at every JTAG session
+			// boundary; with any-toggle triggering, each session close whose
+			// last state was 1 fired a spurious 0x00 character — which queued
+			// ahead of real commands and fed the monitor null bytes (captured:
+			// R-dtA-00 + error-reset). Rising-edge-only makes session resets
+			// silent. Protocol: write {1,byte} to send, {0,x} to re-arm.
+			if (!stm_go_d && stm_src[8]) begin
 				// {stop, stop, data[7:0], start} — shifted out LSB first
 				stm_shift    <= {2'b11, stm_src[7:0], 1'b0};
 				stm_bitn     <= 4'd11;
@@ -1555,13 +1561,46 @@ module mac_lc_pocket
 	// SDRAM word address mapping:
 	// memoryAddr[22:0] is already the SDRAM word address from addrController
 	// Download path uses the LATCHED dio_a[22:0] (set when ioctl_wr arrived).
-	wire [24:0] ram_addr = download_cycle ? {2'b00, dio_a[22:0]} :
+	// ---- ROM RETENTION VERIFIER (2026-08-12) ------------------------------
+	// Reads the 512 KB ROM region back OUT of SDRAM and computes the same two
+	// sums the download path computes. Every prior "ROM verified" measured the
+	// arriving stream; this measures what the cells still hold — the missing
+	// oracle for the refresh-gap/decay hypothesis. Trigger: ROMV source rising
+	// edge. Holds the machine in reset for the ~32 ms scan (clk8-paced).
+	wire        romv_src;
+	reg         romv_d   = 1'b0;
+	reg  [1:0]  romv_st  = 2'd0;    // 0 idle, 1 scanning, 2 done
+	reg  [18:0] romv_idx = 19'd0;   // one past-the-end tail tick at 0x40000
+	reg  [31:0] romv_sum = 32'd0;
+	reg  [31:0] romv_axs = 32'd0;
+	wire        romv_run = (romv_st == 2'd1);
+	always @(posedge clk_sys) begin
+		romv_d <= romv_src;
+		if (!romv_d && romv_src && romv_st != 2'd1) begin
+			romv_st  <= 2'd1;
+			romv_idx <= 19'd0;
+			romv_sum <= 32'd0;
+			romv_axs <= 32'd0;
+		end else if (romv_run && clk8_en_p) begin
+			// data returning on this tick belongs to the address driven on the
+			// previous tick (romv_idx-1)
+			if (romv_idx != 19'd0) begin
+				romv_sum <= romv_sum + {16'd0, ram_do_raw};
+				romv_axs <= romv_axs + ({14'd0, romv_idx[17:0] - 18'd1} ^ {16'd0, ram_do_raw});
+			end
+			if (romv_idx == 19'h40000) romv_st <= 2'd2;
+			else romv_idx <= romv_idx + 19'd1;
+		end
+	end
+
+	wire [24:0] ram_addr = romv_run       ? {2'b00, 5'b10100, romv_idx[17:0]} :
+	                       download_cycle ? {2'b00, dio_a[22:0]} :
 	                                        {2'b00, memoryAddr[22:0]};
 
 	wire [15:0] ram_din  = download_cycle ? ioctl_dout : memoryDataOut;
 	wire  [1:0] ram_ds   = download_cycle ? 2'b11 : { !_memoryUDS, !_memoryLDS };
 	wire        ram_we   = download_cycle ? 1'b1 : !_ramWE;
-	wire        ram_oe   = download_cycle ? 1'b0 : (!_ramOE || !_romOE || dskReadAckInt);
+	wire        ram_oe   = romv_run ? 1'b1 : download_cycle ? 1'b0 : (!_ramOE || !_romOE || dskReadAckInt);
 	wire [15:0] ram_do_raw;
 	// --- FORCED-WARM BOOT (2026-08-12) — inverse of the old dead patch -------
 	// History: the block this replaces was inherited from MacLC.sv and claimed
@@ -1975,6 +2014,21 @@ module mac_lc_pocket
 		.instance_id ("DIAG"), .probe_width (1), .source_width (1),
 		.sld_auto_instance_index ("YES")
 	) cp_diag (.probe(diag_src), .source(diag_src), .source_clk(clk_sys), .source_ena(1'b1));
+
+	altsource_probe #(
+		.instance_id ("ROMV"), .probe_width (4), .source_width (1),
+		.sld_auto_instance_index ("YES")
+	) cp_romv (.probe({2'b00, romv_st}), .source(romv_src), .source_clk(clk_sys), .source_ena(1'b1));
+
+	altsource_probe #(
+		.instance_id ("RVSU"), .probe_width (32), .source_width (1),
+		.sld_auto_instance_index ("YES")
+	) cp_rvsu (.probe(romv_sum), .source(), .source_clk(clk_sys), .source_ena(1'b1));
+
+	altsource_probe #(
+		.instance_id ("RVAX"), .probe_width (32), .source_width (1),
+		.sld_auto_instance_index ("YES")
+	) cp_rvax (.probe(romv_axs), .source(), .source_clk(clk_sys), .source_ena(1'b1));
 
 	altsource_probe #(
 		.instance_id ("ROMC"), .probe_width (32), .source_width (1),

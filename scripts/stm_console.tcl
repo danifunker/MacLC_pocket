@@ -26,13 +26,14 @@ set before [expr {[rd_sccr] >> 12}]
 puts "write-count before: $before"
 
 if {$cmd ne ""} {
-    set tog 0
     puts "sending: $cmd"
+    # rising-edge protocol: {1,byte} sends, {0,0} re-arms silently (session
+    # resets to 0 are now harmless — no more spurious 0x00 characters)
     foreach ch [split $cmd ""] {
         scan $ch %c code
-        set tog [expr {1 - $tog}]
-        write_source_data -instance_index $idx(STMC) -value [format "0x%03X" [expr {($tog << 8) | $code}]] -value_in_hex
+        write_source_data -instance_index $idx(STMC) -value [format "0x%03X" [expr {0x100 | $code}]] -value_in_hex
         read_probe_data -instance_index $idx(STMC) -value_in_hex
+        write_source_data -instance_index $idx(STMC) -value "0x000" -value_in_hex
         read_probe_data -instance_index $idx(STMC) -value_in_hex
     }
     # wait for the response burst to finish (count stable across polls)
