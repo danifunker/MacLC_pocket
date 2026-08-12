@@ -1789,9 +1789,15 @@ module mac_lc_pocket
 				                !_cpuUDS ? cpuDataOut[15:8] : cpuDataOut[7:0] };
 		end else if (scc_wr_pend) begin
 			scc_wr_pend <= 1'b0;
-			scc_wr_cnt  <= scc_wr_cnt + 8'd1;
-			scc_last3   <= { scc_last3[15:0], scc_wr_ent[7:0] };
-			scc_ring[scc_wr_cnt] <= scc_wr_ent;
+			// Filter the STM spin's idle poll (read ctl-A returning RR0=0x04,
+			// tens of kHz) — it floods the 256-deep ring within a second and
+			// erases every interesting event. RR0 reading anything ELSE
+			// (e.g. 0x05 = char available) still records.
+			if (scc_wr_ent != 12'hA04) begin
+				scc_wr_cnt  <= scc_wr_cnt + 8'd1;
+				scc_last3   <= { scc_last3[15:0], scc_wr_ent[7:0] };
+				scc_ring[scc_wr_cnt] <= scc_wr_ent;
+			end
 		end
 	end
 	wire [31:0] dbg_scc_tx = { scc_wr_cnt, scc_last3 };
