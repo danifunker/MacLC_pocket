@@ -213,6 +213,44 @@ monitor's All-Sent poll budget (~200 us) can't span an honest 9600-baud char
 (1150 us); both ends now run ~325 kbaud internally. Awaiting a fresh-ROM
 boot for the *R/*T interrogation.
 
+### ★ 2026-08-12 evening — THE ORACLE'S MIRAGE, and what actually survives
+
+The retention/corruption narrative went through three self-corrections. Final
+state of knowledge — record so nobody re-walks it:
+
+1. ROMV v2's "one-word offset" was real (pairing bug) — fixed in v2.1.
+2. v2.1's "21,600 corrupt words / 8% of ROM, mostly word-0 copies" was a
+   MIRAGE: slow isolated re-reads of the same address returned DIFFERENT
+   values run-to-run (sometimes correct, mostly 350E). The scanner's
+   free-running reads often never issued; dout then held the machine's own
+   most-recent fetch — which, after the scan-induced reset, is overwhelmingly
+   the RESET VECTOR AT WORD 0 (350E). The instrument photographed its own
+   reflection. The CPU booting deep on the same content was the tell.
+3. **Therefore the reconfig-gap "decay proof" is ALSO unproven** — the
+   pre/post-reload sum differences are contaminated by the same stale-read
+   artifact (different machine states = different reflected dout). Decay
+   remains plausible, unmeasured.
+4. ROMV v3 (completion-paired via pocket_sdram dout_stb + settle windows) is
+   the airtight rebuild. Re-run the full protocol on it: post-push scan vs
+   post-reload scan vs file, plus repeated-scan stability, before ANY new
+   conclusion about memory content.
+
+**What genuinely survives all controls today:**
+* Arrival-side ROM delivery: byte-perfect, every load (accumulator exact).
+* CPU-path reads: reliable enough for deep boots (grey screen, 138k IRQs).
+* The regression/bisect chain: code exonerated to golden; OS-session, SD
+  flow, power-cycle, phase all excluded.
+* **jboot determinism: instant-reset boots fail early 11/11, while
+  long-download-reset (OSD) boots frequently reach the late stages.** The
+  reset-hold-duration difference is the tightest reproducible discriminator
+  of the underlying fault. Next experiment when instruments allow: a
+  source-configurable jboot hold time — sweep it; if long holds rescue
+  jboots, the fault is time-in-reset-dependent state settling (Egret, PLL,
+  SDRAM bank state, ...).
+* Instrument suite now standing: hands-free boot (JBOO), diag-mode-on-demand
+  (DIAG/PA0), two-way STM console at working speed (STMC/SCCR/SCCS + three
+  scc.v truth fixes), ROM retention oracle v3 (ROMV/RVSU/RVAX).
+
 ---
 
 ## 1. The symptom, precisely
