@@ -1189,6 +1189,7 @@ module mac_lc_pocket
 		.serialOut(serialOut),
 		.serialCTS(serialCTS),
 		.dbg_scc_state(dbg_scc_state),
+		.dbg_force_diag(diag_src),
 		.serialRTS(serialRTS),
 
 		.timestamp(timestamp),
@@ -1962,6 +1963,15 @@ module mac_lc_pocket
 		.instance_id ("JBOO"), .probe_width (1), .source_width (1),
 		.sld_auto_instance_index ("YES")
 	) cp_jboot (.probe(jboot_rst), .source(jboot_src), .source_clk(clk_sys), .source_ena(1'b1));
+
+	// DIAG source: level (not toggle) — 1 grounds VIA1 PA0 so the ROM enters
+	// the STM diagnostic monitor at the next boot. Combine with JBOO for
+	// STM-on-demand: set DIAG=1, strobe JBOO, converse, set DIAG=0.
+	wire diag_src;
+	altsource_probe #(
+		.instance_id ("DIAG"), .probe_width (1), .source_width (1),
+		.sld_auto_instance_index ("YES")
+	) cp_diag (.probe(diag_src), .source(diag_src), .source_clk(clk_sys), .source_ena(1'b1));
 
 	altsource_probe #(
 		.instance_id ("ROMC"), .probe_width (32), .source_width (1),

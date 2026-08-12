@@ -76,6 +76,7 @@ module dataController_top(
 	output serialOut,	
 	input serialCTS,
 	output [15:0] dbg_scc_state,  // ★ 2026-08-12 STM console debug (scc ch A)
+	input         dbg_force_diag, // ★ ground VIA1 PA0 -> ROM enters STM diag mode at boot
 	output serialRTS,
 
 	// RTC
@@ -460,7 +461,13 @@ module dataController_top(
 	// scribbling below the stack. The old $55 placeholder read PA7=0.
 	// Bit0 deliberately stays 1 (as every hardware-validated build to date);
 	// MAME would tie it to the FPU-sense config — evaluate separately.
-	assign via_pa_i = 8'hD5;
+	// ★ 2026-08-12 (instr branch): PA0 is the LC's diagnostic-mode entry pin —
+	// the ROM's check at $A4644C boots normally when PA0=1 and enters the STM
+	// TechStep monitor when PA0=0 (see MacLC_MiSTer
+	// docs/diagnostic_mode_reference.md). dbg_force_diag grounds it on demand
+	// from JTAG, giving a sanctioned STM entry on ANY boot — no failure or
+	// timing race required. 0 = normal (default).
+	assign via_pa_i = 8'hD5 & ~{7'b0, dbg_force_diag};
 	// Sound volume still comes from PA[2:0] output latch
 	assign snd_vol = ~via_pa_oe[2:0] | via_pa_o[2:0];
 	assign driveSel = ~via_pa_oe[4] | via_pa_o[4];  // Drive select from VIA PA4
