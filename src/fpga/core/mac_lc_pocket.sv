@@ -1780,9 +1780,19 @@ module mac_lc_pocket
 			scc_wr_pend <= 1'b0;
 			scc_wr_cnt  <= scc_wr_cnt + 8'd1;
 			scc_last3   <= { scc_last3[15:0], scc_wr_byte };
+			scc_ring[scc_wr_cnt] <= scc_wr_byte;   // ring[k] = k-th byte written
 		end
 	end
 	wire [31:0] dbg_scc_tx = { scc_wr_cnt, scc_last3 };
+
+	// Full-history ring: last 256 SCC writes, read back deterministically over
+	// JTAG via a source-selected index (see scripts/stm_console.tcl). This is
+	// what makes the STM console conversational — complete responses, not a
+	// 3-byte tail.
+	reg [7:0] scc_ring [0:255];
+	wire [7:0] scc_rd_idx;
+	reg  [7:0] scc_ring_q = 8'd0;
+	always @(posedge clk_sys) scc_ring_q <= scc_ring[scc_rd_idx];
 
 	wire [31:0] dbg_irq_state = {
 		_cpuIPL_dc,      // [31:29] raw IPL from dataController
@@ -1900,6 +1910,11 @@ module mac_lc_pocket
 		.instance_id ("STMC"), .probe_width (8), .source_width (9),
 		.sld_auto_instance_index ("YES")
 	) cp_stmc (.probe(stm_sent_cnt), .source(stm_src), .source_clk(clk_sys), .source_ena(1'b1));
+
+	altsource_probe #(
+		.instance_id ("SCCR"), .probe_width (16), .source_width (8),
+		.sld_auto_instance_index ("YES")
+	) cp_sccr (.probe({scc_wr_cnt, scc_ring_q}), .source(scc_rd_idx), .source_clk(clk_sys), .source_ena(1'b1));
 
 	altsource_probe #(
 		.instance_id ("ROMC"), .probe_width (32), .source_width (1),
