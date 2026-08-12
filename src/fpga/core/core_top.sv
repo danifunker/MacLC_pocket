@@ -619,7 +619,11 @@ end
 // ★ 2026-08-12: temporarily 1 again ONLY for the baseline-anchor build (the
 // golden build ran with media hidden). Must return to 0 in the first
 // forward step after the baseline is re-proven — see docs/boot_problems.md.
-localparam bit SCSI_DISABLE_DIAG = 1'b1;
+// ★ 2026-08-12 buildV: returned to 0 — the download-tear root cause is fixed
+// (boot_problems ★★★), cold boot reaches the "?" seek loop, and this is the
+// first forward step: media visible again for the first honest SCSI test
+// since the golden build.
+localparam bit SCSI_DISABLE_DIAG = 1'b0;
 
 localparam [15:0] SLOT_PRAM = 16'd220;   // NVRAM save file (256 bytes)
 localparam [15:0] SLOT_HDD0 = 16'd310;
