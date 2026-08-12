@@ -348,6 +348,48 @@ the real face of "mounting a floppy crashes the core").
 With clean content, cold boots and reloads go through the same fixed path;
 the cold-vs-reload distinction should disappear entirely.
 
+### buildS RESULT — arbiter form necessary but NOT sufficient; the ghost-slot
+### hole (fixed in buildT)
+
+buildS (arbiter form) pushed; a fresh full ROM download ran (BRGC=POPC=ROMC
+= exactly 262144 since config; stream sums EXACT). ROMV then read back **55
+scarred words — same signature (all xx00, all = content(X+0x100)) at 5.4% of
+boundaries**, vs 27% on the sim form. Root of the residue, found by tracing
+the ack plumbing:
+
+* core_top converts the machine's `ioctl_wait` into the loader's `dio_ack`
+  by EDGE-detecting its fall (core_top.sv:1127-1130). The loader holds
+  `ioctl_wr` (a LEVEL) until that ack.
+* mac_lc_pocket's accept block was `if(ioctl_wr)` on the raw level, so in
+  the one cycle between the retire clearing `ioctl_wait` and the loader
+  dropping `ioctl_wr`, the block RE-ASSERTED `ioctl_wait` — stuck high with
+  NO word pending.
+* Stale wait -> `dio_write` samples 1 -> **GHOST dio slots** (writes owned
+  by no word, harmlessly rewriting the old word) — except the next word's
+  arrival could land MID-ghost-slot and re-latch `dio_a` mid-access: the
+  same old-row/new-col tear, now only in the FIFO-empty (bridge-paced
+  arrival) case. Ghost slot-ends also pulsed SPURIOUS acks that could
+  retire a word unwritten (invisible: every reload rewrites the same file,
+  so a skipped word usually already held its correct value).
+* MiSTer never had the hole: HPS `ioctl_wr` was a one-cycle strobe.
+
+buildT (`f21fd75`) completes the fix: **one-shot accept** — a word is
+accepted only when none is pending and not in the one-cycle post-retire
+shadow. `ioctl_wait` becomes honest, ghost slots and spurious acks vanish,
+and `dio_a` structurally cannot change while any `dio_write=1` slot is in
+flight. Acceptance: fresh download on buildT must scan 350F8EEE/F486F3D8 x3.
+
+Ops note discovered en route: **a full ROM download ran within ~60 s of the
+buildS JTAG push with no reported user action** (counters started at 0 at
+config and read 262144). Either the Analogue OS re-pushes data slots after a
+JTAG reconfig, or the user reloaded silently. Decision procedure for any
+future push: read BRGC/ROMC ~60 s after the push — 262144 means fresh
+content is already in, 0 means ask for an OSD reload. ★ Never run a ROMV
+scan while a download might be in flight: romv_run steals ram_addr while
+download writes still fire (ram_we is not gated by romv_run), which would
+scatter download words across scanner addresses. Scan only after counters
+confirm the download is complete.
+
 ### Instrument honesty note (ROMV v3 characterization)
 
 Misreads are per-TRIGGER (scan startup), ~1% of triggers, not per-word —
