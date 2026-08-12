@@ -1427,12 +1427,29 @@ module mac_lc_pocket
 	reg [15:0] dio_data;
 	reg        dio_write;
 	reg        dio_old_cyc = 0;
+	reg        dio_just_retired = 1'b0;
 
 	// DC42 write offset: active from the word after the magic (word 41)
 	wire [19:0] dio_flp_a = dc42_skip ? (dio_addr[19:0] - 20'd42) : dio_addr[19:0];
 
 	always @(posedge clk_sys) begin
-		if(ioctl_wr) begin
+		// ★★ ONE-SHOT ACCEPT (buildT, 2026-08-12) — the second half of the
+		// row-crossing-tear fix. ioctl_wr is a LEVEL the loader holds until
+		// core_top's ack (an EDGE detect on ioctl_wait's fall). Accepting on
+		// the raw level re-asserted ioctl_wait in the one cycle between the
+		// retire and the loader dropping ioctl_wr — leaving ioctl_wait STUCK
+		// HIGH with no word pending. That fed dio_write ghost slots (writes
+		// belonging to no word), and when the next word arrived MID-ghost-slot
+		// dio_a re-latched mid-access: the residual 5.4% row-boundary tear
+		// buildS measured (55 words, all xx00, all = content(X+0x100)). Ghost
+		// slot-ends also pulsed spurious acks that could retire a word
+		// UNWRITTEN (masked because every reload rewrites the same file).
+		// Accept exactly once per word — only with no word pending and not in
+		// the one-cycle post-retire shadow — and ioctl_wait becomes honest:
+		// no ghost slots, no spurious acks, and dio_a cannot change while any
+		// dio_write=1 slot is in flight. MiSTer never needed this because HPS
+		// ioctl_wr was a one-cycle strobe, not a held level.
+		if(ioctl_wr && !ioctl_wait && !dio_just_retired) begin
 			if (dio_index[1:0] != 2'b00) begin
 				// accept either byte lane order for the sim stream
 				if (dio_addr[19:0] == 20'd0) begin
@@ -1461,6 +1478,7 @@ module mac_lc_pocket
 		// throw the word away. The loader keeps dio_wr asserted and its 512-word
 		// FIFO absorbs the ~126 us wait, so nothing is lost -- the words are
 		// simply written once memory is live.
+		dio_just_retired <= (dio_old_cyc & ~dioBusControl & dio_write);
 		if(dio_old_cyc & ~dioBusControl & dio_write) ioctl_wait <= 0;
 	end
 
@@ -1579,11 +1597,11 @@ module mac_lc_pocket
 	// don't) at random depths on identical checksums. jboot re-executes the
 	// SAME scarred content, hence its deterministic early wedge.
 	//
-	// The arbiter form is tear-proof by construction: dio_write is sampled
-	// only while ~dioBusControl (frozen through the slot), and a new word's
-	// valid can only rise after the ack at slot end, so every dio_write=1
-	// slot sees dio_a/dio_data that latched before the slot began and stay
-	// stable past its end. Do NOT revert to the ioctl_wr form.
+	// The arbiter form alone is NOT quite tear-proof against a LEVEL-held
+	// ioctl_wr: buildS (arbiter form only) still tore 5.4% of row boundaries
+	// via stale-ioctl_wait GHOST slots — see the one-shot-accept block above
+	// (buildT), which closes that hole. The pair together is the fix.
+	// Do NOT revert either half to the ioctl_wr sim form.
 	//   MiSTer form: dio_download && dioBusControl, ram_din=dio_data, ram_we=dio_write
 	wire download_cycle = dio_download && dioBusControl;
 
