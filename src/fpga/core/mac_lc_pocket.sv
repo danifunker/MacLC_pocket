@@ -198,7 +198,9 @@ module mac_lc_pocket
 
 	// Cleared only by reconfig; the ROM stays in SDRAM across warm resets.
 	reg rom_loaded = 1'b0;
-	always @(posedge clk_sys) if (dio_download && dio_index == 8'd0) rom_loaded <= 1'b1;
+	// jboot_loaded: the JTAG boot strobe vouches that the ROM is already
+	// resident in SDRAM (it survives fabric reconfiguration).
+	always @(posedge clk_sys) if ((dio_download && dio_index == 8'd0) || jboot_loaded) rom_loaded <= 1'b1;
 
 	// ---- "Reset PRAM": zero the Egret's pram[] --------------------------------
 	// MiSTer's "Reset PRAM & Core" (R6) works by writing zeros through
@@ -334,7 +336,7 @@ module mac_lc_pocket
 			// when that workaround stopped working, so it is backed out until
 			// the regression is bisected. The generator above is left in place
 			// and simply drives nothing; re-add `cold_rst ||` here to retry.
-			if(~pll_locked || !rom_loaded || reset ||
+			if(~pll_locked || !rom_loaded || reset || jboot_rst ||
 			   (dio_download && dio_index == 8'd0)) begin
 				rst_cnt <= '1;
 				n_reset <= 0;
@@ -1925,13 +1927,35 @@ module mac_lc_pocket
 		.sld_auto_instance_index ("YES")
 	) cp_sccr (.probe({scc_wr_cnt, scc_ring_q}), .source(scc_rd_idx), .source_clk(clk_sys), .source_ena(1'b1));
 
-	// {post_loopback, sync_mode, tx_empty_latch, tx_buffer_full, tx_busy,
-	//  tx_line, local_loopback, rx_queue_nonempty}
-	wire [7:0] dbg_scc_state;
+	// [15:12] rx-delivered count  [11:8] frame-error count  [7:0] engine flags
+	wire [15:0] dbg_scc_state;
 	altsource_probe #(
-		.instance_id ("SCCS"), .probe_width (8), .source_width (1),
+		.instance_id ("SCCS"), .probe_width (16), .source_width (1),
 		.sld_auto_instance_index ("YES")
 	) cp_sccs (.probe(dbg_scc_state), .source(), .source_clk(clk_sys), .source_ena(1'b1));
+
+	// ---- JTAG BOOT STROBE (2026-08-12) ------------------------------------
+	// Toggling the JBOOT source arms one full machine reset AND forces the
+	// rom_loaded latch — the ROM persists in SDRAM across fabric pushes, so
+	// this boots the machine entirely from the PC, no OSD interaction needed.
+	wire       jboot_src;
+	reg        jboot_d      = 1'b0;
+	reg        jboot_loaded = 1'b0;   // ORed into the rom_loaded latch below
+	reg [4:0]  jboot_hold   = 5'd0;   // ≥16 clk8 ticks: reset block samples clk8_en_p
+	wire       jboot_rst    = (jboot_hold != 5'd0);
+	always @(posedge clk_sys) begin
+		jboot_d <= jboot_src;
+		if (jboot_d != jboot_src) begin
+			jboot_loaded <= 1'b1;
+			jboot_hold   <= 5'd31;
+		end else if (clk8_en_p && jboot_hold != 5'd0) begin
+			jboot_hold <= jboot_hold - 5'd1;
+		end
+	end
+	altsource_probe #(
+		.instance_id ("JBOO"), .probe_width (1), .source_width (1),
+		.sld_auto_instance_index ("YES")
+	) cp_jboot (.probe(jboot_rst), .source(jboot_src), .source_clk(clk_sys), .source_ena(1'b1));
 
 	altsource_probe #(
 		.instance_id ("ROMC"), .probe_width (32), .source_width (1),

@@ -63,7 +63,9 @@ module scc
 
 	// ★ 2026-08-12 (instr branch): live channel-A TX state for the JTAG STM
 	// console debug. Read-only; synthesizes away if unconnected.
-	output [7:0] dbg_tx_state_a
+	// [15:12] rx_wr pulse count (wraps)   [11:8] frame_err pulse count (wraps)
+	// [7:0] engine flags (see assign)
+	output [15:0] dbg_tx_state_a
 );
 
 	// Suppress unused warning for rtxc_en until SCC_USE_RTXC path lands.
@@ -1607,8 +1609,18 @@ wire auto_echo_a = wr14_a[3];
 wire local_loopback_a = wr14_a[4];
 wire tx_internal_a;  // Internal TX signal
 
-// ★ 2026-08-12: live TX/RX state for the JTAG console debug probe
-assign dbg_tx_state_a = { post_loopback_a, sync_mode_a, tx_empty_latch_a,
+// ★ 2026-08-12: live TX/RX state for the JTAG console debug probe.
+// v2 adds delivery counters: how many bytes rxuart actually handed over
+// (rx_wr_a pulses) and how many frames errored — splits "mis-sampled frames"
+// from "line never seen" in one read.
+reg [3:0] dbg_rxwr_cnt  = 4'd0;
+reg [3:0] dbg_ferr_cnt  = 4'd0;
+always @(posedge clk) begin
+	if (rx_wr_a)      dbg_rxwr_cnt <= dbg_rxwr_cnt + 4'd1;
+	if (frame_err_a)  dbg_ferr_cnt <= dbg_ferr_cnt + 4'd1;
+end
+assign dbg_tx_state_a = { dbg_rxwr_cnt, dbg_ferr_cnt,
+                          post_loopback_a, sync_mode_a, tx_empty_latch_a,
                           tx_buffer_full_a, tx_busy_a, tx_internal_a,
                           local_loopback_a, rx_queue_pos_a != 2'd0 };
 

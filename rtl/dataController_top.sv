@@ -75,7 +75,7 @@ module dataController_top(
 	input serialIn, 
 	output serialOut,	
 	input serialCTS,
-	output [7:0] dbg_scc_state,   // ★ 2026-08-12 STM console debug (scc ch A)
+	output [15:0] dbg_scc_state,  // ★ 2026-08-12 STM console debug (scc ch A)
 	output serialRTS,
 
 	// RTC

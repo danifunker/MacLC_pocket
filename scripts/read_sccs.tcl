@@ -10,7 +10,9 @@ foreach inst $info { set idx([lindex $inst 3]) [lindex $inst 0] }
 if {![info exists idx(SCCS)]} { puts "NO SCCS probe"; exit 0 }
 start_insystem_source_probe -device_name $dev -hardware_name $hw
 scan [read_probe_data -instance_index $idx(SCCS) -value_in_hex] %x v
-puts [format "SCCS raw=%02X" $v]
+puts [format "SCCS raw=%04X" $v]
+puts [format "  rx_delivered  = %d (wraps at 16)" [expr {($v >> 12) & 0xF}]]
+puts [format "  frame_errors  = %d (wraps at 16)" [expr {($v >> 8) & 0xF}]]
 puts [format "  post_loopback = %d" [expr {($v >> 7) & 1}]]
 puts [format "  sync_mode     = %d" [expr {($v >> 6) & 1}]]
 puts [format "  tx_empty_latch= %d" [expr {($v >> 5) & 1}]]
