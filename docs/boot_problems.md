@@ -94,6 +94,34 @@ workaround FIRST on every build):**
   DDIO clock topology (accepting that STA cannot model it — that is what
   MiSTer and MemTest actually ship).
 
+### RESULTS 2026-08-12 continued — the code is exonerated
+
+* **Seed-7 build** (anchor config + SCC capture, `--seed=7`): cold boot showed
+  the ORIGINAL early-wedge phenotype (overlay stuck, $EExxxx slot sweep,
+  1 interrupt, no STM — the golden-era cold signature, absent from the three
+  prior fits). Reloads: consistent-tempo sad-macs. Fourth distinct
+  fit-behavior datapoint.
+* **Recon-golden build** (`recon/golden-0811` @ 5a4bd32 — the golden source
+  reconstructed edit-by-edit from the session transcript; 11,830 ALMs vs
+  golden's 11,776): **reloads still sad-mac.** THE EXACT GOLDEN SOURCE FAILS
+  ON TODAY'S HARDWARE. Every code change since golden is exonerated.
+* Per-boot variance persists within single bitstreams ("once in a while,
+  straight lines") → a genuine boot-time RACE whose odds shift with placement
+  — the golden fit had good odds, today's fits bad ones. The race predates
+  everything; golden-era "2-3 reloads needed" was the same coin with a
+  friendlier bias.
+* SCC capture: LC's STM sends NOTHING unsolicited (confirmed: 72 writes at
+  boot then silent command-poll; reload burst = 24 writes ending EA 01 00).
+  The one-shot burst can't be caught by polling — needs a fabric-side ring
+  buffer, or better, the **STM console build**: drive `serial_rxd` from an
+  ISSP source (JTAG→9600-baud bridge) and converse with the monitor — `*R`
+  returns the failing-test status directly, `*T` runs individual critical
+  tests (Size Memory / Data Bus / Mod3 RAM / Address Line) on demand.
+* Environmental control in flight: recon-golden via SD card on a POWER-CYCLED
+  Pocket (fresh Analogue OS session — all of today's tests shared one
+  marathon session with many JTAG fabric swaps under it; golden ran on fresh
+  sessions).
+
 ---
 
 ## 1. The symptom, precisely

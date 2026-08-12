@@ -15,7 +15,8 @@ if {![info exists idx(SCCT)]} { puts "NO SCCT probe in this build"; exit 0 }
 start_insystem_source_probe -device_name $dev -hardware_name $hw
 puts " poll   cnt   bytes (hex)   ascii"
 set prev -1
-for {set i 0} {$i < 60} {incr i} {
+set changes 0
+for {set i 0} {$i < 12000 && $changes < 40} {incr i} {
     scan [read_probe_data -instance_index $idx(SCCT) -value_in_hex] %x v
     set v    [expr {$v & 0xFFFFFFFF}]
     set cnt  [expr {($v >> 24) & 0xFF}]
@@ -29,6 +30,7 @@ for {set i 0} {$i < 60} {incr i} {
     if {$cnt != $prev} {
         puts [format "  %3d   %3d   %02X %02X %02X      %s" $i $cnt $b2 $b1 $b0 $asc]
         set prev $cnt
+        incr changes
     }
 }
 end_insystem_source_probe
