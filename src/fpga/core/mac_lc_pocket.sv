@@ -1186,6 +1186,7 @@ module mac_lc_pocket
 		.serialIn(serialIn),
 		.serialOut(serialOut),
 		.serialCTS(serialCTS),
+		.dbg_scc_state(dbg_scc_state),
 		.serialRTS(serialRTS),
 
 		.timestamp(timestamp),
@@ -1915,6 +1916,14 @@ module mac_lc_pocket
 		.instance_id ("SCCR"), .probe_width (16), .source_width (8),
 		.sld_auto_instance_index ("YES")
 	) cp_sccr (.probe({scc_wr_cnt, scc_ring_q}), .source(scc_rd_idx), .source_clk(clk_sys), .source_ena(1'b1));
+
+	// {post_loopback, sync_mode, tx_empty_latch, tx_buffer_full, tx_busy,
+	//  tx_line, local_loopback, rx_queue_nonempty}
+	wire [7:0] dbg_scc_state;
+	altsource_probe #(
+		.instance_id ("SCCS"), .probe_width (8), .source_width (1),
+		.sld_auto_instance_index ("YES")
+	) cp_sccs (.probe(dbg_scc_state), .source(), .source_clk(clk_sys), .source_ena(1'b1));
 
 	altsource_probe #(
 		.instance_id ("ROMC"), .probe_width (32), .source_width (1),

@@ -75,6 +75,7 @@ module dataController_top(
 	input serialIn, 
 	output serialOut,	
 	input serialCTS,
+	output [7:0] dbg_scc_state,   // ★ 2026-08-12 STM console debug (scc ch A)
 	output serialRTS,
 
 	// RTC
@@ -989,6 +990,7 @@ module dataController_top(
 		._irq(_sccIrq),
 		.dcd_a(1'b1),  // Mac LC uses ADB for mouse, not SCC DCD
 		.dcd_b(1'b1),
+		.dbg_tx_state_a(dbg_scc_state),
 		.wreq(sccWReq),
 		.txd(serialOut),
 		.rxd(serialIn),

@@ -59,7 +59,11 @@ module scc
 	input	dcd_b,
 
 	/* Write request */
-	output	wreq
+	output	wreq,
+
+	// ★ 2026-08-12 (instr branch): live channel-A TX state for the JTAG STM
+	// console debug. Read-only; synthesizes away if unconnected.
+	output [7:0] dbg_tx_state_a
 );
 
 	// Suppress unused warning for rtxc_en until SCC_USE_RTXC path lands.
@@ -104,6 +108,7 @@ module scc
 	// 3-byte RX FIFO for channel A (per Z8530 spec)
 	reg [7:0]   rx_queue_a [0:2];  // 3-byte receive FIFO
 	reg [1:0]   rx_queue_pos_a = 0;  // Queue position (0-3)
+	reg         post_lb_d_a   = 0;   // ★ 2026-08-12: loopback-exit edge detect
 
 	// 3-byte RX FIFO for channel B (per Z8530 spec)
 	reg [7:0]   rx_queue_b [0:2];  // 3-byte receive FIFO
@@ -251,8 +256,16 @@ module scc
 	always@(posedge clk /*or posedge reset*/) begin
 
 		// FIFO enqueue: add byte to queue if space available
-		// Suppress after loopback cleared (no cable = no valid frames expected)
-		if (rx_wr_a && !post_loopback_a) begin
+		// ★ 2026-08-12 (instr branch): the old gate dropped ALL received
+		// characters forever once loopback had been used — which also made the
+		// STM console structurally deaf. The gate's real purpose (stale
+		// loopback bytes must not leak to the OS) is preserved by flushing the
+		// queue exactly ONCE at loopback exit, then accepting characters
+		// truthfully again.
+		post_lb_d_a <= post_loopback_a;
+		if (post_loopback_a && !post_lb_d_a) begin
+			rx_queue_pos_a <= 0;   // one-shot flush of loopback-era bytes
+		end else if (rx_wr_a) begin
 			$display("SCC_SERIAL_IN: ch=A byte=%02x time=%0t", data_a, $time);
 			if (rx_queue_pos_a < 3) begin
 				rx_queue_a[rx_queue_pos_a] <= data_a;
@@ -955,7 +968,7 @@ module scc
 			 rr0_dcd_a,             /* DCD */
 			 tx_empty_gated_a,      /* Tx Empty (post_loopback gated) */
 			 1'b0,                  /* Zero Count */
-			 post_loopback_a ? 1'b0 : (rx_queue_pos_a > 0)  /* Rx Available (post_loopback gated) */
+			 (rx_queue_pos_a > 0)  /* Rx Available — truthful; the one-shot flush at loopback exit replaces the old permanent gate (★ 2026-08-12) */
 			 };
 
 	// Debug: Show RR0 composition when reading from control register
@@ -1593,6 +1606,11 @@ wire [30:0] uart_setup_tx_a = { 1'b1, bit_per_char_a, 1'b0, parity_ena_a, 1'b0, 
 wire auto_echo_a = wr14_a[3];
 wire local_loopback_a = wr14_a[4];
 wire tx_internal_a;  // Internal TX signal
+
+// ★ 2026-08-12: live TX/RX state for the JTAG console debug probe
+assign dbg_tx_state_a = { post_loopback_a, sync_mode_a, tx_empty_latch_a,
+                          tx_buffer_full_a, tx_busy_a, tx_internal_a,
+                          local_loopback_a, rx_queue_pos_a != 2'd0 };
 
 // Local loopback: internal TX connects to RX for self-test (WR14 bit 4)
 wire rx_input_a = local_loopback_a ? tx_internal_a : rxd;
