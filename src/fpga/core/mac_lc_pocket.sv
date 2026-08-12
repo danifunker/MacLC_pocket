@@ -395,7 +395,45 @@ module mac_lc_pocket
 
 	// Serial Ports - connect SCC Channel A to sim via serial_txd/serial_rxd ports
 	wire serialOut;              // SCC Channel A TX (driven by SCC)
-	wire serialIn = serial_rxd;  // SCC Channel A RX (driven by sim)
+
+	// ---- STM console (2026-08-12): JTAG -> 9600-baud serial into SCC ch A --
+	// The ROM's STM diagnostic monitor listens on the modem port (9600 8N2)
+	// and can run its own critical tests on demand (*T: Size Memory, Data Bus,
+	// Mod3 RAM, Address Line...; *R returns the status/error code). The Pocket
+	// has no serial pin, so synthesize the RX line from an ISSP source:
+	// toggling source[8] transmits source[7:0] once. Idle high. Drive with
+	// scripts/stm_send.tcl.
+	wire [8:0]  stm_src;
+	reg  [7:0]  stm_sent_cnt = 8'd0;
+	reg         stm_go_d     = 1'b0;
+	reg  [11:0] stm_baud     = 12'd0;
+	reg  [3:0]  stm_bitn     = 4'd0;
+	reg  [10:0] stm_shift    = 11'h7FF;
+	reg         stm_line     = 1'b1;
+	localparam [11:0] STM_BAUD_DIV = 12'd3385;   // 32.5 MHz / 9600 baud
+	always @(posedge clk_sys) begin
+		stm_go_d <= stm_src[8];
+		if (stm_bitn == 4'd0) begin
+			stm_line <= 1'b1;
+			if (stm_go_d != stm_src[8]) begin
+				// {stop, stop, data[7:0], start} — shifted out LSB first
+				stm_shift    <= {2'b11, stm_src[7:0], 1'b0};
+				stm_bitn     <= 4'd11;
+				stm_baud     <= STM_BAUD_DIV;
+				stm_sent_cnt <= stm_sent_cnt + 8'd1;
+			end
+		end else begin
+			stm_line <= stm_shift[0];
+			if (stm_baud == 12'd0) begin
+				stm_shift <= {1'b1, stm_shift[10:1]};
+				stm_bitn  <= stm_bitn - 4'd1;
+				stm_baud  <= STM_BAUD_DIV;
+			end else begin
+				stm_baud <= stm_baud - 12'd1;
+			end
+		end
+	end
+	wire serialIn = serial_rxd & stm_line;  // SCC Channel A RX (external idle-1 AND injector)
 	// MiSTer: `wire serialCTS = 1'b1; // Idle/deasserted when no serial device
 	// connected` (MacLC.sv.reference:681). This was 1'b0 here, i.e. the SCC was
 	// told a modem was asserting CTS on a port with nothing plugged into it.
@@ -1518,13 +1556,30 @@ module mac_lc_pocket
 	wire        ram_we   = download_cycle ? 1'b1 : !_ramWE;
 	wire        ram_oe   = download_cycle ? 1'b0 : (!_ramOE || !_romOE || dskReadAckInt);
 	wire [15:0] ram_do_raw;
-	// --- Force cold-boot path (warm-reset hang workaround) — keep in sync with MacLC.sv.
-	// Patch the boot ROM's warm-vs-cold `bne.w` at ROM byte $4655E (SDRAM word
-	// $52322F) to UNCONDITIONAL (0x6600 -> 0x6000) as it is fetched, so every boot
-	// runs the full cold RAM march. No-op on a cold boot (branch already taken);
-	// guarded on the address AND opcode so other ROMs are untouched.
+	// --- FORCED-WARM BOOT (2026-08-12) — inverse of the old dead patch -------
+	// History: the block this replaces was inherited from MacLC.sv and claimed
+	// to force the COLD path by patching the warm-vs-cold `bne.w`. Its address
+	// was wrong by one hex digit ($52322F = ROM byte $4645E, mid-instruction
+	// data 0x0206) so its opcode guard NEVER matched: it was dormant on MiSTer
+	// and here, always. The real branch, verified against the ROM disassembly:
+	//     $46558: 0C83 574C 5343   cmpi.l #'WLSC',D3   (warm-start magic)
+	//     $4655E: 6600 0016        bne.w  $46576       (taken = COLD march)
+	// i.e. SDRAM words $5232AC-...  branch opcode at word $5232AF.
+	//
+	// On the Pocket the COLD march is what fails (POST dies in it or fails a
+	// subtest -> sad mac -> STM), while the WARM path is the one the golden-era
+	// reload workaround rode to the "?" screen. So force WARM: NOP out both
+	// words of the bne.w. Every boot then falls through to the warm path
+	// regardless of the flag in RAM. Guarded on address AND expected opcode so
+	// any other ROM passes through untouched. THIS IS A WORKAROUND/EXPERIMENT:
+	// if it boots, everything downstream of the march is healthy and the fault
+	// is confined to the cold-march path; it also gives a usable core. A true
+	// cold boot enters the warm path with uninitialized low memory — first
+	// attempt may still misbehave; a reload then mimics the golden pattern.
 	wire [15:0] ram_do_patched =
-		(!_romOE && memoryAddr == 23'h52322F && ram_do_raw == 16'h6600) ? 16'h6000 : ram_do_raw;
+		(!_romOE && memoryAddr == 23'h5232AF && ram_do_raw == 16'h6600) ? 16'h4E71 :
+		(!_romOE && memoryAddr == 23'h5232B0 && ram_do_raw == 16'h0016) ? 16'h4E71 :
+		ram_do_raw;
 	wire [15:0] ram_do   = download_cycle ? 16'hffff : dskReadAckInt ? extra_rom_data_demux : ram_do_patched;
 	// Disk byte-parity select: must be dskReadAddr[0], NOT memoryAddr[0] (which
 	// is dskReadAddr[1] after the >>1 word conversion drops bit 0). See the long
@@ -1708,6 +1763,27 @@ module mac_lc_pocket
 		if (fc7_iack && !iack_d) iack_cnt <= iack_cnt + 24'd1;
 	end
 
+	// ---- SCC TX capture (2026-08-12) --------------------------------------
+	// Latch every CPU write into the SCC window ($F040xx): count + rolling
+	// 3-byte window. Pairs with the STM console injector — commands echoed and
+	// answered by the monitor land here. See scripts/read_scc.tcl.
+	reg [7:0]  scc_wr_cnt  = 8'd0;
+	reg [23:0] scc_last3   = 24'd0;
+	reg        scc_wr_pend = 1'b0;
+	reg [7:0]  scc_wr_byte = 8'd0;
+	always @(posedge clk_sys) begin
+		if (!_cpuAS && !_cpuRW && (cpuAddr[23:8] == 16'hF040)) begin
+			scc_wr_pend <= 1'b1;
+			if (!_cpuUDS)      scc_wr_byte <= cpuDataOut[15:8];
+			else if (!_cpuLDS) scc_wr_byte <= cpuDataOut[7:0];
+		end else if (scc_wr_pend) begin
+			scc_wr_pend <= 1'b0;
+			scc_wr_cnt  <= scc_wr_cnt + 8'd1;
+			scc_last3   <= { scc_last3[15:0], scc_wr_byte };
+		end
+	end
+	wire [31:0] dbg_scc_tx = { scc_wr_cnt, scc_last3 };
+
 	wire [31:0] dbg_irq_state = {
 		_cpuIPL_dc,      // [31:29] raw IPL from dataController
 		pseudovia_irq,   // [28] level-2 source
@@ -1814,6 +1890,16 @@ module mac_lc_pocket
 		.instance_id ("RAXS"), .probe_width (32), .source_width (1),
 		.sld_auto_instance_index ("YES")
 	) cp_raxs (.probe(rom_axsum),      .source(), .source_clk(clk_sys), .source_ena(1'b1));
+
+	altsource_probe #(
+		.instance_id ("SCCT"), .probe_width (32), .source_width (1),
+		.sld_auto_instance_index ("YES")
+	) cp_scct (.probe(dbg_scc_tx), .source(), .source_clk(clk_sys), .source_ena(1'b1));
+
+	altsource_probe #(
+		.instance_id ("STMC"), .probe_width (8), .source_width (9),
+		.sld_auto_instance_index ("YES")
+	) cp_stmc (.probe(stm_sent_cnt), .source(stm_src), .source_clk(clk_sys), .source_ena(1'b1));
 
 	altsource_probe #(
 		.instance_id ("ROMC"), .probe_width (32), .source_width (1),
