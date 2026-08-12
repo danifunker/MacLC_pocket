@@ -36,8 +36,13 @@
 // the same word can only produce one transiently stale pixel).
 // ============================================================================
 module vram_bram #(
-    parameter integer DEPTH = 98304,    // 8bpp @ 512x384 = 192KB / 2 bytes
-    parameter integer AW    = 17         // ceil(log2(DEPTH))
+    // 8bpp @ 512x384 needs exactly 98,304 words (192 KB); the packing in
+    // addrController_top bounds the write address at that by construction.
+    // Grown to 106,496 (+8,192 words / +16 KB) for headroom. Granularity is
+    // 1024 words per 2 M10K blocks (one per byte lane), so this costs 16
+    // blocks: 232 -> 248 of 308 (75% -> 81%). AW stays 17 (max 131,072).
+    parameter integer DEPTH = 106496,
+    parameter integer AW    = 17         // ceil(log2(131072))
 )(
     // Port A — CPU write (byte-masked), a_clk (= clk_sys) domain. a_dout is
     // reserved for a later phase (CPU VRAM reads still come from SDRAM today).

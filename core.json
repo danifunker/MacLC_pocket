@@ -5,7 +5,7 @@
             "platform_ids": [
                 "maclc"
             ],
-            "shortname": "Macintosh LC",
+            "shortname": "MacLC",
             "description": "Apple Macintosh LC. 68020, 512x384, 256 colours.",
             "author": "danifunker",
             "url": "https://github.com/",

@@ -73,6 +73,20 @@ module apf_bridge_loader #(
 	output wire        dio_wr,        // 1-cycle write strobe
 	input  wire        dio_ack,       // core consumed the word
 
+	// ---- Boot forensics (free-running, always built; ~64 flops) -------------
+	// Read over JTAG via the ISSP deck (scripts/read_boot_probes.sh). These
+	// answer the ONLY question that matters about a failed ROM load: at which
+	// stage did words go missing? Compare, after the boot has settled:
+	//   dbg_bridge_words  words the Analogue OS actually handed us (clk_74a)
+	//   dbg_pop_words     words this loader popped toward the machine (clk_sys)
+	//   ..and in mac_lc_pocket, the count actually retired into SDRAM.
+	// A 512 KB ROM is 262,144 words. Equal-and-correct exonerates the whole
+	// download path; a step down between two of them localises the loss.
+	// Sampled asynchronously by ISSP, which is safe because they are read
+	// after the transfer is over and are therefore static at read time.
+	output reg  [31:0] dbg_bridge_words,
+	output reg  [31:0] dbg_pop_words,
+
 	output wire        busy           // backpressure to the OS
 );
 
@@ -120,6 +134,18 @@ module apf_bridge_loader #(
 			pend_data <= bridge_wr_data[15:0];
 		end
 	end
+
+	// Boot forensics: words PUSHED into the FIFO, i.e. what the OS handed us.
+	// Mirrors the wptr_74 increments above exactly (the pend branch and the
+	// accept branch each push one word); kept as its own block so the datapath
+	// above is untouched. Free-running and never cleared, so a reload adds to
+	// it -- read the DELTA across a load, not the absolute value.
+	initial begin
+		dbg_bridge_words = 32'd0;
+		dbg_pop_words    = 32'd0;
+	end
+	always @(posedge clk_74a)
+		if (slot_active && (pend || accept)) dbg_bridge_words <= dbg_bridge_words + 32'd1;
 
 	// ------------------------------------------------------------------
 	// Pointer CDC (Gray code both ways)
@@ -169,12 +195,22 @@ module apf_bridge_loader #(
 	// ------------------------------------------------------------------
 	wire empty = (rptr_sys == wptr_sys);
 
+	// Declared before rd_data's load enable uses it.
+	reg valid;
+
 	reg [FIFO_DW-1:0] rd_data;
-	always @(posedge clk_sys) rd_data <= fifo[rptr_sys[FIFO_AW-1:0]];
+	// Load ONLY on the cycle we advance rptr_sys. An unconditional reload here
+	// looks harmless but is not: dio_wr (= valid) stays asserted until the
+	// SDRAM arbiter grants a download slot, which is many cycles later, and
+	// mac_lc_pocket re-latches ioctl_dout/ioctl_addr on EVERY cycle ioctl_wr is
+	// high. With an unconditional reload, rd_data has already advanced to the
+	// next FIFO entry by the second cycle, so the word that actually reaches
+	// SDRAM is not the one that was popped — the ROM lands with roughly half
+	// its words missing and the 68020 executes garbage.
+	always @(posedge clk_sys) if (!valid && !empty) rd_data <= fifo[rptr_sys[FIFO_AW-1:0]];
 
 	// One-deep output register so dio_data/dio_addr are stable while the
 	// SDRAM arbiter waits for a download slot.
-	reg valid;
 	always @(posedge clk_sys) begin
 		if (reset) begin
 			rptr_sys <= 0;
@@ -185,6 +221,7 @@ module apf_bridge_loader #(
 				// this cycle; advance and mark valid for the NEXT cycle.
 				rptr_sys <= rptr_sys + 1'b1;
 				valid    <= 1'b1;
+				dbg_pop_words <= dbg_pop_words + 32'd1;   // boot forensics
 			end else if (valid && dio_ack) begin
 				valid <= 1'b0;
 			end

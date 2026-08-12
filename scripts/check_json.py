@@ -189,6 +189,116 @@ if it:
 load('audio.json')
 load('variants.json')
 
+# ------------------------------------------------------- undocumented keys --
+#
+# WHY THIS EXISTS: the Pocket's parser rejects the WHOLE descriptor on any
+# violation and reports only "Load error in 'core': General error" with a blank
+# About screen. A key that is not in the spec is as fatal as a mistyped one,
+# and it is invisible to every length/type check above.
+#
+# This caught `"messages": []` in interact.json — present since the initial
+# import, carried through six separate "fix the load error" commits because
+# each of those was looking for a length or type violation. The spec's
+# interact object has exactly two members: magic and variables.
+#
+# Key sets transcribed from https://www.analogue.co/developer/docs
+# (core-definition-files/*). Add to these only with a doc reference.
+SCHEMA = {
+    'core.json': {
+        'core': {'magic', 'metadata', 'framework', 'cores'},
+        'core.metadata': {'platform_ids', 'shortname', 'description', 'author',
+                          'url', 'version', 'date_release'},
+        'core.framework': {'target_product', 'version_required',
+                           'sleep_supported', 'chip32_vm', 'dock', 'hardware'},
+        'core.framework.dock': {'supported', 'analog_output'},
+        'core.framework.hardware': {'link_port', 'cartridge_adapter'},
+        'core.cores[]': {'name', 'id', 'filename'},
+    },
+    'data.json': {
+        'data': {'magic', 'data_slots'},
+        'data.data_slots[]': {'name', 'id', 'required', 'parameters',
+                              'extensions', 'address', 'filename',
+                              'size_exact', 'size_maximum', 'nonvolatile',
+                              'deferload', 'secondary'},
+    },
+    'video.json': {
+        'video': {'magic', 'scaler_modes'},
+        'video.scaler_modes[]': {'width', 'height', 'aspect_w', 'aspect_h',
+                                 'rotation', 'mirror'},
+    },
+    'audio.json': {'audio': {'magic'}},
+    'variants.json': {'variants': {'magic', 'variant_list'}},
+    'input.json': {
+        'input': {'magic', 'controllers'},
+        'input.controllers[]': {'type', 'mappings'},
+        'input.controllers[].mappings[]': {'id', 'name', 'key'},
+    },
+    'interact.json': {
+        'interact': {'magic', 'variables'},
+        'interact.variables[]': {'name', 'id', 'type', 'enabled', 'persist',
+                                 'address', 'defaultval', 'value', 'value_off',
+                                 'mask', 'options', 'min', 'max', 'step',
+                                 'graphical'},
+        'interact.variables[].options[]': {'value', 'name'},
+    },
+}
+
+
+def check_keys(fname, obj, path):
+    allowed = SCHEMA.get(fname, {}).get(path)
+    if allowed is not None and isinstance(obj, dict):
+        for k in obj:
+            if k not in allowed:
+                problems.append('%s: %s has undocumented key %r — the Pocket '
+                                'rejects the whole descriptor' % (fname, path, k))
+    if isinstance(obj, dict):
+        for k, val in obj.items():
+            if isinstance(val, dict):
+                check_keys(fname, val, '%s.%s' % (path, k))
+            elif isinstance(val, list):
+                for item in val:
+                    if isinstance(item, dict):
+                        check_keys(fname, item, '%s.%s[]' % (path, k))
+
+
+for fname in SCHEMA:
+    doc = load(fname)
+    if doc:
+        for root_key, sub in doc.items():
+            check_keys(fname, sub, root_key)
+
+# -------------------------------------------------- identity fields agree --
+#
+# shortname is documented as "Short name used for filesystem", and persisted
+# interact values live at /Settings/<author>.<CoreName>/Interact/. Every
+# shipping core keeps shortname identical to the core half of its Cores/
+# directory (Pocket-Amiga: shortname "Amiga", Cores/Mazamars312.Amiga,
+# Settings/Mazamars312.Amiga). Divergence gives the OS two different names for
+# one core.
+if c:
+    m = c.get('core', {}).get('metadata', {})
+    author, short = m.get('author', ''), m.get('shortname', '')
+    coresdir = os.path.join(ROOT, 'dist', 'Cores')
+    dirs = sorted(os.listdir(coresdir)) if os.path.isdir(coresdir) else []
+    for dname in dirs:
+        # Directories only — a stray .DS_Store or Thumbs.db is not a core.
+        if not os.path.isdir(os.path.join(coresdir, dname)):
+            continue
+        if '.' not in dname:
+            continue
+        d_author, d_core = dname.split('.', 1)
+        if d_author != author:
+            problems.append('dist/Cores/%s: directory author %r != '
+                            'core.json author %r' % (dname, d_author, author))
+        if d_core != short:
+            problems.append('dist/Cores/%s: directory core name %r != '
+                            'core.json shortname %r — /Settings/%s.%s/ would '
+                            'not match the core directory'
+                            % (dname, d_core, short, author, short))
+    if ' ' in short:
+        problems.append('core.metadata.shortname %r contains a space; it is '
+                        'used to build filesystem paths' % short)
+
 # ------------------------------------------------------------------ report --
 for n in notes:
     print('note : %s' % n)

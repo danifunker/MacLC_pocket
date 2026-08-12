@@ -340,16 +340,28 @@ assign vpll_feed = 1'bZ;
 // claims three windows:
 //   0x10000000  ROM data slot        (write-only, loader)
 //   0x20000000  Floppy data slot     (write-only, loader)
-//   0xF1000000  interact.json options
+//   0xF0000000  interact.json options
 //   0xF8000000  APF host/target command handler
+    wire [31:0] bd_bridge_rd_data;   // declared early: `default_nettype none`
+    wire  [2:0] bd_dbg_stage;
+
 always @(*) begin
     casex(bridge_addr)
     default: begin
         bridge_rd_data <= 0;
     end
-    32'hF1xxxxxx: begin
-        bridge_rd_data <= {31'd0, opt_mem_size};
-    end
+    // apf_blockdev's 512-byte sector buffer. Outside apf_bridge_loader's
+    // window (which masks to bridge_addr[31:30] == 2'b00) on purpose.
+    32'h40xxxxxx: bridge_rd_data <= bd_bridge_rd_data;
+    // Each variable must read back its OWN value: the Pocket reads a persisted
+    // variable to populate the menu, and returning opt_mem_size for every
+    // address in the window (as this did) gives the wrong value for all but one.
+    32'hF0000000: bridge_rd_data <= {31'd0, opt_mem_size};
+    32'hF0000010: bridge_rd_data <= {29'd0, opt_test_pattern};
+    // Bring-up readout: how far the block device has ever got. Read off the
+    // Core Settings menu -- see apf_blockdev.v dbg_stage.
+    32'hF0000014: bridge_rd_data <= {29'd0, bd_dbg_stage};
+    32'hF0xxxxxx: bridge_rd_data <= 32'd0;   // actions read back as 0
     32'hF8xxxxxx: begin
         bridge_rd_data <= cmd_bridge_rd_data;
     end
@@ -370,6 +382,11 @@ reg         opt_mem_size    = 1'b0;   // 0 = 2 MB, 1 = 10 MB
 reg         opt_reset_apply = 1'b0;   // action pulses (clk_74a)
 reg         opt_reset_pram  = 1'b0;
 reg         opt_nmi         = 1'b0;
+// Bring-up witness: [2] = show the video engine's built-in synthetic pattern
+// instead of VRAM, [1:0] = which pattern. Visible whether or not the Mac runs,
+// so it distinguishes "interact writes never arrive" from "they arrive but the
+// machine is stalled and every action looks identical".
+reg  [2:0]  opt_test_pattern = 3'd0;
 
 always @(posedge clk_74a) begin
     // Actions are one-shot: they self-clear once the core side has seen them.
@@ -379,10 +396,11 @@ always @(posedge clk_74a) begin
 
     if (bridge_wr) begin
         casex (bridge_addr)
-        32'hF1000000: opt_mem_size    <= bridge_wr_data[0];
-        32'hF1000004: opt_reset_apply <= bridge_wr_data[0];
-        32'hF1000008: opt_reset_pram  <= bridge_wr_data[0];
-        32'hF100000C: opt_nmi         <= bridge_wr_data[0];
+        32'hF0000000: opt_mem_size    <= bridge_wr_data[0];
+        32'hF0000004: opt_reset_apply <= bridge_wr_data[0];
+        32'hF0000008: opt_reset_pram  <= bridge_wr_data[0];
+        32'hF000000C: opt_nmi         <= bridge_wr_data[0];
+        32'hF0000010: opt_test_pattern <= bridge_wr_data[2:0];
         default: ;
         endcase
     end
@@ -566,19 +584,126 @@ assign savestate_load_busy = 0;
 assign savestate_load_ok = 0;
 assign savestate_load_err = 0;
 
-// Target commands are only needed by the block-device path (apf_blockdev),
-// which is not written yet. Held idle so core_bridge_cmd sees a well-defined
-// state.
+// target_dataslot_read/_write/_id/_slotoffset/_bridgeaddr/_length are now
+// driven by apf_blockdev (instantiated below). Only the file-level commands
+// stay idle -- we never open files by name.
 always @(posedge clk_74a) begin
-    target_dataslot_read       <= 1'b0;
-    target_dataslot_write      <= 1'b0;
     target_dataslot_getfile    <= 1'b0;
     target_dataslot_openfile   <= 1'b0;
-    target_dataslot_id         <= 16'd0;
-    target_dataslot_slotoffset <= 32'd0;
-    target_dataslot_bridgeaddr <= 32'd0;
-    target_dataslot_length     <= 32'd0;
 end
+
+// ---------------------------------------------------------------------------
+// Block device — SCSI disks on APF data slots
+// ---------------------------------------------------------------------------
+// Slots are declared `deferload` in data.json, following the reference Pocket
+// core: nothing is transferred at mount time, dataslot_update is the media
+// change event, and 512-byte sectors are fetched on demand. Slot ids 310/311
+// map to SCSI IDs 0 and 1.
+// ★ DIAGNOSTIC BISECTION (2026-08-11). Set to 1 to hide every SCSI disk from
+// the machine: img_mounted is forced low, so the Mac's SCSI targets report no
+// media and the boot ROM's bus scan finds an empty bus.
+//
+// WHY: the cold boot wedges with the CPU repeatedly on the SCSI pseudo-DMA
+// windows ($F06000 and $F12000-$F13FFF, addrDecoder.v:161/169) where DTACK is
+// ~scsiDREQ and DREQ never arrives. Everything shared with MiSTer has been
+// diffed and matches, so the fault must be in Pocket-only glue -- and
+// apf_blockdev is the only Pocket-only block on the SCSI path. This splits it
+// cleanly: boots => the fault is in apf_blockdev; still hangs => SCSI is
+// innocent and the hunt moves elsewhere.
+//
+// MUST be 0 for any release build.
+// ★ MUST BE 0 IN ANY BUILD THE USER RUNS. This was set to 1 for a one-off
+// bisection (does hiding all SCSI media change the boot hang? -- it did not)
+// and then left on for many build/flash cycles, so the machine ran with NO
+// disks at all while we were interpreting its boot behaviour. Do not ship 1.
+// ★ 2026-08-12: temporarily 1 again ONLY for the baseline-anchor build (the
+// golden build ran with media hidden). Must return to 0 in the first
+// forward step after the baseline is re-proven — see docs/boot_problems.md.
+localparam bit SCSI_DISABLE_DIAG = 1'b1;
+
+localparam [15:0] SLOT_PRAM = 16'd220;   // NVRAM save file (256 bytes)
+localparam [15:0] SLOT_HDD0 = 16'd310;
+localparam [15:0] SLOT_HDD1 = 16'd311;
+
+    wire [1:0]  bd_sd_ack;
+    wire [7:0]  bd_sd_buff_addr;
+    wire [15:0] bd_sd_buff_dout;
+    wire        bd_sd_buff_wr;
+    wire [1:0]  bd_img_mounted;
+    wire [31:0] bd_img_size;
+
+apf_blockdev #(
+    .BUF_BASE ( 32'h4000_0000 )
+) blockdev (
+    .clk_74a        ( clk_74a ),
+    .reset_n        ( pll_core_locked_s ),
+
+    .bridge_addr    ( bridge_addr ),
+    .bridge_wr      ( bridge_wr ),
+    .bridge_wr_data ( bridge_wr_data ),
+    .bridge_rd_data ( bd_bridge_rd_data ),
+
+    .dataslot_update      ( dataslot_update ),
+    .dataslot_update_id   ( dataslot_update_id ),
+    .dataslot_update_size ( dataslot_update_size ),
+
+    .target_dataslot_read       ( target_dataslot_read ),
+    .target_dataslot_write      ( target_dataslot_write ),
+    .target_dataslot_ack        ( target_dataslot_ack ),
+    .target_dataslot_done       ( target_dataslot_done ),
+    .target_dataslot_err        ( target_dataslot_err ),
+    .target_dataslot_id         ( target_dataslot_id ),
+    .target_dataslot_slotoffset ( target_dataslot_slotoffset ),
+    .target_dataslot_bridgeaddr ( target_dataslot_bridgeaddr ),
+    .target_dataslot_length     ( target_dataslot_length ),
+
+    .slot0_id       ( SLOT_HDD0 ),
+    .slot1_id       ( SLOT_HDD1 ),
+    .slot_flp_id    ( SLOT_FLOPPY ),
+
+    .dio_download   ( bd_dio_download ),
+    .dio_index      ( bd_dio_index ),
+    .dio_addr       ( bd_dio_addr ),
+    .dio_data       ( bd_dio_data ),
+    .dio_wr         ( bd_dio_wr ),
+    .dio_ack        ( bd_dio_ack ),
+    .flp_allow      ( rom_done ),
+
+    .clk_sys        ( clk_sys ),
+    .sd_lba0        ( sd_lba_u[0] ),
+    .sd_lba1        ( sd_lba_u[1] ),
+    .sd_rd          ( sd_rd_u[1:0] ),
+    .sd_wr          ( sd_wr_u[1:0] ),
+    .sd_ack         ( bd_sd_ack ),
+    .sd_buff_addr   ( bd_sd_buff_addr ),
+    .sd_buff_dout   ( bd_sd_buff_dout ),
+    .sd_buff_wr     ( bd_sd_buff_wr ),
+    .sd_buff_din0   ( sd_buff_din_u[0] ),
+    .sd_buff_din1   ( sd_buff_din_u[1] ),
+    .img_mounted    ( bd_img_mounted ),
+    .img_size       ( bd_img_size ),
+
+    // ---- PRAM (NVRAM) persistence ----
+    .slot_pram_id   ( SLOT_PRAM ),
+    .pram_save_req  ( mac_pram_save_req ),
+    .pram_load_addr ( bd_pram_load_addr ),
+    .pram_load_data ( bd_pram_load_data ),
+    .pram_load_wr   ( bd_pram_load_wr ),
+    .pram_save_addr ( bd_pram_save_addr ),
+    .pram_save_data ( mac_pram_save_data ),
+    .pram_loaded    ( bd_pram_loaded ),
+
+    .dbg_stage      ( bd_dbg_stage ),
+    .dbg_cstate     ( bd_dbg_cstate )
+);
+
+// PRAM persistence nets. The load path must complete before the machine's
+// pram_ready rises -- see the ordering note in apf_blockdev.v.
+    wire [4:0] bd_dbg_cstate;
+    wire [7:0] bd_pram_load_addr, bd_pram_load_data, bd_pram_save_addr;
+    wire       bd_pram_load_wr, bd_pram_loaded;
+    wire [7:0] mac_pram_save_data;
+    wire       mac_pram_save_req;
 
 
 ////////////////////////////////////////////////////////////////////////////////////
@@ -613,17 +738,56 @@ always @(posedge clk_74a) begin
     end
 end
 
-    wire        dio_download;
-    wire [7:0]  dio_index;
-    wire [24:0] dio_addr;
-    wire [15:0] dio_data;
-    wire        dio_wr;
+// Two producers feed the machine's download port:
+//   apf_bridge_loader  the ROM, streamed by the OS into the bridge window
+//   apf_blockdev       the floppy, pulled in sector by sector at our own pace
+// They cannot overlap in practice (ROM at boot, floppy on mount), so a simple
+// priority mux on the loader is enough.
+    wire        ldr_dio_download;
+    wire [7:0]  ldr_dio_index;
+    wire [24:0] ldr_dio_addr;
+    wire [15:0] ldr_dio_data;
+    wire        ldr_dio_wr;
+
+    wire        bd_dio_download;
+    wire [7:0]  bd_dio_index;
+    wire [24:0] bd_dio_addr;
+    wire [15:0] bd_dio_data;
+    wire        bd_dio_wr;
+
+    wire        dio_download = ldr_dio_download | bd_dio_download;
+    wire [7:0]  dio_index    = ldr_dio_download ? ldr_dio_index : bd_dio_index;
+    wire [24:0] dio_addr     = ldr_dio_download ? ldr_dio_addr  : bd_dio_addr;
+    wire [15:0] dio_data     = ldr_dio_download ? ldr_dio_data  : bd_dio_data;
+    wire        dio_wr       = ldr_dio_download ? ldr_dio_wr    : bd_dio_wr;
     wire        dio_ack;
     wire        loader_busy;
 
+// dio_ack MUST go to exactly one producer. Both used to receive it, so while
+// the ROM streamed, the floppy bulk-loader consumed acks belonging to the
+// loader's words (and vice versa) -- each advanced on the other's completions.
+// At cold boot the deferload slots raise dataslot_update while the ROM is still
+// streaming, so the two ran concurrently and corrupted the ROM load. Symptom:
+// cold boot unreliable, "force reload the ROM twice and it comes good".
+    wire ldr_dio_ack = dio_ack &  ldr_dio_download;
+    wire bd_dio_ack  = dio_ack & ~ldr_dio_download;
+
+// Belt and braces: do not begin a floppy bulk copy until the ROM download has
+// finished at least once. Latched on the falling edge of the loader's download.
+    reg  rom_done = 1'b0, ldr_dl_d = 1'b0;
+always @(posedge clk_sys) begin
+    ldr_dl_d <= ldr_dio_download;
+    if (ldr_dl_d && !ldr_dio_download) rom_done <= 1'b1;
+end
+
 apf_bridge_loader #(
     .ADDR_BASE ( 32'h1000_0000 ),
-    .ADDR_MASK ( 32'hE000_0000 )   // covers 0x10000000 (ROM) and 0x20000000 (floppy)
+    // Must cover BOTH 0x10000000 (ROM) and 0x20000000 (floppy). 0xE000_0000
+    // does NOT: it compares bits [31:29], and 0x2xxxxxxx differs from the
+    // 0x1xxxxxxx base there, so every floppy write was silently dropped.
+    // 0xC000_0000 maps both windows to 0x00000000. `accept` is additionally
+    // gated on slot_active, so widening the window admits no stray traffic.
+    .ADDR_MASK ( 32'hC000_0000 )
 ) loader (
     .clk_74a        ( clk_74a ),
     .bridge_addr    ( bridge_addr ),
@@ -636,15 +800,88 @@ apf_bridge_loader #(
     .clk_sys        ( clk_sys ),
     .reset          ( ~pll_core_locked_sys ),
 
-    .dio_download   ( dio_download ),
-    .dio_index      ( dio_index ),
-    .dio_addr       ( dio_addr ),
-    .dio_data       ( dio_data ),
-    .dio_wr         ( dio_wr ),
-    .dio_ack        ( dio_ack ),
+    .dio_download   ( ldr_dio_download ),
+    .dio_index      ( ldr_dio_index ),
+    .dio_addr       ( ldr_dio_addr ),
+    .dio_data       ( ldr_dio_data ),
+    .dio_wr         ( ldr_dio_wr ),
+    .dio_ack        ( ldr_dio_ack ),
+
+    .dbg_bridge_words ( ldr_dbg_bridge_words ),
+    .dbg_pop_words    ( ldr_dbg_pop_words ),
 
     .busy           ( loader_busy )
 );
+
+// ---------------------------------------------------------------------------
+// Cold-boot forensics deck (JTAG In-System probes) — DEBUG BUILDS ONLY
+// ---------------------------------------------------------------------------
+// Enable with USE_BOOT_ISSP in ap_core.qsf; must be OFF for release fits.
+// Read with: bash scripts/read_boot_probes.sh
+//
+// The question this deck exists to answer: when a cold boot needs the ROM
+// re-loaded two or three times, where do the words go? Three counters bracket
+// the whole path, and the first one that disagrees localises the loss:
+//
+//   BRGC  words the Analogue OS handed the loader   (clk_74a, in apf_bridge_loader)
+//   POPC  words the loader popped toward the machine (clk_sys, same module)
+//   ROMC  words the machine retired into SDRAM       (in mac_lc_pocket)
+//
+// For a 512 KB boot0.rom all three should read 0x40000 = 262,144 after one
+// load. They are free-running and never cleared, so read the DELTA across a
+// load rather than the absolute value.
+//
+// DLST carries the arbitration state that the RESUME's cold-boot race theory
+// turns on -- in particular whether bd_dio_download is stuck high (it is
+// raised on floppy mount without checking flp_allow, apf_blockdev.v:288) and
+// therefore steering dio_index away from the ROM's 8'd0, which is what the
+// machine's reset hold at mac_lc_pocket.sv:257 keys off.
+    wire [31:0] ldr_dbg_bridge_words;
+    wire [31:0] ldr_dbg_pop_words;
+
+    // Full 32-bit CPU address, taken from mac_lc_pocket's long-existing
+    // debug_cpuAddr output (core_top had left it unconnected). Only the top
+    // byte is probed: CPUA already carries [23:0].
+    wire [31:0] dbg_cpu_addr_full;
+    wire [7:0]  dbg_cpu_addr_hi = dbg_cpu_addr_full[31:24];
+
+    wire [31:0] dbg_dl_status = {
+        // [31:24] cpuAddr[31:24] -- the byte CPUA truncates away. Decides
+        // whether the PDS scan we are stuck in is the 24-bit slot form
+        // ($00E8xxxx) or a 32-bit one, which slot_space (F1..FE) gates
+        // completely differently. Routed out of the machine for the probe.
+        dbg_cpu_addr_hi,
+        bd_dbg_cstate,     // [23:19] blockdev FSM state
+        bd_pram_loaded,    // [18]    PRAM load resolved?
+        dataslot_allcomplete,   // [17]
+        dataslot_requestwrite,  // [16]
+        loader_active,          // [15]
+        loader_busy,            // [14]
+        rom_done,               // [13] == flp_allow into apf_blockdev
+        bd_dio_download,        // [12] stuck high from mount until copy ends?
+        ldr_dio_download,       // [11]
+        dio_download,           // [10] the OR the machine actually sees
+        dio_index,              // [9:2] 0=ROM 1=floppy — the reset-hold key
+        reset_n,                // [1] APF host reset
+        pll_core_locked_sys     // [0]
+    };
+
+`ifdef USE_BOOT_ISSP
+    altsource_probe #(
+        .instance_id ("BRGC"), .probe_width (32), .source_width (1),
+        .sld_auto_instance_index ("YES")
+    ) cp_brgc (.probe(ldr_dbg_bridge_words), .source(), .source_clk(clk_sys), .source_ena(1'b1));
+
+    altsource_probe #(
+        .instance_id ("POPC"), .probe_width (32), .source_width (1),
+        .sld_auto_instance_index ("YES")
+    ) cp_popc (.probe(ldr_dbg_pop_words),    .source(), .source_clk(clk_sys), .source_ena(1'b1));
+
+    altsource_probe #(
+        .instance_id ("DLST"), .probe_width (32), .source_width (1),
+        .sld_auto_instance_index ("YES")
+    ) cp_dlst (.probe(dbg_dl_status),        .source(), .source_clk(clk_sys), .source_ena(1'b1));
+`endif
 
 
 // ---------------------------------------------------------------------------
@@ -721,56 +958,22 @@ assign video_hs           = vidout_hs;
 // The Mac's ASC output is MONO (the LC has one speaker); the same sample goes
 // to both channels.
 
-assign audio_mclk = audgen_mclk;
-assign audio_dac  = audgen_dac;
-assign audio_lrck = audgen_lrck;
-
     wire signed [15:0] mac_audio;
 
-// generate MCLK = 12.288mhz with fractional accumulator
-    reg         [21:0]  audgen_accum;
-    reg                 audgen_mclk;
-    parameter   [20:0]  CYCLE_48KHZ = 21'd122880 * 2;
-always @(posedge clk_74a) begin
-    audgen_accum <= audgen_accum + CYCLE_48KHZ;
-    if(audgen_accum >= 21'd742500) begin
-        audgen_mclk <= ~audgen_mclk;
-        audgen_accum <= audgen_accum - 21'd742500 + CYCLE_48KHZ;
-    end
-end
+// The I2S shifter that used to be inlined here never produced audible output.
+// It has been replaced by src/fpga/core/i2s.v, modelled on the reference
+// Pocket core's known-good module -- see that file's header for what differs
+// (chiefly: the sample is now synchronised into the SCLK domain, which it was
+// not before). The ASC is mono, so the same sample feeds both channels.
+i2s i2s_out (
+    .clk_74a     ( clk_74a ),
+    .left_audio  ( mac_audio ),
+    .right_audio ( mac_audio ),
 
-// generate SCLK = 3.072mhz by dividing MCLK by 4
-    reg [1:0]   aud_mclk_divider;
-    wire        audgen_sclk = aud_mclk_divider[1] /* synthesis keep*/;
-always @(posedge audgen_mclk) begin
-    aud_mclk_divider <= aud_mclk_divider + 1'b1;
-end
-
-// Shift out audio as I2S: 32 bit-slots per channel, 16 active bits MSB-first
-// at the start of each slot then 16 dummy bits.
-//
-// The sample is latched at the START of each channel slot so the whole word
-// shifts out coherently -- latching per bit would tear across an ASC update.
-    reg     [4:0]   audgen_lrck_cnt;
-    reg             audgen_lrck;
-    reg             audgen_dac;
-    reg     [15:0]  audgen_shift;
-always @(negedge audgen_sclk) begin
-    audgen_dac <= 1'b0;
-
-    if (audgen_lrck_cnt < 5'd16)
-        audgen_dac <= audgen_shift[15];
-
-    audgen_shift <= (audgen_lrck_cnt == 5'd31) ? mac_audio
-                                               : {audgen_shift[14:0], 1'b0};
-
-    // 48khz * 64
-    audgen_lrck_cnt <= audgen_lrck_cnt + 1'b1;
-    if(audgen_lrck_cnt == 31) begin
-        // switch channels
-        audgen_lrck <= ~audgen_lrck;
-    end
-end
+    .audio_mclk  ( audio_mclk ),
+    .audio_dac   ( audio_dac ),
+    .audio_lrck  ( audio_lrck )
+);
 
 
 ///////////////////////////////////////////////
@@ -863,9 +1066,56 @@ always @(posedge clk_sys) begin
     pram_s <= {pram_s[1:0], opt_pram_tgl};
     nmi_s  <= {nmi_s [1:0], opt_nmi_tgl};
 end
-    wire opt_reset_apply_sys = rst_s [2] ^ rst_s [1];
-    wire opt_reset_pram_sys  = pram_s[2] ^ pram_s[1];
-    wire opt_nmi_sys         = nmi_s [2] ^ nmi_s [1];
+    wire opt_reset_apply_edge = rst_s [2] ^ rst_s [1];
+    wire opt_reset_pram_edge  = pram_s[2] ^ pram_s[1];
+    wire opt_nmi_edge         = nmi_s [2] ^ nmi_s [1];
+
+// ---------------------------------------------------------------------------
+// Stretch the action edges into levels
+// ---------------------------------------------------------------------------
+// mac_lc_pocket samples `reset` INSIDE `if (clk8_en_p)` (see its reset block),
+// and clk8_en_p is high one clk_sys cycle in four. A single-cycle pulse is
+// therefore MISSED 75% OF THE TIME. Observed on hardware as "Reset & Apply
+// does nothing" -- and as general flakiness, since it did occasionally land.
+//
+// 16 clk_sys cycles comfortably covers the 4-cycle enable period with margin.
+// Safe for all three consumers: the machine's reset test is level-sensitive,
+// nmi_pulse is rising-edge-detected in an ungated block, and the pram_zero FSM
+// simply re-arms (addr back to 0) while the level is high and then runs once it
+// drops.
+    reg [4:0] rst_hold = 5'd0, pram_hold = 5'd0, nmi_hold = 5'd0;
+always @(posedge clk_sys) begin
+    if (opt_reset_apply_edge) rst_hold  <= 5'd16; else if (rst_hold)  rst_hold  <= rst_hold  - 5'd1;
+    if (opt_reset_pram_edge)  pram_hold <= 5'd16; else if (pram_hold) pram_hold <= pram_hold - 5'd1;
+    if (opt_nmi_edge)         nmi_hold  <= 5'd16; else if (nmi_hold)  nmi_hold  <= nmi_hold  - 5'd1;
+end
+    wire opt_reset_apply_sys = |rst_hold;
+    wire opt_reset_pram_sys  = |pram_hold;
+    wire opt_nmi_sys         = |nmi_hold;
+
+// opt_test_pattern is a level, not a pulse, so a plain 2FF synchroniser is
+// right here. A multi-bit crossing can show a transient mixed value for one
+// clk_sys cycle while the user changes the setting; for a test pattern that is
+// cosmetically irrelevant. v8_video re-syncs both fields into clk_pix itself.
+    reg [2:0] tp_s1, tp_s2;
+always @(posedge clk_sys) begin
+    tp_s1 <= opt_test_pattern;
+    tp_s2 <= tp_s1;
+end
+
+// ---------------------------------------------------------------------------
+// APF host reset
+// ---------------------------------------------------------------------------
+// reset_n is held LOW by the OS while it loads data slots and writes interact
+// defaults / persisted values into the core, then released with the [0011 Reset
+// Exit] host command (see the interact.json spec). It was declared at import and
+// wired to nothing but status_running, so the machine began running before APF
+// had finished setup -- the likely reason a COLD load needed the ROM reselected
+// by hand while a second boot worked. core-template uses it as an async core
+// reset; here it joins the synchronous reset the machine already takes.
+    reg  [1:0] rstn_s;
+always @(posedge clk_sys) rstn_s <= {rstn_s[0], reset_n};
+    wire reset_n_sys = rstn_s[1];
 
 // ---------------------------------------------------------------------------
 // Download handshake
@@ -896,7 +1146,8 @@ mac_lc_pocket machine (
     .clk_sys        ( clk_sys ),
     // Reset is a LEVEL that also arms the SDRAM re-init pulse inside the
     // machine, so it must be a clean edge, not a held level during downloads.
-    .reset          ( ~pll_core_locked_sys | opt_reset_apply_sys | opt_reset_pram_sys ),
+    .reset          ( ~pll_core_locked_sys | ~reset_n_sys |
+                      opt_reset_apply_sys | opt_reset_pram_sys ),
 
     .ps2_key        ( ps2_key ),
     .ps2_mouse      ( ps2_mouse ),
@@ -931,13 +1182,16 @@ mac_lc_pocket machine (
     .sd_lba         ( sd_lba_u ),
     .sd_rd          ( sd_rd_u ),
     .sd_wr          ( sd_wr_u ),
-    .sd_ack         ( 3'b000 ),
-    .sd_buff_addr   ( 8'd0 ),
-    .sd_buff_dout   ( 16'd0 ),
+    .sd_ack         ( {1'b0, bd_sd_ack} ),
+    .sd_buff_addr   ( bd_sd_buff_addr ),
+    .sd_buff_dout   ( bd_sd_buff_dout ),
     .sd_buff_din    ( sd_buff_din_u ),
-    .sd_buff_wr     ( 1'b0 ),
-    .img_mounted    ( 3'b000 ),
-    .img_size       ( 64'd0 ),
+    .sd_buff_wr     ( bd_sd_buff_wr ),
+    // SCSI_DISABLE_DIAG hides all media from the machine — see the localparam.
+    .img_mounted    ( SCSI_DISABLE_DIAG ? 3'b000 : {1'b0, bd_img_mounted} ),
+    // hps_io semantics: valid on the img_mounted pulse. mac_lc_pocket slices
+    // img_size[40:9] to get 512-byte block count.
+    .img_size       ( {32'd0, bd_img_size} ),
 
     // Simulation observability — unconnected; Quartus strips them.
     .debug_pc(), .debug_opcode(), .debug_fetch_valid(), .debug_data_addr(),
@@ -945,7 +1199,16 @@ mac_lc_pocket machine (
     .debug_ram_oe(), .debug_ram_ds(), .debug_selectRAM(), .debug_selectROM(),
     .debug_selectVIA(), .debug_selectAriel(), .debug_selectPseudoVIA(),
     .debug_selectSCSI(), .debug_selectSCC(), .debug_selectIWM(),
-    .debug_selectASC(), .debug_selectVRAM(), .debug_cpuAddr(),
+    .debug_selectASC(), .debug_selectVRAM(), .debug_cpuAddr(dbg_cpu_addr_full),
+
+    // ---- PRAM (NVRAM) persistence ----
+    .pram_load_addr_i ( bd_pram_load_addr ),
+    .pram_load_data_i ( bd_pram_load_data ),
+    .pram_load_wr_i   ( bd_pram_load_wr ),
+    .pram_loaded_i    ( bd_pram_loaded ),
+    .pram_save_addr_i ( bd_pram_save_addr ),
+    .pram_save_data_o ( mac_pram_save_data ),
+    .pram_save_req_o  ( mac_pram_save_req ),
     .debug_cpuDataIn(), .debug_cpuDataOut(), .debug_cpuRW(),
     .debug_cpuBusControl(), .debug_cpu_as(), .debug_cpu_dtack(),
 
@@ -954,8 +1217,54 @@ mac_lc_pocket machine (
     .serial_rxd     ( 1'b1 ),          // idle mark
 
     .cfg_cpuType    ( 2'b10 ),         // 68020
-    .cfg_memSize    ( opt_mem_size ),  // 0 = 2 MB, 1 = 10 MB
-    .nmi_pulse      ( opt_nmi_sys )
+    // LOCKED to 10 MB (0xE4). The selector still exists in RTL (opt_mem_size,
+    // register 0xF0000000) but is no longer exposed in interact.json and is
+    // not used here.
+    //
+    // Two reasons. Hardware suggests only the 10 MB config boots reliably; and
+    // the variable was `persist: true`, so a setting changed in an earlier
+    // session silently altered a fundamental machine parameter on the next
+    // boot — a manufactured source of run-to-run variation while we are
+    // chasing intermittency.
+    //
+    // Caveat worth remembering: 2 MB is the config the Verilator boot oracle
+    // actually validates (sim.v hardwires 8'h24); the 10 MB SIMM path has
+    // never been exercised in simulation. To restore the choice, put the
+    // Memory variable back in interact.json and wire opt_mem_size here.
+    // 0 = 2 MB (configRAMSize 8'h24), 1 = 10 MB (8'hE4).
+    //
+    // Set to 2 MB on 2026-08-10 after the ASC was fixed and the machine began
+    // playing the CHIMES OF DEATH -- a 68k POST failure, most commonly the RAM
+    // test. 10 MB had been locked in on the belief that only it booted, but the
+    // Memory menu item defaulted to 2 MB, so the earlier successful boots to
+    // the "?" disk screen were probably 2 MB all along.
+    //
+    // 2 MB is also the only config with verification behind it: sim.v hardwires
+    // 8'h24 and the Verilator boot oracle passes on it, while PORT_STATUS
+    // records that the 10 MB SIMM path has NEVER been exercised in simulation.
+    //
+    // If 2 MB silences the death chimes, the 10 MB path has a real bug -- most
+    // likely the V8 bank layout implied by 8'hE4 not matching what pocket_sdram
+    // actually provides (a 16 MB subset), so the ROM's RAM test probes memory
+    // that aliases or is not there.
+    // 0 = 2 MB (configRAMSize 8'h24), 1 = 10 MB (8'hE4). Selectable via the
+    // Memory menu item, and `persist` so a 10 MB choice survives a core load.
+    //
+    // Sampled while the machine is held in reset, so pair any change with
+    // Reset & Apply.
+    //
+    // Evidence so far, for whoever debugs boot next: 2 MB produced a HAPPY
+    // CHIME on hardware; 10 MB produced the CHIMES OF DEATH (a 68k POST
+    // failure, usually the RAM test). 2 MB is also the only config the
+    // Verilator boot oracle validates -- sim.v hardwires 8'h24 -- while
+    // PORT_STATUS records the 10 MB SIMM path as never exercised in
+    // simulation. If boot goes wrong, try 2 MB before suspecting anything else.
+    .cfg_memSize    ( opt_mem_size ),
+    .nmi_pulse      ( opt_nmi_sys ),
+    // Same pulse also stays in .reset above: the zeroing takes ~8 us and the
+    // reset stretch is ~2 ms, so the Egret is held off until PRAM is clear.
+    .pram_reset     ( opt_reset_pram_sys ),
+    .test_pattern   ( tp_s2 )
 );
 
 assign mac_audio = mac_audio_l;        // ASC is mono

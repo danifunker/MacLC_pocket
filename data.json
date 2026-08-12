@@ -5,9 +5,12 @@
             {
                 "name": "ROM",
                 "id": "200",
-                "required": false,
+                "required": true,
                 "parameters": 1,
-                "extensions": ["rom"],
+                "filename": "boot0.rom",
+                "extensions": [
+                    "rom"
+                ],
                 "size_maximum": 524288,
                 "address": "0x10000000"
             },
@@ -15,11 +18,37 @@
                 "name": "Floppy",
                 "id": "210",
                 "required": false,
+                "parameters": 1,
+                "extensions": [
+                    "dsk",
+                    "img"
+                ],
+                "size_maximum": 1474560,
+                "deferload": true
+            },
+            {
+                "name": "Hard Disk 1",
+                "id": "310",
+                "required": false,
                 "deferload": true,
                 "parameters": 1,
-                "extensions": ["dsk", "img"],
-                "size_maximum": 1474560,
-                "address": "0x20000000"
+                "extensions": [
+                    "hda",
+                    "img",
+                    "vhd"
+                ]
+            },
+            {
+                "name": "Hard Disk 2",
+                "id": "311",
+                "required": false,
+                "deferload": true,
+                "parameters": 1,
+                "extensions": [
+                    "hda",
+                    "img",
+                    "vhd"
+                ]
             }
         ]
     }

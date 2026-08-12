@@ -1,109 +1,103 @@
-# Rapid whole-boot probe sampler: waits for the MacLC core to appear on the
-# JTAG chain (i.e. survives being started while the menu core is up), then
-# samples the key probes in a tight loop inside ONE quartus_stp session
-# (~5 samples/sec) for the given duration.
+# Rapidly resample the cold-boot probes and report what is MOVING.
+# A single read cannot tell a stalled machine from a spinning one; this can.
 #
-#   quartus_stp_tcl -t scripts/boot_watch.tcl [seconds] > scratch/boot_watch_log.txt
+#   quartus_stp_tcl -t scripts/boot_watch.tcl
 #
-# Output: one line per sample:
-#   T<ms> PACT=h PIFA=h PSCS=h PSC3=h PSNC=h PSWL=h PSC6=h PVID=h PASC=h
-# Decode offline (layouts in rtl/dbg_probes.sv / scripts/cpu_state.tcl).
-
-set dur 75
-if {$argc >= 1} { set dur [lindex $argv 0] }
-
-# Optional 2nd arg: side-channel log file. Quartus block-buffers stdout under
-# redirection (4 KB chunks, flush stdout does NOT reach the OS), so live
-# monitoring needs a plain Tcl file channel flushed per line.
-set side ""
-if {$argc >= 2} { set side [open [lindex $argv 1] w] }
-proc emit {s} {
-    global side
-    puts $s
-    flush stdout
-    if {$side ne ""} { puts $side $s; flush $side }
-}
+# Prints one line per distinct BOOT value seen, plus counter deltas, so a
+# frozen machine shows exactly one line and a looping one shows several.
 
 set hw ""
-foreach h [get_hardware_names] {
-    if {[string match "DE-SoC*" $h]} { set hw $h; break }
-}
-if {$hw eq ""} {
-    foreach h [get_hardware_names] {
-        if {![catch {get_device_names -hardware_name $h} devs]} {
-            foreach d $devs { if {[string match "*5CSE*" $d]} { set hw $h; break } }
-        }
-        if {$hw ne ""} break
-    }
-}
+foreach h [get_hardware_names] { if {[string match "USB-Blaster*" $h]} { set hw $h; break } }
+if {$hw eq ""} { foreach h [get_hardware_names] { set hw $h; break } }
+if {$hw eq ""} { puts "NO CABLE"; exit 1 }
 set dev ""
-if {$hw ne ""} {
-    foreach d [get_device_names -hardware_name $hw] { if {[string match "*5CSE*" $d]} { set dev $d; break } }
-}
-emit "hw=$hw dev=$dev"
-if {$dev eq ""} { emit "NO DEVICE"; exit 1 }
+foreach d [get_device_names -hardware_name $hw] { if {[string match "*5CE*" $d]} { set dev $d; break } }
+if {$dev eq ""} { puts "NO DEVICE"; exit 1 }
 
-# Wait (up to 10 min) for a bitstream with ISSP probes — i.e. the MacLC core.
-emit "WAITING for MacLC core (probes) on the chain..."
-set info ""
-for {set w 0} {$w < 1200} {incr w} {
-    if {![catch {set info [get_insystem_source_probe_instance_info -device_name $dev -hardware_name $hw]}] && [llength $info] > 0} break
-    after 500
-}
-if {$info eq ""} { emit "TIMEOUT waiting for probes"; exit 1 }
-emit "CORE UP — sampling for $dur s"
-
+set info [get_insystem_source_probe_instance_info -device_name $dev -hardware_name $hw]
 array set idx {}
-set i 0
-foreach inst $info { set idx([lindex $inst 3]) $i; incr i }
+foreach inst $info { set idx([lindex $inst 3]) [lindex $inst 0] }
+start_insystem_source_probe -device_name $dev -hardware_name $hw
 
 proc rd {name} {
-    global idx dev hw
-    if {![info exists idx($name)]} { return 0 }
-    if {[catch {set v [read_probe_data -instance_index $idx($name) -value_in_hex]}]} { return -1 }
-    scan $v %x n
+    global idx
+    if {![info exists idx($name)]} { return -1 }
+    scan [read_probe_data -instance_index $idx($name) -value_in_hex] %x n
     return $n
 }
 
-start_insystem_source_probe -device_name $dev -hardware_name $hw
-set t0 [clock milliseconds]
-set dead 0
-while {[clock milliseconds] - $t0 < $dur * 1000} {
-    set line [format "T%06d" [expr {[clock milliseconds] - $t0}]]
-    set allff 1
-    foreach p {PACT PIFA PSCS PSC2 PSC3 PSCW PSNC PSWL PSC6 PVID PSTA PADR PEXC PEX3} {
-        set v [rd $p]
-        # Only probes that exist in this bitstream may veto the all-FF
-        # (reconfig) detector — a missing probe reads as a constant 0.
-        if {[info exists idx($p)] && $v != 0xFFFFFFFF && $v != -1} { set allff 0 }
-        append line [format " %s=%08X" $p $v]
-    }
-    emit $line
-    if {$allff} {
-        incr dead
-        if {$dead >= 20} {
-            # FPGA reconfigured under us (core reload): the ISSP session is
-            # stale and will return all-ones forever. Re-attach: close the
-            # session, wait for probes to reappear, re-enumerate, resume.
-            emit "RECONFIG_DETECTED — re-attaching..."
-            catch { end_insystem_source_probe }
-            set info ""
-            while {[clock milliseconds] - $t0 < $dur * 1000} {
-                if {![catch {set info [get_insystem_source_probe_instance_info \
-                        -device_name $dev -hardware_name $hw]}] && [llength $info] > 0} break
-                after 300
-            }
-            if {$info eq ""} break
-            array unset idx
-            set i 0
-            foreach inst $info { set idx([lindex $inst 3]) $i; incr i }
-            start_insystem_source_probe -device_name $dev -hardware_name $hw
-            emit "REATTACHED"
-            set dead 0
-        }
-    } else {
-        set dead 0
+set N 40
+array set seen {}
+set order {}
+array set aseen {}
+set aorder {}
+set first_romc [rd ROMC]
+set first_brgc [rd BRGC]
+set first_popc [rd POPC]
+set first_cpuc [rd CPUC]
+
+for {set i 0} {$i < $N} {incr i} {
+    set b [rd BOOT]
+    if {![info exists seen($b)]} { set seen($b) 0; lappend order $b }
+    incr seen($b)
+    set a [rd CPUA]
+    if {$a >= 0} {
+        set pc [expr {$a & 0xFFFFFF}]
+        if {![info exists aseen($pc)]} { set aseen($pc) 0; lappend aorder $pc }
+        incr aseen($pc)
     }
 }
-catch { end_insystem_source_probe }
-emit "DONE"
+set last_cpuc [rd CPUC]
+
+# ---- CPU liveness: the question a frozen BOOT bus cannot answer -----------
+if {$first_cpuc >= 0} {
+    set dcyc [expr {$last_cpuc - $first_cpuc}]
+    puts ""
+    puts "=============== CPU LIVENESS ==============="
+    puts [format "  bus cycles: %d -> %d   (delta %d)" $first_cpuc $last_cpuc $dcyc]
+    if {$dcyc == 0} {
+        puts "  VERDICT: CPU IS STOPPED. Not a poll loop -- no bus cycles at all."
+        puts "           Either halted (double bus fault) or held in reset."
+        set a [rd CPUA]
+        puts [format "           last addr=0x%06X  AS=%d DTACK=%d RW=%d BERR=%d rst_n=%d overlay=%d" \
+            [expr {$a & 0xFFFFFF}] [expr {($a>>28)&1}] [expr {($a>>29)&1}] \
+            [expr {($a>>30)&1}] [expr {($a>>25)&1}] [expr {($a>>27)&1}] [expr {($a>>31)&1}]]
+    } else {
+        puts "  VERDICT: CPU IS EXECUTING. Addresses touched while sampling:"
+        set shown 0
+        foreach pc $aorder {
+            if {$shown >= 12} { puts "    ... and [expr {[llength $aorder]-12}] more"; break }
+            puts [format "    0x%06X   x%d" $pc $aseen($pc)]
+            incr shown
+        }
+        if {[llength $aorder] <= 4} {
+            puts "  -> a very tight address set = the polling loop we are stuck in."
+        }
+    }
+}
+set last_romc [rd ROMC]
+set last_brgc [rd BRGC]
+set last_popc [rd POPC]
+
+puts ""
+puts "sampled BOOT $N times -> [llength $order] distinct value(s)"
+puts ""
+foreach b $order {
+    puts [format "  0x%08X  seen %2d/%d   overlay=%d n_reset=%d hs_done=%d treq=%d tip=%d back=%d rst680=%d | SRact=%d cb1=%d cb2=%d SR=0x%02X cnt=%d" \
+        $b $seen($b) $N \
+        [expr {($b>>27)&1}] [expr {($b>>26)&1}] [expr {($b>>19)&1}] \
+        [expr {($b>>20)&1}] [expr {($b>>21)&1}] [expr {($b>>22)&1}] [expr {($b>>23)&1}] \
+        [expr {($b>>13)&1}] [expr {($b>>15)&1}] [expr {($b>>16)&1}] \
+        [expr {($b>>3)&0xFF}] [expr {$b&0x7}]]
+}
+puts ""
+puts [format "  ROMC %d -> %d   (delta %d)" $first_romc $last_romc [expr {$last_romc-$first_romc}]]
+puts [format "  BRGC %d -> %d   (delta %d)" $first_brgc $last_brgc [expr {$last_brgc-$first_brgc}]]
+puts [format "  POPC %d -> %d   (delta %d)" $first_popc $last_popc [expr {$last_popc-$first_popc}]]
+puts ""
+if {[llength $order] == 1} {
+    puts "  VERDICT: FROZEN. Nothing in the boot bus is moving at all."
+} else {
+    puts "  VERDICT: MOVING. The machine is executing/cycling, not hung on one state."
+}
+end_insystem_source_probe

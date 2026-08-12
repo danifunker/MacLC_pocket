@@ -53,7 +53,32 @@ done
 [ -f dist/icon.bin ] && cp dist/icon.bin "$DEST/" || true
 
 # Bit-reverse every byte (see the header note — this is what _r means).
-python3 - "$RBF" "$DEST/bitstream.rbf_r" <<'PY'
+# Git Bash on Windows often has `python` but not `python3`; WSL/Linux usually
+# the reverse. Pick whichever exists so this runs unchanged on both.
+#
+# ★ Must TEST each candidate, not just look it up. Windows ships App Execution
+# Alias stubs at %LOCALAPPDATA%\Microsoft\WindowsApps\python{,3}.exe that exist
+# on PATH, satisfy `command -v`, and do nothing but open the Microsoft Store.
+# On a machine with real Python installed, `command -v python3` can still hit
+# the stub while `python` resolves correctly -- so the old python3-first pick
+# selected the stub and the bit-reversal produced nothing. A silently missing
+# or stale bitstream.rbf_r is exactly the failure this script exists to avoid.
+PY_BIN=""
+for cand in python3 python py; do
+    p="$(command -v "$cand" 2>/dev/null)" || continue
+    [ -n "$p" ] || continue
+    "$p" -c 'import sys; sys.exit(0)' >/dev/null 2>&1 || continue
+    PY_BIN="$p"
+    break
+done
+if [ -z "$PY_BIN" ]; then
+    echo "ERROR: no WORKING python3/python on PATH — needed to bit-reverse the RBF."
+    echo "       (Candidates found but non-functional are usually the Windows"
+    echo "        Store alias stubs in %LOCALAPPDATA%\\Microsoft\\WindowsApps.)"
+    exit 1
+fi
+
+"$PY_BIN" - "$RBF" "$DEST/bitstream.rbf_r" <<'PY'
 import sys
 src, dst = sys.argv[1], sys.argv[2]
 table = bytes(int(format(b, '08b')[::-1], 2) for b in range(256))

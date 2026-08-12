@@ -64,6 +64,14 @@ module mac_lc_pocket
 	input         clk_sys,
 	input         reset,
 
+	// ---- Pocket additions -------------------------------------------------
+	// Zero the Egret PRAM, then let the machine reboot. See the FSM below.
+	input         pram_reset,
+	// Built-in video test pattern: [2] = bypass VRAM, [1:0] = pattern select.
+	// Bring-up witness — proves the video contract and the interact write path
+	// independently of whether the Mac itself is running.
+	input  [2:0]  test_pattern,
+
 	// PS2 keyboard/mouse
 	input [10:0]  ps2_key,
 	input [24:0]  ps2_mouse,
@@ -133,6 +141,15 @@ module mac_lc_pocket
 	output        debug_selectASC,
 	output        debug_selectVRAM,
 	output [31:0] debug_cpuAddr,
+
+	// ---- PRAM (NVRAM) persistence, driven by apf_blockdev -----------------
+	input  [7:0]  pram_load_addr_i,
+	input  [7:0]  pram_load_data_i,
+	input         pram_load_wr_i,
+	input         pram_loaded_i,      // load resolved (ok or failed) -> may boot
+	input  [7:0]  pram_save_addr_i,
+	output [7:0]  pram_save_data_o,
+	output        pram_save_req_o,
 	output [15:0] debug_cpuDataIn,    // Data from CPU to peripherals
 	output [15:0] debug_cpuDataOut,   // Data from peripherals to CPU
 	output        debug_cpuRW,        // 1=read, 0=write
@@ -146,14 +163,16 @@ module mac_lc_pocket
 
 	// Machine configuration inputs
 	input  [1:0]  cfg_cpuType,      // Unused, kept for sim_main.cpp compatibility
-	input         cfg_memSize,      // 0=1MB, 1=4MB
+	input         cfg_memSize,      // 0 = 2 MB (0x24), 1 = 10 MB (0xE4)
 	input         nmi_pulse         // --nmi-at-frame: pulse a Level-7 NMI (MacsBug test)
 );
 
 	localparam SCSI_DEVS = 2;
 
 	// Configuration
-	wire      status_mem = cfg_memSize;      // 0=1MB, 1=4MB
+	// 0 = 2 MB, 1 = 10 MB. The old "0=1MB, 1=4MB" comment here was inherited
+	// text and wrong — see configRAMSize below for what is actually driven.
+	wire      status_mem = cfg_memSize;
 	localparam [1:0] status_cpu = 2'b10;     // 68020
 	// Mac LC always runs at C15M (~15.67 MHz) - use 16 MHz clock enables
 
@@ -181,6 +200,146 @@ module mac_lc_pocket
 	reg rom_loaded = 1'b0;
 	always @(posedge clk_sys) if (dio_download && dio_index == 8'd0) rom_loaded <= 1'b1;
 
+	// ---- "Reset PRAM": zero the Egret's pram[] --------------------------------
+	// MiSTer's "Reset PRAM & Core" (R6) works by writing zeros through
+	// egret_wrapper's pram_load_* port and rebooting. This port was tied off at
+	// import (pram_load_wr=0, pram_ready=1), so the menu action did nothing but
+	// an ordinary reset.
+	//
+	// egret_wrapper requires pram_load_wr to fire BEFORE pram_ready rises (see
+	// its comment at line ~146 and the gate at ~767), so pram_ready drops for the
+	// duration of the zeroing. 256 writes at clk_sys is ~8 us, far inside the
+	// ~2 ms n_reset stretch that the same button also triggers, so the Egret is
+	// held in reset throughout and re-copies the zeroed PRAM on release.
+	wire [7:0] pram_load_addr;
+	wire [7:0] pram_load_data;
+	wire       pram_load_wr;
+	wire [7:0] pram_save_data_w;
+	wire       pram_wr_stb_w;
+	assign pram_save_data_o = pram_save_data_w;
+
+	reg       pram_zero_busy = 1'b0;
+	reg [7:0] pram_zero_addr = 8'd0;
+	always @(posedge clk_sys) begin
+		if (pram_reset) begin
+			pram_zero_busy <= 1'b1;
+			pram_zero_addr <= 8'd0;
+		end else if (pram_zero_busy) begin
+			// pram_load_wr is pram_zero_busy itself, so the byte at
+			// pram_zero_addr is written on this very cycle; advance after.
+			if (pram_zero_addr == 8'd255) pram_zero_busy <= 1'b0;
+			pram_zero_addr <= pram_zero_addr + 8'd1;
+		end
+	end
+
+	// ---- PRAM (NVRAM) persistence -----------------------------------------
+	// Two writers into the Egret's pram[]: the "Reset PRAM" zeroing above, and
+	// the save-file restore driven by apf_blockdev. They are mutually exclusive
+	// in practice (the restore runs once at power-up, the zeroing only on an
+	// explicit menu action, which also resets the machine), so a simple
+	// priority mux is enough -- and zeroing wins, because the user asked for it.
+	//
+	// pram_ready must not rise until whichever writer is active has finished:
+	// egret_wrapper copies pram[] into the HC05's working RAM exactly once on
+	// that signal and holds the 68020 in reset until the copy completes.
+	// pram_loaded comes from apf_blockdev and is raised on load success OR
+	// failure, so a missing save file can never wedge the boot.
+	assign pram_load_addr = pram_zero_busy ? pram_zero_addr : pram_load_addr_i;
+	assign pram_load_data = pram_zero_busy ? 8'h00          : pram_load_data_i;
+	assign pram_load_wr   = pram_zero_busy | pram_load_wr_i;
+	// ★ READY BACKSTOP — do not remove. 2026-08-11: the first cut of this made
+	// pram_ready depend ONLY on pram_loaded_i, and the PRAM load never
+	// resolved on hardware, so pram_ready never rose, egret_wrapper never set
+	// pram_loaded, reset_680x0 stayed asserted and the 68020 executed exactly
+	// ONE bus cycle before sitting in reset for ever. The probe read
+	// `_cpuReset=0, cycles=1` -- a completely dead machine, caused by an
+	// OPTIONAL save file.
+	//
+	// MacLC.sv.reference:352 has the same guard for the same reason
+	// (`pram_rdy_cnt >= 200_000_000` there). The rule: the boot may WAIT for
+	// NVRAM, but must never DEPEND on it. ~1 s at 32.5 MHz is far longer than
+	// a 256-byte target_dataslot_read needs, including apf_blockdev's own
+	// ~226 ms command timeout and a retry.
+	reg [25:0] pram_rdy_cnt = 26'd0;
+	reg        pram_rdy_to  = 1'b0;
+	always @(posedge clk_sys) begin
+		if (pram_loaded_i || pram_rdy_to) pram_rdy_cnt <= 26'd0;
+		else if (pram_rdy_cnt == 26'd32_500_000) pram_rdy_to <= 1'b1;
+		else pram_rdy_cnt <= pram_rdy_cnt + 26'd1;
+	end
+	wire   pram_ready_r   = (pram_loaded_i | pram_rdy_to) & ~pram_zero_busy;
+
+	// Dirty tracking: the Egret firmware strobes pram_wr_stb on every PRAM byte
+	// it writes. Flush on a quiet period rather than per byte -- the guest
+	// rewrites PRAM in bursts, and each save is a whole-file 256-byte round
+	// trip through the OS.
+	reg [23:0] pram_idle_ctr = 24'd0;
+	reg        pram_dirty    = 1'b0;
+	reg        pram_save_req_r = 1'b0;
+	always @(posedge clk_sys) begin
+		pram_save_req_r <= 1'b0;
+		if (pram_wr_stb_w) begin
+			pram_dirty    <= 1'b1;
+			pram_idle_ctr <= 24'd0;               // restart the quiet timer
+		end else if (pram_dirty) begin
+			// ~0.5 s of no PRAM writes at 32.5 MHz, then flush once.
+			if (pram_idle_ctr == 24'd16_250_000) begin
+				pram_save_req_r <= 1'b1;
+				pram_dirty      <= 1'b0;
+				pram_idle_ctr   <= 24'd0;
+			end else begin
+				pram_idle_ctr <= pram_idle_ctr + 24'd1;
+			end
+		end
+	end
+	assign pram_save_req_o = pram_save_req_r;
+
+	// ---- COLD-BOOT RE-RESET (2026-08-11) ----------------------------------
+	// See docs/boot_problems.md §1. A cold core load does not boot; reloading
+	// boot0.rom two or three times does -- and the ROM in SDRAM is
+	// BYTE-IDENTICAL either way (proved with rom_sum / rom_axsum, which fold
+	// the word index in and so catch addressing errors too). So the ROM is not
+	// the problem; the machine's state around its FIRST reset release after a
+	// fresh download is.
+	//
+	// What a manual reload actually does is assert
+	// (dio_download && dio_index==0), which drives n_reset low and then
+	// releases it through the whole 8 ms + 129 ms sequence -- a COMPLETE
+	// machine reset with the ROM already resident. The cold path releases
+	// reset only once, immediately after the ROM lands. This reproduces the
+	// reload automatically: exactly once, after the first ROM download
+	// completes and the machine has had time to start, assert one more reset.
+	//
+	// If this boots reliably it is a workaround, NOT the root cause -- the real
+	// question stays "what is different about the first release". Keep hunting.
+	localparam [22:0] COLD_RST_DELAY = 23'd4_062_500;   // ~500 ms at 8.125 MHz
+	reg        cold_rst_done = 1'b0;
+	reg [22:0] cold_rst_dly  = 23'd0;
+	reg [4:0]  cold_rst_hold = 5'd0;
+	reg        rom_dl_d      = 1'b0;
+	wire       rom_dl        = dio_download && (dio_index == 8'd0);
+	wire       cold_rst      = (cold_rst_hold != 5'd0);
+
+	always @(posedge clk_sys) if (clk8_en_p) begin
+		rom_dl_d <= rom_dl;
+		// Arm on the FALLING edge of the ROM download, once ever.
+		if (rom_dl_d && !rom_dl && !cold_rst_done) begin
+			cold_rst_dly <= 23'd1;
+		end else if (cold_rst_dly != 23'd0) begin
+			if (cold_rst_dly == COLD_RST_DELAY) begin
+				// Hold for 31 clk8 ticks: the reset block below samples only
+				// on clk8_en_p, so a single-cycle pulse would be missed (see
+				// RESUME.md -- this bit us before with the interact actions).
+				cold_rst_hold <= 5'd31;
+				cold_rst_done <= 1'b1;
+				cold_rst_dly  <= 23'd0;
+			end else begin
+				cold_rst_dly <= cold_rst_dly + 23'd1;
+			end
+		end
+		if (cold_rst_hold != 5'd0) cold_rst_hold <= cold_rst_hold - 5'd1;
+	end
+
 	// Reset logic
 	// NOTE: Do NOT include _cpuReset_o here! The RESET instruction drives
 	// reset_n low to reset peripherals, but should NOT reset the CPU itself.
@@ -201,13 +360,26 @@ module mac_lc_pocket
 			end
 
 			// Gate on the ROM download (index 0) ONLY, not any download.
-			// Floppy images stream into SDRAM on the separate dioBusControl
-			// slot while the CPU keeps running, so mounting one must not
-			// reboot the machine — hot-insert, like real hardware.
+			// Mounting a floppy must NOT reboot the machine — hot-insert, like
+			// real hardware, and the MiSTer media-change logic (CSTIN/DiskChg,
+			// see CLAUDE.md) depends on it.
+			//
+			// A reset-on-any-download workaround for the Pocket floppy hang was
+			// tried here and removed: it cost hot-insert. The hang is instead
+			// addressed by making the floppy a `deferload` slot that
+			// apf_blockdev copies into SDRAM at a pace the CORE sets, so
+			// nothing is ever pushed at the bus faster than it can absorb.
 			// !rom_loaded extends the hold from FPGA config until that first
 			// ROM download begins, closing the window in which the 68k would
 			// otherwise execute whatever the PREVIOUS core left in SDRAM at
 			// the ROM window.
+			// ★ cold_rst REMOVED from this term 2026-08-11. The automatic
+			// post-download re-reset was added to imitate the user's manual
+			// "reload the ROM two or three times" workaround. It DID change
+			// behaviour (the overlay started clearing) but it was in flight
+			// when that workaround stopped working, so it is backed out until
+			// the regression is bisected. The generator above is left in place
+			// and simply drives nothing; re-add `cold_rst ||` here to retry.
 			if(~pll_locked || !rom_loaded || reset ||
 			   (dio_download && dio_index == 8'd0)) begin
 				rst_cnt <= '1;
@@ -270,12 +442,56 @@ module mac_lc_pocket
 	// Serial Ports - connect SCC Channel A to sim via serial_txd/serial_rxd ports
 	wire serialOut;              // SCC Channel A TX (driven by SCC)
 	wire serialIn = serial_rxd;  // SCC Channel A RX (driven by sim)
+	// MiSTer: `wire serialCTS = 1'b1; // Idle/deasserted when no serial device
+	// connected` (MacLC.sv.reference:681). This was 1'b0 here, i.e. the SCC was
+	// told a modem was asserting CTS on a port with nothing plugged into it.
+	// Restored to parity 2026-08-11.
+	// ★ 2026-08-12 baseline-anchor build: back to 0 (the golden build's value)
+	// as part of reproducing the exact last-known-working configuration. The
+	// wiring into scc.cts is verified identical to MiSTer's, so 1'b1 SHOULD be
+	// right — restore it as its own single-variable step once the golden
+	// baseline is re-proven on hardware.
 	wire serialCTS = 1'b0;
 	wire serialRTS;
 	assign serial_txd = serialOut;
 
 	// V8 Video system wires
 	wire v8_hsync, v8_vsync, v8_hblank, v8_vblank, v8_de;
+
+	// ---- clk_pix -> clk_sys: 2FF sync for the guest-facing blanking levels --
+	// ★ PORTED FROM MacLC.sv.reference:632-639 on 2026-08-11. Upstream syncs
+	// these and consumes ONLY the _s versions (its line 1181 comment reads
+	// "2FF-synced from the clk_vid scanout domain"). This fork wired the RAW
+	// signals straight across, so v8_vblank -- which is generated in the
+	// clk_pix domain (15.667 MHz) -- drove pseudovia's VBlank INTERRUPT and the
+	// VIA blanking inputs, both clocked at clk_sys (32.5 MHz), with no
+	// synchronizer at all. An unsynchronised level feeding an interrupt is a
+	// metastability hazard whose outcome varies per power-up, and the Mac's
+	// early boot is paced by the VBlank tick.
+	//
+	// The Pocket makes this WORSE than MiSTer, not better: the clk_pix/clk_sys
+	// ratio here (15.667 / 32.5) differs from MiSTer's clk_vid/clk_sys, so the
+	// sampling relationship this fork runs was never the one upstream tested.
+	reg vbl_meta = 1'b0, v8_vblank_s = 1'b0;
+	reg hbl_meta = 1'b0, v8_hblank_s = 1'b0;
+	always @(posedge clk_sys) begin
+		vbl_meta    <= v8_vblank;
+		v8_vblank_s <= vbl_meta;
+		hbl_meta    <= v8_hblank;
+		v8_hblank_s <= hbl_meta;
+	end
+
+	// ---- clk_sys -> clk_pix: video-domain reset ----------------------------
+	// ★ Also from MacLC.sv.reference:623-629, where the video module is reset
+	// by vidrst_s, a 2FF sync IN THE VIDEO DOMAIN. We passed raw ~n_reset (a
+	// clk_sys signal) directly into a clk_pix module. Upstream additionally
+	// folds in ~pll_video_locked and pix_quiet; neither exists on the Pocket
+	// (one PLL, no runtime retarget), so the reset term alone is synced here.
+	reg vidrst_meta = 1'b1, vidrst_s = 1'b1;
+	always @(posedge clk_pix) begin
+		vidrst_meta <= ~n_reset;
+		vidrst_s    <= vidrst_meta;
+	end
 	wire [7:0] v8_vga_r, v8_vga_g, v8_vga_b;
 	wire [7:0] ariel_pixel_addr;
 	wire [23:0] ariel_palette_data;
@@ -445,7 +661,23 @@ module mac_lc_pocket
 	// empty-slot mechanism) — TG68 berr is not handler-recoverable for
 	// normal cycles. Keep both tops identical (MacLC.sv has the rationale).
 	// Pseudo-DMA stall timeout → BERR — mirror of MacLC.sv (rationale there).
-	localparam SDMA_TIMEOUT = 23'd8125000;  // ~250 ms @ 32.5 MHz
+	// ★ 2026-08-11: was 23'd8125000 (~250 ms), inherited from MacLC.sv. That
+	// value is safe upstream because DREQ arrives normally there and the
+	// timeout essentially never fires. Here it fires on EVERY pseudo-DMA
+	// access, and each one costs a quarter of a second: measured on hardware
+	// the CPU advanced ~487 bus cycles per ~1.5 s, roughly 6000x slower than a
+	// healthy machine. It was not hung -- it was crawling, which is why video
+	// lines crept onto the screen.
+	//
+	// A real Mac's bus timeout is MICROSECONDS, not milliseconds, so 250 us is
+	// the more hardware-faithful number as well as the usable one. It is still
+	// far longer than any legitimate DREQ latency: apf_blockdev fetches a whole
+	// 512-byte sector into the target's buffer BEFORE the data phase begins, so
+	// per-byte DREQ is served from that buffer and never waits on the OS.
+	//
+	// This does NOT fix the root cause (scsiDREQ never asserting); it stops an
+	// unanswered access from costing 250 ms. Keep hunting the DREQ.
+	localparam SDMA_TIMEOUT = 23'd8125;     // ~250 us @ 32.5 MHz (was ~250 ms)
 	reg [22:0] sdma_stall_ctr = 23'd0;
 	reg        sdma_berr      = 1'b0;
 	always @(posedge clk_sys) begin
@@ -468,6 +700,40 @@ module mac_lc_pocket
 	end
 
 	wire cpu_berr = (fc7_berr && !_cpuAS) || sdma_berr;
+
+	// ---- VPA peripheral read: register the data one clk_sys stage ----------
+	// ★ PORTED FROM MacLC.sv.reference:985-999 on 2026-08-11. This fix existed
+	// upstream and mac_lc_pocket dropped it at import -- neither vpa_periph_read
+	// nor periph_din_reg existed here at all, and .din was just
+	// (slot_space ? 16'hFFFF : dataControllerDataOut).
+	//
+	// Upstream's rationale, verbatim in spirit: the peripheral read mux is the
+	// deepest combinational cone in the design -- scsi.v phase reg -> bsy ->
+	// |target_bsy (cross-module) -> wide OR -> CSR (ncr5380.sv) -> long
+	// inter-module route -> the 7-way cpuDataOut mux (dataController_top.sv) ->
+	// CPU din. SCSI CSR bit6 (scsi_bsy) is the worst path; bit1 (scsi_sel) is a
+	// shallow local ICR bit. So the guest read bit1 correctly and bit6
+	// incorrectly depending on placement, which upstream named "the dice-roll
+	// boot" -- boots that succeed or fail per fit and per power-up.
+	//
+	// That is precisely the symptom this fork has, and it also explains why the
+	// failure looked SCSI-shaped (POST reads the CSR) while surviving a
+	// perfectly intact ROM load.
+	//
+	// The VPA window is >= 5 clk_sys cycles from address/select settle to the
+	// data sample, so the extra register stage is absorbed completely: no
+	// DTACK/VMA change is needed and the memory (DTACK) read path is untouched.
+	// periph_din_reg is CONSUMED only during VPA reads, when the CPU holds its
+	// combinational input stable. core_constraints.sdc carries the matching 2x
+	// multicycle so STA reports the real E-paced margin instead of
+	// over-constraining this to one 30.8 ns period.
+	wire vpa_periph_read = !fc7_iack && !fc7_berr && !slot_space && !_cpuAS &&
+	                       (cpuAddr[23:21] == 3'b111) && !selectVRAM && !selectSCSIDMA;
+	reg [15:0] periph_din_reg;
+	always @(posedge clk_sys) periph_din_reg <= dataControllerDataOut;
+	wire [15:0] cpu_din_muxed = slot_space      ? 16'hFFFF :
+	                            vpa_periph_read ? periph_din_reg :
+	                                              dataControllerDataOut;
 `ifdef SIMULATION
 	reg _cpuAS_d;
 	always @(posedge clk_sys) _cpuAS_d <= _cpuAS;
@@ -509,7 +775,7 @@ module mac_lc_pocket
 
 		.ipl        ( _cpuIPL ),
 		.berr       ( cpu_berr ),
-		.din        ( slot_space ? 16'hFFFF : dataControllerDataOut ),
+		.din        ( cpu_din_muxed ),
 		.dout       ( tg68_dout ),
 		.longword   ( tg68_longword ),
 		.addr       ( tg68_a ),
@@ -689,7 +955,7 @@ module mac_lc_pocket
 		.data_out(pseudovia_dout),
 		.we(selectPseudoVIA && !_cpuRW && cpuBusControl),
 		.req(selectPseudoVIA && cpuBusControl),
-		.vblank_irq(v8_vblank),
+		.vblank_irq(v8_vblank_s),
 		.slot_irq(pds_slot_irq),
 		.asc_irq(asc_irq),
 		// SCSI flags RE-TIED-OFF (2026-06-12 evening) — matches MacLC.sv
@@ -747,10 +1013,16 @@ module mac_lc_pocket
 		.clk_sys(clk_pix),
 		.clk8_en_p(clk8_en_p),
 		.pix_ce(1'b1),
-		.reset(~n_reset),
+		// MacLC.sv.reference:1663 uses vidrst_s here, not raw ~n_reset — the
+		// module is clocked by clk_pix and n_reset is a clk_sys signal.
+		.reset(vidrst_s),
 
 		.video_mode(v8_video_mode),
 		.monitor_id(v8_monitor_id),
+
+		// Were left unconnected at import. v8_video 2FF-syncs both internally.
+		.test_bypass_vram(test_pattern[2]),
+		.test_pattern_sel(test_pattern[1:0]),
 
 		.hsync(v8_hsync),
 		.vsync(v8_vsync),
@@ -773,9 +1045,12 @@ module mac_lc_pocket
 	// On-chip framebuffer (BRAM). Video reads port B (Phase 2); CPU VRAM writes
 	// are mirrored into port A. Single clk_sys domain => coherent. Must match MacLC.sv.
 	wire [10:0] v8_words_per_line;
-	wire [17:0] vram_bram_waddr;
+	// 17 bits: addrController_top.vram_waddr and maclc_v8_video.vram_raddr are
+	// both [16:0] since the video cut. These were left at [17:0] from the 16bpp
+	// build, so the MSB was undriven on one end and truncated on the other.
+	wire [16:0] vram_bram_waddr;
 	wire        vram_bram_we;
-	wire [17:0] v8_vram_raddr;
+	wire [16:0] v8_vram_raddr;
 	wire [15:0] v8_vram_rdata;
 
 	vram_bram vram_fb(
@@ -893,6 +1168,25 @@ module mac_lc_pocket
 		.ariel_data_in(ariel_reg_dout),
 		.selectPseudoVIA(selectPseudoVIA),
 		.pseudovia_data_in(pseudovia_dout),
+		// ★ DROPPED AT IMPORT, restored 2026-08-11. MacLC.sv.reference:1885
+		// connects this; mac_lc_pocket did not, so inside dataController_top
+		// the port defaulted to constant 0 and the open-bus case at
+		// dataController_top.sv:330 (`selectUnmapped ? 16'hFFFF :`) could
+		// never fire. Unmapped reads therefore fell through to stale
+		// memoryDataIn/cpu_data instead of 0xFFFF.
+		//
+		// That is precisely the regression the comment at
+		// dataController_top.sv:320-329 was written to fix: the boot ROM's
+		// RAM-probe XOR-pattern test cascades a value through unmapped SIMM
+		// addresses, the unmapped WRITE is silently dropped (_ramWE not
+		// asserted), and if the following READ returns the same value the
+		// probe concludes "RAM here" instead of "no RAM here" -- a wrong
+		// memory map, and a POST that dies. Because the fall-through value is
+		// whatever was last on the bus, it varies per power-up, which is why
+		// the failure was intermittent and looked like a timing fault.
+		// The wire itself was already driven (addrController_top, line ~665);
+		// only this connection was missing.
+		.selectUnmapped(selectUnmapped),
 
 		.ps2_key(ps2_key),
 		.capslock(capslock),
@@ -904,8 +1198,8 @@ module mac_lc_pocket
 
 		.timestamp(timestamp),
 
-		._hblank(~v8_hblank),
-		._vblank(~v8_vblank),
+		._hblank(~v8_hblank_s),
+		._vblank(~v8_vblank_s),
 		.vid_alt(vid_alt),
 
 
@@ -938,14 +1232,15 @@ module mac_lc_pocket
 		// no CD target the scan simply finds nothing at ID 3, which is what
 		// a real LC without a CD-ROM drive does.
 
-		// PRAM persistence — tied off (step 1); FSM wired in step 2
-		.pram_load_wr(1'b0),
-		.pram_load_addr(8'd0),
-		.pram_load_data(8'd0),
-		.pram_save_addr(8'd0),
-		.pram_save_data(),
-		.pram_wr_stb(),
-		.pram_ready(1'b1),
+		// PRAM: save-back still needs apf_blockdev, but the LOAD side is now
+		// driven by the pram_zero FSM below so "Reset PRAM" is real.
+		.pram_load_wr(pram_load_wr),
+		.pram_load_addr(pram_load_addr),
+		.pram_load_data(pram_load_data),
+		.pram_save_addr(pram_save_addr_i),
+		.pram_save_data(pram_save_data_w),
+		.pram_wr_stb(pram_wr_stb_w),
+		.pram_ready(pram_ready_r),
 
 		// PFLP floppy diagnostics — FPGA-only (feed ISSP probes in MacLC.sv);
 		// explicitly unconnected here
@@ -956,8 +1251,96 @@ module mac_lc_pocket
 		.dbg_flp_side(),
 		.dbg_flp_step_cnt(),
 		.dbg_iwm_latch(),
-		.dbg_flp_byte_stb()
+		.dbg_flp_byte_stb(),
+
+		// ---- Egret / VIA shift-register taps, for SignalTap --------------
+		// These were left unconnected at import.
+		//
+		// ★ 2026-08-10: the CB1-coalescing theory these were wired up for is
+		// REFUTED — do not spend a capture confirming it. CLAUDE.md and the
+		// old comment here blamed ext_fall_edge_pending (a single-bit latch
+		// consuming at most one CB1 edge per VIA E period) for corrupting the
+		// Egret SR handshake. In this via6522.sv that register has NO
+		// functional fanout at all: grep the repo and its only reader is the
+		// sr_dbg_fall_pending debug port (via6522.sv:976). Upstream already
+		// fixed the bug. In ext_clock_mode (ACR shift modes 3 and 7, which is
+		// what the Egret uses) BOTH the data path (via6522.sv:865-879) and the
+		// bit counter (via6522.sv:941-953) advance on the per-clk edge pulses
+		// shift_tick_r / shift_tick_f, decoupled from E — see the comments
+		// there, which name this exact failure mode as the thing they fix.
+		// ext_edge_pending survives only via shift_pulse, and shift_pulse is
+		// read solely inside !ext_clock_mode branches (lines 806, 927).
+		//
+		// So dbg_sr_fall_pending WILL show edges coalescing on hardware and it
+		// means nothing — the flag is dead. Kept as taps because the rest of
+		// the bundle (handshake_done, memoryOverlayOn, bit_cnt, shift_reg) is
+		// still the right instrument for an Egret handshake question; only the
+		// pending-flag interpretation was wrong.
+		//
+		// Note also that simulation cannot reproduce hardware startup timing:
+		// dataController_top.sv:197/209 uses resetDelay 0x0200 under
+		// SIMULATION vs 0xFFFFF (129 ms) on FPGA, and egret_wrapper.sv:232
+		// uses ONESEC_PERIOD 8192 (~2 ms) vs 4000000 (~1 s). That, not "the
+		// behavioural Egret drives CB1 slowly", is why boot-timing faults are
+		// FPGA-only — the behavioural Egret is not even compiled in any more.
+		.via_sr_dbg_bit_cnt(dbg_sr_bit_cnt),
+		.via_sr_dbg_edge_pending(dbg_sr_edge_pending),
+		.via_sr_dbg_fall_pending(dbg_sr_fall_pending),
+		.via_sr_dbg_shift_reg(dbg_sr_shift_reg),
+		.via_sr_dbg_active(dbg_sr_active),
+		.via_sr_dbg_dir(dbg_sr_dir),
+		.via_sr_dbg_cb1(dbg_sr_cb1),
+		.via_sr_dbg_cb2(dbg_sr_cb2),
+		.egret_dbg_running(dbg_eg_running),
+		.egret_dbg_port_test_done(dbg_eg_port_test_done),
+		.egret_dbg_handshake_done(dbg_eg_handshake_done),
+		.egret_dbg_treq(dbg_eg_treq),
+		.egret_dbg_tip(dbg_eg_tip),
+		.egret_dbg_byteack(dbg_eg_byteack),
+		.egret_dbg_reset_680x0(dbg_eg_reset_680x0),
+		.egret_dbg_cpu_reset_out(dbg_eg_cpu_reset_out)
 	);
+
+	// ---- SignalTap capture bundle -----------------------------------------
+	// A `preserve`d register so the Fitter cannot optimise these nodes away;
+	// SignalTap taps dbg_boot_bus inside this instance.
+	//
+	// SAMPLING NOTE: clk_sys is 32.5 MHz, so a 1024-deep capture spans only
+	// ~31 us — far shorter than the Egret handshake, which runs for
+	// milliseconds. Capture with a STORAGE QUALIFIER (store only when
+	// dbg_sr_active or on a change of dbg_sr_cb1) or the window will close
+	// long before anything interesting happens.
+	wire [2:0] dbg_sr_bit_cnt;
+	wire       dbg_sr_edge_pending, dbg_sr_fall_pending;
+	wire [7:0] dbg_sr_shift_reg;
+	wire       dbg_sr_active, dbg_sr_dir, dbg_sr_cb1, dbg_sr_cb2;
+	wire       dbg_eg_running, dbg_eg_port_test_done, dbg_eg_handshake_done;
+	wire       dbg_eg_treq, dbg_eg_tip, dbg_eg_byteack;
+	wire       dbg_eg_reset_680x0, dbg_eg_cpu_reset_out;
+
+	(* preserve *) reg [31:0] dbg_boot_bus;
+	always @(posedge clk_sys) dbg_boot_bus <= {
+		4'd0,
+		memoryOverlayOn,          // [27] the documented failure: never clears
+		n_reset,                  // [26]
+		rom_loaded,               // [25]
+		dbg_eg_cpu_reset_out,     // [24]
+		dbg_eg_reset_680x0,       // [23]
+		dbg_eg_byteack,           // [22]
+		dbg_eg_tip,               // [21]
+		dbg_eg_treq,              // [20]
+		dbg_eg_handshake_done,    // [19] boot handshake completed?
+		dbg_eg_port_test_done,    // [18]
+		dbg_eg_running,           // [17]
+		dbg_sr_cb2,               // [16]
+		dbg_sr_cb1,               // [15] the edge that coalesces
+		dbg_sr_dir,               // [14]
+		dbg_sr_active,            // [13]
+		dbg_sr_fall_pending,      // [12] the suspect latch
+		dbg_sr_edge_pending,      // [11]
+		dbg_sr_shift_reg,         // [10:3]
+		dbg_sr_bit_cnt            // [2:0]
+	};
 
 	//////////////////////// DOWNLOADING ///////////////////////////
 
@@ -1068,32 +1451,190 @@ module mac_lc_pocket
 
 		dio_old_cyc <= dioBusControl;
 		if(~dioBusControl) dio_write <= ioctl_wait;
-		if(dio_old_cyc & ~dioBusControl & dio_write) ioctl_wait <= 0;
+		// ★ Hold the download word until SDRAM can actually store it. While the
+		// init ladder runs, pocket_sdram ignores we/oe, so retiring here would
+		// throw the word away. The loader keeps dio_wr asserted and its 512-word
+		// FIFO absorbs the ~126 us wait, so nothing is lost -- the words are
+		// simply written once memory is live.
+		if(dio_old_cyc & ~dioBusControl & dio_write & sdram_ready) ioctl_wait <= 0;
+	end
+
+	// ---- Boot forensics: words actually RETIRED into SDRAM ------------------
+	// Counts the FALLING EDGE of ioctl_wr. ioctl_wr is a LEVEL held by the
+	// loader until its dio_ack arrives, so its fall is exactly one event per
+	// word retired.
+	//
+	// ★ The first version of this counter tested the ioctl_wait clear term
+	//   (dio_old_cyc & ~dioBusControl & dio_write & ioctl_wait) instead, and
+	//   over-counted: because ioctl_wr is a level, the `if(ioctl_wr)` block
+	//   above RE-ASSERTS ioctl_wait every cycle the strobe is held, so a word
+	//   whose ack is slow can satisfy the clear term on more than one bus
+	//   slot. It read 365,194 for a 262,144-word ROM (1.39x) on the first
+	//   hardware capture. Counting an edge of the strobe itself is immune.
+	//
+	// Split by destination because dio_index[1:0]==01 is the floppy window.
+	// A 512 KB ROM = 262,144 words = 0x40000. Free-running, never cleared:
+	// read the DELTA across a load. Compare against the loader's
+	// dbg_bridge_words / dbg_pop_words to localise where words are lost.
+	reg [31:0] dbg_rom_words = 32'd0;
+	reg [31:0] dbg_flp_words = 32'd0;
+	reg        dbg_iwr_d     = 1'b0;
+
+	// ---- ROM CONTENT verification -----------------------------------------
+	// ★ The word COUNTS above prove only that the right NUMBER of words moved.
+	// They would look perfect for a ROM that arrived scrambled, duplicated, or
+	// written to the wrong addresses. These two accumulators check the content
+	// itself, and the host side can compute the same values from boot0.rom:
+	//
+	//   rom_sum    = sum of every data word            -> expect 0x350F8EEE
+	//   rom_axsum  = sum of (word_index ^ data)        -> expect 0xF486F3D8
+	//
+	// rom_sum alone is order-insensitive, so a permuted ROM would still match.
+	// Folding the word INDEX in makes rom_axsum sensitive to which address
+	// each word landed at -- that is the check that catches an addressing bug,
+	// which is by far the more likely failure for a download path.
+	// (The ROM file's own embedded checksum verifies independently:
+	//  stored 0x350EACF0 == computed 0x350EACF0, so the source is good.)
+	// Proof the race was real: counts clk_sys cycles in which a download word
+	// was ready to retire but SDRAM was still initialising. Non-zero on a cold
+	// boot = the words WOULD have been discarded before this fix.
+	wire       sdram_ready;
+	reg [31:0] dl_held_cycles = 32'd0;
+	always @(posedge clk_sys)
+		if (ioctl_wait && !sdram_ready) dl_held_cycles <= dl_held_cycles + 32'd1;
+
+	reg [31:0] rom_sum   = 32'd0;
+	reg [31:0] rom_axsum = 32'd0;
+	wire [31:0] rom_widx = {14'd0, dio_a[17:0]};   // word index within the file
+	wire [31:0] rom_dat  = {16'd0, dio_data};
+
+	always @(posedge clk_sys) begin
+		dbg_iwr_d <= ioctl_wr;
+		if (dbg_iwr_d & ~ioctl_wr) begin
+			if (dio_index[1:0] == 2'b01) dbg_flp_words <= dbg_flp_words + 32'd1;
+			else begin
+				dbg_rom_words <= dbg_rom_words + 32'd1;
+				rom_sum       <= rom_sum   + rom_dat;
+				rom_axsum     <= rom_axsum + (rom_widx ^ rom_dat);
+			end
+		end
 	end
 
 	////////////////////////// RAM /////////////////////////////////
 
-	// For simulation with synchronous RAM, use simplified direct download path
+	// ★ 2026-08-11 — RESTORED TO MacLC.sv's FORM. Do not "simplify" this again.
+	//
+	// This block arrived from verilator/sim.v (see the file header for why sim.v
+	// was the base) and carried sim.v's SHORTCUT with it, comment and all:
+	//
+	//     // For simulation with synchronous RAM, use simplified direct download path
+	//     wire download_cycle = dio_download && ioctl_wr;
+	//     wire ram_din = download_cycle ? ioctl_dout : ...   // live, not latched
+	//     wire ram_we  = download_cycle ? 1'b1      : ...    // held, not one-shot
+	//
+	// That is correct against sim.v's IDEAL memory (accepts a write any cycle)
+	// and wrong against a real SDRAM behind an arbiter:
+	//
+	//   * ioctl_wr is a LEVEL held until the loader's ack, not a strobe. So
+	//     download_cycle stayed asserted for many cycles per word, and with it
+	//     ram_addr / ram_din / ram_ds / ram_we / ram_oe ALL stayed switched to
+	//     the download. Every one of those muxes is shared with the CPU, so for
+	//     the whole of a download the CPU could not reach memory at all.
+	//   * During the ROM load that is invisible: the 68020 is held in reset, so
+	//     nothing else wants the bus. That is why the ROM checksums verify
+	//     perfectly and this survived so long.
+	//   * During a FLOPPY load the CPU IS running -- which is the documented
+	//     "mounting a floppy crashes the core" symptom in PORT_STATUS.
+	//   * It also ignored dioBusControl entirely, i.e. it wrote outside the
+	//     arbiter's download slot.
+	//
+	// MacLC.sv:2185-2206 latches the word (dio_data/dio_a, above) and writes it
+	// only in the granted slot, with a one-shot dio_write. That is what this is
+	// now. dio_a_comb is retired: it recomputed the address combinationally from
+	// ioctl_addr instead of using the latched dio_a, so it was a second copy of
+	// the same mapping that could disagree with it.
+	// REVERTED 2026-08-11 pending bisection: the arbiter-gated form below is
+	// the MiSTer-faithful one and is almost certainly correct, but it was one
+	// of several changes in flight when the user's reload-the-ROM workaround
+	// stopped working. Restoring the previous behaviour first, then re-applying
+	// one change at a time. See docs/boot_problems.md.
+	//   MiSTer form: dio_download && dioBusControl, ram_din=dio_data, ram_we=dio_write
 	wire download_cycle = dio_download && ioctl_wr;
 
 	// SDRAM word address mapping:
 	// memoryAddr[22:0] is already the SDRAM word address from addrController
-	// Download path uses dio_a_comb[22:0] directly
-	wire [22:0] dio_a_comb;
-	assign dio_a_comb = (ioctl_index[1:0] == 2'b01) ? 23'h600000 + {3'b0, ioctl_addr[20:1]} :  // Floppy
-	                    {5'b10100, ioctl_addr[18:1]};                                            // ROM at $500000 (must match addrController rom_sdram_word)
+	// Download path uses the LATCHED dio_a[22:0] (set when ioctl_wr arrived).
+	// =======================================================================
+	// SDRAM BIST -- does a CPU-STYLE write/read of the RAM region actually work?
+	// =======================================================================
+	// Everything verified so far exercises a DIFFERENT path than the RAM test:
+	//   * rom_sum/rom_axsum prove the DOWNLOAD write path and its addressing.
+	//   * Hundreds of millions of correct instruction fetches prove READS.
+	// Nothing has ever confirmed a write to the RAM region followed by reading
+	// it back -- which is precisely what the ROM's memory test does, and what it
+	// now reports as FAILED (10 MB setting: error chime; 2 MB: loops for ever).
+	//
+	// This walks a strided sample of the RAM word range through the same
+	// ram_addr/ram_din/ram_we muxes the CPU uses, then reads it back and
+	// compares. It runs ONLY while the machine is in reset and only after the
+	// ROM has landed, so it cannot race the CPU, and it finishes long before
+	// n_reset releases:
+	//   8192 samples x 2 passes = 16384 chipset cycles @ 8.125 MHz = ~2 ms,
+	//   inside the ~8 ms rst_cnt hold.
+	// Stride 512 words spreads the samples over 4 M words (8 MB) so it covers
+	// the motherboard RAM AND the SIMM range that the 10 MB config enables.
+	//
+	// The pattern is address-derived (addr ^ 0x5A5A), so a wrong-address write
+	// fails the compare just as loudly as a wrong-data one -- the same reason
+	// rom_axsum folds the index in.
+	localparam        BIST_ENABLE = 1'b0;     // 0 = compiled out (golden parity)
+	localparam [12:0] BIST_N = 13'd8191;      // samples - 1
+	localparam [8:0]  BIST_SH = 9'd9;          // stride = 512 words
+	reg  [1:0]  bist_st   = 2'd0;              // 0 idle, 1 write, 2 read, 3 done
+	reg  [12:0] bist_idx  = 13'd0;
+	reg  [15:0] bist_errs = 16'd0;
+	reg  [22:0] bist_first= 23'h7FFFFF;        // first failing word address
+	reg         bist_ran  = 1'b0;
+	wire [22:0] bist_addr = {bist_idx, 10'd0} >> (10 - BIST_SH);
+	wire [15:0] bist_pat  = bist_addr[15:0] ^ 16'h5A5A;
+	wire        bist_active = (bist_st == 2'd1) || (bist_st == 2'd2);
 
-	wire [24:0] ram_addr = download_cycle ? {2'b00, dio_a_comb[22:0]} :
+	always @(posedge clk_sys) begin
+		if (clk8_en_p) begin
+			case (bist_st)
+			// BIST_ENABLE=0 for the 2026-08-12 baseline-anchor build (golden had
+			// no BIST). With the start gated off, bist_st stays 0, bist_active
+			// stays 0, and every BIST mux term below folds to its golden form.
+			2'd0: if (BIST_ENABLE && !bist_ran && rom_loaded && !dio_download && !n_reset) begin
+			          bist_st <= 2'd1; bist_idx <= 13'd0;
+			      end
+			2'd1: begin                       // write pass
+			          if (bist_idx == BIST_N) begin bist_idx <= 13'd0; bist_st <= 2'd2; end
+			          else bist_idx <= bist_idx + 13'd1;
+			      end
+			2'd2: begin                       // read-back pass, one cycle behind
+			          if (ram_do_raw != bist_pat) begin
+			              if (bist_errs != 16'hFFFF) bist_errs <= bist_errs + 16'd1;
+			              if (bist_first == 23'h7FFFFF) bist_first <= bist_addr;
+			          end
+			          if (bist_idx == BIST_N) begin bist_st <= 2'd3; bist_ran <= 1'b1; end
+			          else bist_idx <= bist_idx + 13'd1;
+			      end
+			default: ;
+			endcase
+		end
+	end
+
+	wire [31:0] dbg_bist = { bist_st, bist_ran, bist_errs, bist_first[12:0] };
+
+	wire [24:0] ram_addr = bist_active    ? {2'b00, bist_addr} :
+	                       download_cycle ? {2'b00, dio_a[22:0]} :
 	                                        {2'b00, memoryAddr[22:0]};
 
-
-
-	// Use ioctl_dout directly for download (bypass registered dio_data)
-	wire [15:0] ram_din  = download_cycle ? ioctl_dout            : memoryDataOut;
-	wire  [1:0] ram_ds   = download_cycle ? 2'b11                 : { !_memoryUDS, !_memoryLDS };
-	// Use ioctl_wr directly as write enable during download (bypass registered dio_write)
-	wire        ram_we   = download_cycle ? 1'b1                  : !_ramWE;
-	wire        ram_oe   = download_cycle ? 1'b0                  : (!_ramOE || !_romOE || dskReadAckInt);
+	wire [15:0] ram_din  = bist_active    ? bist_pat  : download_cycle ? ioctl_dout : memoryDataOut;
+	wire  [1:0] ram_ds   = bist_active    ? 2'b11     : download_cycle ? 2'b11    : { !_memoryUDS, !_memoryLDS };
+	wire        ram_we   = (bist_st==2'd1)? 1'b1      : download_cycle ? 1'b1     : !_ramWE;
+	wire        ram_oe   = (bist_st==2'd2)? 1'b1      : download_cycle ? 1'b0     : (!_ramOE || !_romOE || dskReadAckInt);
 	wire [15:0] ram_do_raw;
 	// --- Force cold-boot path (warm-reset hang workaround) — keep in sync with MacLC.sv.
 	// Patch the boot ROM's warm-vs-cold `bne.w` at ROM byte $4655E (SDRAM word
@@ -1138,7 +1679,8 @@ module mac_lc_pocket
 		.ds             ( ram_ds      ),
 		.we             ( ram_we      ),
 		.oe             ( ram_oe      ),
-		.dout           ( ram_do_raw  )
+		.dout           ( ram_do_raw  ),
+		.sdram_ready    ( sdram_ready )
 	);
 
 	// Dedicated SDRAM re-init pulse on explicit user resets only.
@@ -1215,5 +1757,233 @@ module mac_lc_pocket
 	assign debug_cpuBusControl = cpuBusControl;
 	assign debug_cpu_as = _cpuAS;
 	assign debug_cpu_dtack = _cpuDTACK;
+
+	// ========================================================================
+	// JTAG In-System probes — the cold-boot forensics deck
+	// ========================================================================
+	// DEBUG BUILDS ONLY. Enable with USE_BOOT_ISSP in src/fpga/ap_core.qsf;
+	// it MUST be off for a release fit (see the USE_DBG_HUD precedent in
+	// CLAUDE.md). Read them with: bash scripts/read_boot_probes.sh
+	//
+	// FPGA-only — altsource_probe is an Altera primitive, so this block must
+	// never be compiled into verilator/sim.v.
+	//
+	// Why ISSP and not SignalTap: the question here is "how far did the boot
+	// get", which is a LEVEL question about signals that change a handful of
+	// times over ~137 ms. SignalTap's 1024 samples at 32.5 MHz span 31 us and
+	// would close long before anything happened. ISSP is read from a Tcl
+	// script over seconds, has no depth limit, costs almost nothing, and can
+	// be sampled repeatedly while the user power-cycles the machine.
+	//
+	//   BOOT  dbg_boot_bus — [27] memoryOverlayOn [26] n_reset [25] rom_loaded
+	//                        [19] egret handshake_done, [24:17] egret state,
+	//                        [16:11] VIA SR pins, [10:3] SR byte, [2:0] bit_cnt
+	//   ROMC  words retired into SDRAM at the ROM window (expect 0x40000 for
+	//         a 512 KB ROM). THE decisive number for "did the ROM land".
+	//   FLPC  words retired into the floppy window.
+	// ---- Video liveness ----------------------------------------------------
+	// Separates "video is held in reset" from "video is scanning but the guest
+	// has not drawn anything yet" -- a black screen looks identical either way
+	// from outside, and the vidrst_s change on 2026-08-11 introduced a NEW way
+	// to get the first case: vidrst_s is a clk_pix-domain register that powers
+	// up ASSERTED, so if clk_pix ever fails to run, video never leaves reset.
+	//
+	// vid_frames counts vsync rising edges in the clk_pix domain. If it is
+	// advancing, the timing generator is alive and clk_pix is running, and a
+	// black screen is the guest's fault, not ours. If it is pinned at 0, the
+	// video module is dead -- check vidrst_s and clk_pix first.
+	reg [27:0] vid_frames = 28'd0;
+	reg        vsync_d    = 1'b0;
+	always @(posedge clk_pix) begin
+		vsync_d <= v8_vsync;
+		if (~vsync_d & v8_vsync) vid_frames <= vid_frames + 28'd1;
+	end
+	wire [31:0] dbg_vid_state = {
+		vidrst_s,      // [31] 1 = video module held in reset
+		v8_vblank,     // [30] raw, clk_pix domain
+		v8_hblank,     // [29]
+		v8_de,         // [28] display enable
+		vid_frames     // [27:0] vsync count -- MUST be advancing
+	};
+
+	// ---- Interrupt-storm forensics ----------------------------------------
+	// 2026-08-11: with SDMA_TIMEOUT shortened the machine runs ~3000x faster
+	// and leaves the SCSI stall, but 359/400 sampled bus cycles land in the
+	// exception vector table at $0000xx with live IACK cycles at $FFxxxx --
+	// the CPU takes an interrupt, returns, and takes it again for ever, so
+	// POST never advances and the overlay never clears.
+	//
+	// _cpuIPL_dc names the winner directly (dataController_top.sv:293):
+	//   3'b011 = level 4 SCC   3'b101 = level 2 PseudoVIA
+	//   3'b110 = level 1 VIA1  3'b111 = none
+	// MiSTer's POST notes document this exact class: a continuously asserted
+	// level-2 from pseudovia (ASC folded into slot_status) preempting the
+	// level-1 the VIA1 timer self-test waits on. iack_cnt gives the storm RATE
+	// so a genuine periodic tick is distinguishable from a stuck level.
+	reg [23:0] iack_cnt = 24'd0;
+	reg        iack_d   = 1'b0;
+	always @(posedge clk_sys) begin
+		iack_d <= fc7_iack;
+		if (fc7_iack && !iack_d) iack_cnt <= iack_cnt + 24'd1;
+	end
+
+	// ---- SCC TX capture (2026-08-12) --------------------------------------
+	// The STM diagnostic monitor continuously transmits its banner + status
+	// digits on the modem port ($F040xx), which has no pin on the Pocket. The
+	// banner carries the 12 status/flag hex digits (see MacLC_MiSTer
+	// docs/diagnostic_mode_reference.md), i.e. the FAILING POST SUBTEST is in
+	// this byte stream. Latch every CPU write into the SCC window; the count
+	// plus a rolling 3-byte window lets repeated ISSP polls reconstruct the
+	// repeating stream (9600 baud ≈ 1 byte/ms vs ~10 polls/s, banner loops
+	// forever). Ctl-pointer writes ($08 etc.) interleave with data bytes —
+	// decode offline, do not filter here.
+	reg [7:0]  scc_wr_cnt  = 8'd0;
+	reg [23:0] scc_last3   = 24'd0;
+	reg        scc_wr_pend = 1'b0;
+	reg [7:0]  scc_wr_byte = 8'd0;
+	always @(posedge clk_sys) begin
+		if (!_cpuAS && !_cpuRW && (cpuAddr[23:8] == 16'hF040)) begin
+			scc_wr_pend <= 1'b1;
+			if (!_cpuUDS)      scc_wr_byte <= cpuDataOut[15:8];
+			else if (!_cpuLDS) scc_wr_byte <= cpuDataOut[7:0];
+		end else if (scc_wr_pend) begin
+			scc_wr_pend <= 1'b0;
+			scc_wr_cnt  <= scc_wr_cnt + 8'd1;
+			scc_last3   <= { scc_last3[15:0], scc_wr_byte };
+		end
+	end
+	wire [31:0] dbg_scc_tx = { scc_wr_cnt, scc_last3 };
+	wire [31:0] dbg_irq_state = {
+		_cpuIPL_dc,      // [31:29] raw IPL from dataController
+		pseudovia_irq,   // [28] level-2 source
+		asc_irq,         // [27] ASC (feeds pseudovia IFR bit 4)
+		v8_vblank_s,     // [26] synced VBlank (feeds pseudovia vblank_irq)
+		fc7_iack,        // [25] in an interrupt-acknowledge cycle right now
+		memoryOverlayOn, // [24]
+		iack_cnt         // [23:0] interrupts acknowledged — the storm rate
+	};
+
+	// ---- Pseudo-DMA stall forensics ---------------------------------------
+	// 2026-08-11: the boot wedges with the CPU parked on a pseudo-DMA WRITE
+	// (addr $F13EAE, AS asserted, DTACK never answering) and the 250 ms
+	// sdma_berr timeout that exists to rescue exactly this NEVER FIRES --
+	// even with every SCSI disk hidden from the machine, so it is not a
+	// block-device problem.
+	//
+	// The measured state implies the timeout's own condition is satisfied
+	// (selectSCSIDMA=1 from VPA being deasserted, scsiDREQ=0 from DTACK=1,
+	// _cpuReset=1, and AS genuinely held low since the bus-cycle counter is
+	// frozen). So either one of those inferences is wrong, or the counter is
+	// being reset by something. This probe reads the actual terms instead of
+	// inferring them.
+	wire [31:0] dbg_sdma_state = {
+		sdma_berr,        // [31] has the timeout fired?
+		scsiDREQ,         // [30] the thing DTACK waits on
+		selectSCSIDMA,    // [29] are we even decoding the pseudo-DMA window?
+		selectSCSI,       // [28]
+		_cpuReset,        // [27] 1 = CPU running
+		_cpuAS,           // [26] 0 = asserted
+		_cpuRW,           // [25]
+		1'b0,             // [24]
+		1'b0,             // [23]
+		sdma_stall_ctr    // [22:0] MUST be climbing toward 8,125,000
+	};
+
+	// ---- CPU liveness ------------------------------------------------------
+	// The boot bus carries only Egret/VIA/overlay state, so a frozen reading
+	// there cannot distinguish a HALTED 68020 (double bus fault on a corrupt
+	// ROM -- note CLAUDE.md: "bus retry via HALT is not implemented") from one
+	// spinning in a polling loop that touches none of those signals. The
+	// 2026-08-11 capture hit exactly that ambiguity: 40/40 identical samples.
+	//
+	// CPUC counts bus cycles (falling edge of _cpuAS). Sample it twice:
+	//   delta == 0  -> the CPU is genuinely stopped (halted or held in reset)
+	//   delta >  0  -> it is executing; CPUA then says WHERE, and a tight
+	//                  address range is the poll loop we are deadlocked in.
+	reg [31:0] dbg_cpu_cycles = 32'd0;
+	reg        dbg_as_d       = 1'b1;
+	always @(posedge clk_sys) begin
+		dbg_as_d <= _cpuAS;
+		if (dbg_as_d & ~_cpuAS) dbg_cpu_cycles <= dbg_cpu_cycles + 32'd1;
+	end
+
+	wire [31:0] dbg_cpu_state = {
+		memoryOverlayOn,   // [31]
+		_cpuRW,            // [30] 1 = read
+		_cpuDTACK,         // [29] 0 = asserted
+		_cpuAS,            // [28] 0 = asserted
+		tg68_reset_n,      // [27] 0 = CPU held in reset
+		_cpuReset,         // [26]
+		cpu_berr,          // [25] bus error being driven
+		_cpuVPA,           // [24]
+		cpuAddr[23:0]      // [23:0]
+	};
+
+`ifdef USE_BOOT_ISSP
+	altsource_probe #(
+		.instance_id ("BOOT"), .probe_width (32), .source_width (1),
+		.sld_auto_instance_index ("YES")
+	) cp_boot (.probe(dbg_boot_bus),  .source(), .source_clk(clk_sys), .source_ena(1'b1));
+
+	altsource_probe #(
+		.instance_id ("CPUC"), .probe_width (32), .source_width (1),
+		.sld_auto_instance_index ("YES")
+	) cp_cpuc (.probe(dbg_cpu_cycles), .source(), .source_clk(clk_sys), .source_ena(1'b1));
+
+	altsource_probe #(
+		.instance_id ("CPUA"), .probe_width (32), .source_width (1),
+		.sld_auto_instance_index ("YES")
+	) cp_cpua (.probe(dbg_cpu_state),  .source(), .source_clk(clk_sys), .source_ena(1'b1));
+
+	altsource_probe #(
+		.instance_id ("VIDS"), .probe_width (32), .source_width (1),
+		.sld_auto_instance_index ("YES")
+	) cp_vids (.probe(dbg_vid_state),  .source(), .source_clk(clk_sys), .source_ena(1'b1));
+
+	altsource_probe #(
+		.instance_id ("SDMA"), .probe_width (32), .source_width (1),
+		.sld_auto_instance_index ("YES")
+	) cp_sdma (.probe(dbg_sdma_state), .source(), .source_clk(clk_sys), .source_ena(1'b1));
+
+	altsource_probe #(
+		.instance_id ("IRQS"), .probe_width (32), .source_width (1),
+		.sld_auto_instance_index ("YES")
+	) cp_irqs (.probe(dbg_irq_state),  .source(), .source_clk(clk_sys), .source_ena(1'b1));
+
+	altsource_probe #(
+		.instance_id ("RSUM"), .probe_width (32), .source_width (1),
+		.sld_auto_instance_index ("YES")
+	) cp_rsum (.probe(rom_sum),        .source(), .source_clk(clk_sys), .source_ena(1'b1));
+
+	altsource_probe #(
+		.instance_id ("RAXS"), .probe_width (32), .source_width (1),
+		.sld_auto_instance_index ("YES")
+	) cp_raxs (.probe(rom_axsum),      .source(), .source_clk(clk_sys), .source_ena(1'b1));
+
+	altsource_probe #(
+		.instance_id ("BIST"), .probe_width (32), .source_width (1),
+		.sld_auto_instance_index ("YES")
+	) cp_bist (.probe(dbg_bist),       .source(), .source_clk(clk_sys), .source_ena(1'b1));
+
+	altsource_probe #(
+		.instance_id ("DHLD"), .probe_width (32), .source_width (1),
+		.sld_auto_instance_index ("YES")
+	) cp_dhld (.probe(dl_held_cycles), .source(), .source_clk(clk_sys), .source_ena(1'b1));
+
+	altsource_probe #(
+		.instance_id ("SCCT"), .probe_width (32), .source_width (1),
+		.sld_auto_instance_index ("YES")
+	) cp_scct (.probe(dbg_scc_tx), .source(), .source_clk(clk_sys), .source_ena(1'b1));
+
+	altsource_probe #(
+		.instance_id ("ROMC"), .probe_width (32), .source_width (1),
+		.sld_auto_instance_index ("YES")
+	) cp_romc (.probe(dbg_rom_words), .source(), .source_clk(clk_sys), .source_ena(1'b1));
+
+	altsource_probe #(
+		.instance_id ("FLPC"), .probe_width (32), .source_width (1),
+		.sld_auto_instance_index ("YES")
+	) cp_flpc (.probe(dbg_flp_words), .source(), .source_clk(clk_sys), .source_ena(1'b1));
+`endif
 
 endmodule
