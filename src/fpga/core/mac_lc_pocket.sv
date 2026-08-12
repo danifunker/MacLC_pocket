@@ -1590,13 +1590,13 @@ module mac_lc_pocket
 			romv_sum  <= 32'd0;
 			romv_axs  <= 32'd0;
 		end else if (romv_run && clk8_en_p) begin
-			// data returning on this tick belongs to the address driven on the
-			// previous tick (base + romv_idx - 1)
-			if (romv_idx != 19'd0) begin
-				romv_sum <= romv_sum + {16'd0, ram_do_raw};
-				romv_axs <= romv_axs + ({14'd0, romv_base + romv_idx[17:0] - 18'd1} ^ {16'd0, ram_do_raw});
-			end
-			if (romv_idx == romv_len) romv_st <= 2'd2;
+			// ★ v2.1: dout is CURRENT with the driven address within the same
+			// chipset tick (empirically proven: the v2 previous-tick pairing
+			// read every word as its successor — a clean off-by-one). Pair the
+			// data with romv_idx itself; idx runs 0..len-1.
+			romv_sum <= romv_sum + {16'd0, ram_do_raw};
+			romv_axs <= romv_axs + ({14'd0, romv_base + romv_idx[17:0]} ^ {16'd0, ram_do_raw});
+			if (romv_idx == romv_len - 19'd1) romv_st <= 2'd2;
 			else romv_idx <= romv_idx + 19'd1;
 		end
 	end
