@@ -390,6 +390,38 @@ download writes still fire (ram_we is not gated by romv_run), which would
 scatter download words across scanner addresses. Scan only after counters
 confirm the download is complete.
 
+### ★★★ buildT/buildU RESULT — SOLVED. Cold boot reaches the "?" seek loop.
+
+* **buildT (arbiter form + one-shot accept): ROMV x3 EXACT MATCH
+  350F8EEE/F486F3D8 — the first byte-perfect ROM ever measured in SDRAM on
+  this port.** Content stays exact across many boots, scans, and the full
+  RAM march. 278 scars (sim form) -> 55 (arbiter only) -> 0 (both halves).
+* buildT boots still failed deterministically into the $A49xxx reporter —
+  because the forced-warm patch was now forcing warm semantics onto
+  uninitialized RAM on every boot. The patch was cover for a cold march
+  that had been dying on SCARRED CODE; with content clean it became the
+  last remaining cause. Retired in buildU (f742565).
+* **buildU: true cold boot (JTAG config -> auto-download -> hands off,
+  honest cold RAM march) reached the flashing-"?" boot-disk search loop:
+  PC in $A078xx polling the SWIM at $F10040, interrupts flowing at ~132/s.
+  A scan-released warm boot did the same (~142/s). 2/2.** SCSI media were
+  hidden by SCSI_DISABLE_DIAG=1 (golden parity), so the "?" loop is the
+  expected terminal state — the machine is healthy and waiting for a disk.
+
+The 2026-08-11/12 "regression" is fully explained: nothing regressed —
+every reload was a fresh scar lottery whose odds tracked fit placement and
+temperature, and the golden build was a lucky fit. The reload-to-"?" ritual,
+the jboot 11/11 wedge, the fit-to-fit variance, the late sad-macs: all one
+defect (download-path tears) plus one workaround (forced warm) that inverted
+into a bug once the defect was fixed.
+
+Still on the instr branch, to re-evaluate before release (RESUME §7):
+SCSI_DISABLE_DIAG=1 (flip to 0 next — first honest SCSI test since golden),
+serialCTS=0, USE_BOOT_ISSP=1, console-speed shim, scc.v truth fixes, the
+inert BIST/cold_rst leftovers. The 10 MB lock decision is now UNBLOCKED
+(the cold march passes; 10 MB runs the full 8 MB SIMM march — verify once
+SCSI is back).
+
 ### Instrument honesty note (ROMV v3 characterization)
 
 Misreads are per-TRIGGER (scan startup), ~1% of triggers, not per-word —
