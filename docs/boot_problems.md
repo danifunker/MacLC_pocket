@@ -182,6 +182,37 @@ builds G-J archived in scratch/builds/) produced the register-level truth:
   download latch + reset — the ROM persists in SDRAM, so boots would need NO
   user hands), and if the window-catch works, a scripted *T battery.
 
+### ★★ 2026-08-12 late — SDRAM RETENTION is the prime suspect for the early failure
+
+A jboot immediately after a `quartus_pgm` fabric push boots whatever survived
+the ~1-2 s **refresh gap during FPGA reconfiguration** — and warm DRAM decays
+on exactly that timescale. Evidence pattern:
+* jboot-after-push: 11/11 early wedge (rotted ROM executed).
+* jboots on a fabric whose ROM had been OSD-reloaded after the push: reached
+  the STM spin / grey screen (fresh content).
+* The user's SD/OSD flow always re-downloads the ROM post-config — masking
+  decay; JTAG pushes never do.
+* Every "ROM verified byte-perfect" claim (rom_sum/rom_axsum) measured the
+  DOWNLOAD STREAM at acceptance time, not what SDRAM still held when the CPU
+  fetched it. The project has NEVER verified retention.
+* Thermal fit: device "warmer than usual"; retention shortens with heat; the
+  golden era was a cooler machine on fresher content.
+* Golden-era transcript, user's own words after a JTAG push: "the jtag was
+  working ONCE the rom was fully loaded."
+**Missing instrument: a retention oracle** — JTAG-triggered re-checksum of
+the ROM region READ BACK from SDRAM (BIST-style port), compared against the
+known sums. Distinguishes decay (post-push mismatch, post-reload match, and
+possibly drift over minutes on a warm chip) from everything else. If decay is
+real even across normal operation (refresh-interval marginality at 135°?),
+it also explains the late-stage race: seldom-refreshed rows rot mid-boot.
+NOTE: the auto-refresh interval/logic in pocket_sdram vs the 64 ms JEDEC
+window should be re-audited with real numbers in the same pass.
+
+Console status: full duplex PROVEN + console-speed shim in (buildN) — the
+monitor's All-Sent poll budget (~200 us) can't span an honest 9600-baud char
+(1150 us); both ends now run ~325 kbaud internally. Awaiting a fresh-ROM
+boot for the *R/*T interrogation.
+
 ---
 
 ## 1. The symptom, precisely
