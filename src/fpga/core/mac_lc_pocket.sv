@@ -1579,6 +1579,9 @@ module mac_lc_pocket
 	reg  [18:0] romv_len  = 19'd0;
 	reg  [31:0] romv_sum = 32'd0;
 	reg  [31:0] romv_axs = 32'd0;
+	reg  [2:0]  romv_settle = 3'd0;
+	reg         romv_stb_d  = 1'b0;
+	wire        ram_do_stb;
 	wire        romv_run = (romv_st == 2'd1);
 	always @(posedge clk_sys) begin
 		romv_d <= romv_src[23];
@@ -1589,15 +1592,29 @@ module mac_lc_pocket
 			romv_len  <= (romv_src[4:0] > 5'd18) ? 19'h40000 : (19'd1 << romv_src[4:0]);
 			romv_sum  <= 32'd0;
 			romv_axs  <= 32'd0;
-		end else if (romv_run && clk8_en_p) begin
-			// ★ v2.1: dout is CURRENT with the driven address within the same
-			// chipset tick (empirically proven: the v2 previous-tick pairing
-			// read every word as its successor — a clean off-by-one). Pair the
-			// data with romv_idx itself; idx runs 0..len-1.
-			romv_sum <= romv_sum + {16'd0, ram_do_raw};
-			romv_axs <= romv_axs + ({14'd0, romv_base + romv_idx[17:0]} ^ {16'd0, ram_do_raw});
-			if (romv_idx == romv_len - 19'd1) romv_st <= 2'd2;
-			else romv_idx <= romv_idx + 19'd1;
+			romv_settle <= 3'd7;   // absorb any machine-era read still in flight
+		end else if (romv_run) begin
+			// ★ v3: COMPLETION-PAIRED. v2/v2.1 free-ran on clk8 ticks and
+			// trusted dout timing; reads that never issued left stale dout in
+			// the sums (the "8% corruption" mirage — mostly the machine's own
+			// post-reset word-0 fetch reflected back). Now: hold one address,
+			// accumulate ONLY when the controller's dout_stb confirms a served
+			// read, then advance. Slower (~0.5 s full scan), airtight.
+			// Settle: skip strobes for the first 8 clk_sys after an address
+			// change so a just-completing older read can't be mis-paired.
+			if (romv_settle != 3'd0) begin
+				romv_settle <= romv_settle - 3'd1;
+				romv_stb_d  <= ram_do_stb;
+			end else begin
+				romv_stb_d <= ram_do_stb;
+				if (romv_stb_d != ram_do_stb) begin
+					romv_sum <= romv_sum + {16'd0, ram_do_raw};
+					romv_axs <= romv_axs + ({14'd0, romv_base + romv_idx[17:0]} ^ {16'd0, ram_do_raw});
+					romv_settle <= 3'd7;
+					if (romv_idx == romv_len - 19'd1) romv_st <= 2'd2;
+					else romv_idx <= romv_idx + 19'd1;
+				end
+			end
 		end
 	end
 
@@ -1670,7 +1687,8 @@ module mac_lc_pocket
 		.ds             ( ram_ds      ),
 		.we             ( ram_we      ),
 		.oe             ( ram_oe      ),
-		.dout           ( ram_do_raw  )
+		.dout           ( ram_do_raw  ),
+		.dout_stb       ( ram_do_stb  )
 	);
 
 	// Dedicated SDRAM re-init pulse on explicit user resets only.

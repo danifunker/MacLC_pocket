@@ -83,6 +83,7 @@ module pocket_sdram
 
 	input [15:0]        din,        // data input from chipset/cpu
 	output reg [15:0]   dout,       // data output to chipset/cpu
+	output reg          dout_stb,   // toggles once per completed read (★ 2026-08-12)
 	input [23:0]        addr,       // 24 bit word address
 	input [1:0]         ds,         // upper/lower data strobe
 	input               oe,         // cpu/chipset requests read
@@ -251,7 +252,13 @@ always @(posedge clk_64) begin
 		end
 
 		// Data ready
-		if (t == STATE_READ && oe_latch) dout <= sd_data;
+		if (t == STATE_READ && oe_latch) begin
+			dout <= sd_data;
+			dout_stb <= ~dout_stb;   // ★ 2026-08-12: completion strobe (toggles
+			                         // once per served read; lets a reader pair
+			                         // data with requests instead of trusting
+			                         // stale dout — the ROMV mirage fix)
+		end
 
 	end
 end
