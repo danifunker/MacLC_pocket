@@ -1550,13 +1550,42 @@ module mac_lc_pocket
 	// now. dio_a_comb is retired: it recomputed the address combinationally from
 	// ioctl_addr instead of using the latched dio_a, so it was a second copy of
 	// the same mapping that could disagree with it.
-	// REVERTED 2026-08-11 pending bisection: the arbiter-gated form below is
-	// the MiSTer-faithful one and is almost certainly correct, but it was one
-	// of several changes in flight when the user's reload-the-ROM workaround
-	// stopped working. Restoring the previous behaviour first, then re-applying
-	// one change at a time. See docs/boot_problems.md.
+	//
+	// ★★ 2026-08-12 — RE-APPLIED, and this time it is a MEASURED ROOT CAUSE,
+	// not just MiSTer parity. The ROMV v3 oracle (completion-paired SDRAM
+	// read-back) proved the sim form scatter-corrupts the ROM AS IT LANDS:
+	//
+	//   * pocket_sdram samples row/bank from the LIVE addr at t=0 (ACT) and
+	//     column+data at t=2 (CAS), ~31 ns apart.
+	//   * In the sim form, ram_addr switches to the download mux the moment
+	//     ioctl_wr (a level) rises — but dio_a latches the new word's address
+	//     one clk_sys LATER. For that one cycle: ram_we=1, addr = OLD word's
+	//     dio_a, din = NEW word's ioctl_dout (live).
+	//   * If the controller's t=0 lands in that window, the access tears:
+	//     ACT opens the OLD row, CAS writes the NEW column with NEW data.
+	//     Mid-row that is invisible (old row == new row, and the torn write
+	//     lands exactly where the next word belongs anyway). At a ROW CROSSING
+	//     (every 256 words) it writes (row R, col 0) <= value(row R+1, col 0).
+	//   * Measured on hardware (buildR survey): every corrupt word sat at
+	//     addr xx00 and held exactly content(addr+0x100) — 16/16 clean matches
+	//     against boot0.rom, ~20% of row boundaries hit (1-in-4 t-phase odds).
+	//
+	// The stream-side accumulators (rom_sum/rom_axsum) can NEVER see this:
+	// they hash the words as sent, not as landed. Every "ROM verified
+	// byte-perfect" claim before ROMV was measuring the stream.
+	//
+	// This is the mechanism behind the per-reload boot lottery: each OSD
+	// reload re-rolls which row-start words are scarred, so boots fail (or
+	// don't) at random depths on identical checksums. jboot re-executes the
+	// SAME scarred content, hence its deterministic early wedge.
+	//
+	// The arbiter form is tear-proof by construction: dio_write is sampled
+	// only while ~dioBusControl (frozen through the slot), and a new word's
+	// valid can only rise after the ack at slot end, so every dio_write=1
+	// slot sees dio_a/dio_data that latched before the slot began and stay
+	// stable past its end. Do NOT revert to the ioctl_wr form.
 	//   MiSTer form: dio_download && dioBusControl, ram_din=dio_data, ram_we=dio_write
-	wire download_cycle = dio_download && ioctl_wr;
+	wire download_cycle = dio_download && dioBusControl;
 
 	// SDRAM word address mapping:
 	// memoryAddr[22:0] is already the SDRAM word address from addrController
@@ -1622,9 +1651,12 @@ module mac_lc_pocket
 	                       download_cycle ? {2'b00, dio_a[22:0]} :
 	                                        {2'b00, memoryAddr[22:0]};
 
-	wire [15:0] ram_din  = download_cycle ? ioctl_dout : memoryDataOut;
+	// din/we use the LATCHED word (dio_data) and the slot-gated one-shot
+	// (dio_write) — see the root-cause block above. Live ioctl_dout / a bare
+	// 1'b1 here re-opens the row-crossing tear.
+	wire [15:0] ram_din  = download_cycle ? dio_data : memoryDataOut;
 	wire  [1:0] ram_ds   = download_cycle ? 2'b11 : { !_memoryUDS, !_memoryLDS };
-	wire        ram_we   = download_cycle ? 1'b1 : !_ramWE;
+	wire        ram_we   = download_cycle ? dio_write : !_ramWE;
 	wire        ram_oe   = romv_run ? 1'b1 : download_cycle ? 1'b0 : (!_ramOE || !_romOE || dskReadAckInt);
 	wire [15:0] ram_do_raw;
 	// --- FORCED-WARM BOOT (2026-08-12) — inverse of the old dead patch -------

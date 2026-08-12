@@ -1,29 +1,39 @@
-# RESUME — MacLC Pocket, session handoff (rewritten 2026-08-12, end of the marathon)
+# RESUME — MacLC Pocket, session handoff (updated 2026-08-12 late: ROOT CAUSE FOUND)
 
-Paste into a fresh session: **"Resume docs/RESUME.md — we are waiting on the
-ROMV v3 oracle build, then running the v3 protocol."** Read this file fully,
-then `docs/boot_problems.md` (the complete corrected investigation history —
-every theory, every control that killed it, every trap). Where they disagree,
+Read this file fully, then `docs/boot_problems.md` (the complete corrected
+investigation history — every theory, every control that killed it, every
+trap; its final ★★★ section is the root-cause write-up). Where they disagree,
 boot_problems.md wins on history; this file wins on current state.
 
 ---
 
 ## 0. THE IMMEDIATE STATE (what "resume" means right now)
 
-A **ROMV v3 build** was compiling in the background when the session ended
-(map/fit/asm/sta chain on branch `instr/stm-console` @ `ae8248e`, launched as
-background task `b1aj4z15s`; its log:
-`C:\Users\owner\AppData\Local\Temp\claude\C--repos-MacLC-Pocket\39fb82c6-08ba-4e38-bd25-08f811201e91\tasks\b1aj4z15s.output`).
+**THE ROOT CAUSE OF THE BOOT LOTTERY IS FOUND, MEASURED, AND FIXED IN SOURCE
+(fix pending hardware validation).** The ROMV v3 oracle ran on buildR and
+found ~278 corrupt ROM words in SDRAM — every one at a row-boundary word
+(addr xx00), every one holding exactly `content(addr+0x100)` (278/278 against
+boot0.rom). The sim-form download path tears at SDRAM row crossings (~27% of
+boundaries per download, re-rolled every reload). Full mechanism + evidence:
+boot_problems.md ★★★ section. Fix applied on `instr/stm-console`:
+`download_cycle = dio_download && dioBusControl`, `ram_din = dio_data`,
+`ram_we = dio_write` (the MiSTer arbiter form, MacLC.sv.reference:2185-2206).
 
-First actions in a fresh session:
-1. Check that log for `STA_OK` (or check
-   `src/fpga/output_files/ap_core.fit.summary` mtime is AFTER the v2.1 build).
-   If absent/stale: rebuild — `cd src/fpga && quartus_map ap_core && quartus_fit
-   ap_core && quartus_asm ap_core && quartus_sta ap_core` (~20 min, works with
-   the standard PATH exports in §6).
-2. Archive: `cp src/fpga/output_files/ap_core.sof scratch/builds/2026-08-12-buildR-oracle-v3.sof`
-3. Push: `quartus_pgm -c "USB-Blaster [USB-0]" -m JTAG -o "p;src/fpga/output_files/ap_core.sof"`
-4. Run the **v3 protocol** (§3).
+**buildS** (the fix) was compiling when this update was written. To resume:
+1. Verify/rebuild (`src/fpga`, map->fit->asm->sta), archive as
+   `scratch/builds/2026-08-12-buildS-download-arbiter-fix.sof`, push via JTAG.
+2. **User does ONE OSD reload of boot0.rom** (fresh content through the FIXED
+   path).
+3. `quartus_stp_tcl -t scripts/romv.tcl` (defaults to 3 scans) — MUST return
+   **sum=350F8EEE axsum=F486F3D8** on every scan. That is the content-level
+   acceptance of the fix.
+4. If clean: boot testing (reload-to-"?" first, then cold boots — with clean
+   content the cold-vs-reload distinction should disappear). If boots still
+   fail, the STM console (*R) tells you which POST test fails — but now on
+   TRUSTWORTHY content.
+5. If NOT clean: `scripts/romv_survey.tcl [maxbad] [startr] [endr]` locates
+   the residue; verify every lg=0 finding with `romv_peek.tcl` majority-of-3
+   (the instrument has ~1% per-trigger misreads — see boot_problems).
 
 ---
 
@@ -53,48 +63,38 @@ Every bitstream built today is archived: `scratch/builds/2026-08-12-buildA..Q*.s
 K=jboot, M=diag-on-demand, N=console-speed, Q=oracle-v2.1; v3 = R when built).
 `git log --oneline` on instr/stm-console narrates the whole day.
 
-## 3. THE ROMV v3 PROTOCOL (the pending experiment)
+## 3. THE ROMV v3 ORACLE (ran 2026-08-12; found the root cause)
 
-ROMV v3 = completion-paired SDRAM read-back oracle: `pocket_sdram` now exports
+ROMV v3 = completion-paired SDRAM read-back oracle: `pocket_sdram` exports
 `dout_stb` (toggles once per served read); the scanner holds each address until
-a confirmed completion (8-cycle settle windows absorb in-flight machine-era
-reads). This kills the stale-dout mirage that produced two false "corruption"
-verdicts (see boot_problems.md "THE ORACLE'S MIRAGE"). Full scan now takes
-~0.5 s of hardware time.
+a confirmed completion (8-cycle settle windows absorb in-flight reads). Full
+scan ~0.5 s; repeat-stable (4 identical full scans on buildR).
 
-Protocol (after pushing the v3 build):
-1. **Post-push scan, NO reload**: `quartus_stp_tcl -t scripts/romv.tcl` —
-   ⚠ romv.tcl still uses the v1 single-bit trigger; EITHER fix it to write
-   the v2 source encoding (24-bit: bit23=go rising edge, bits22:5=start word,
-   bits4:0=log2len; full ROM = write 0x000012 then 0x800012) or use
-   romv_search.tcl which encodes correctly. Expected sums for the intact ROM:
-   **sum=350F8EEE axsum=F486F3D8** (single scan; v3 counters reset per scan).
-   This scan measures decay across the reconfig refresh-gap + any real errors.
-2. **User does ONE OSD reload of boot0.rom** (fresh content).
-3. **Post-reload scan ×3** (repeatability). If ≠ reference: REAL content
-   errors exist → run `scripts/romv_search.tcl` (binary search; needs
-   `scratch/rom_words.tcl`, regenerate with
-   `python scripts/gen_rom_words.py "../MacLC_MiSTer/releases/boot0.rom" "scratch/rom_words.tcl"`)
-   → analyze the bad-address bit pattern. If = reference: SDRAM content is
-   CLEAN and the decay/corruption thread closes; go to §4.
-4. Also available: `scripts/romv_peek.tcl <hexaddr>...` — isolated single-word
-   reads (v3 makes these trustworthy).
+Tooling (all fixed to the v2/v3 trigger encoding: src[23]=go rising edge,
+src[22:5]=start word, src[4:0]=log2len; full ROM = arm 0x000012, fire
+0x800012):
+* `scripts/romv.tcl [n]` — full-ROM scan ×n (default 3) vs reference sums
+  **350F8EEE / F486F3D8**.
+* `scripts/romv_survey.tcl [maxbad] [startr] [endr]` — 32-range histogram +
+  binary descent, prints every bad word + flip stats; retries transient
+  trigger glitches.
+* `scripts/romv_peek.tcl <hexaddr>...` — 3 isolated reads per address; use
+  majority-of-3 to verify any survey finding (~1% of triggers misread).
+* `scripts/romv_search.tcl` — original binary search (needs
+  `scratch/rom_words.tcl`; regenerate with `python scripts/gen_rom_words.py
+  "../MacLC_MiSTer/releases/boot0.rom" "scratch/rom_words.tcl"`).
 
-## 4. THE PRIME OPEN LEAD — reset-hold duration
+RESULT on buildR content: ~278 bad words, all at xx00, all =
+content(X+0x100), 27% of row boundaries — the download-path row-crossing
+tear. See boot_problems.md ★★★.
 
-**The tightest reproducible discriminator that survived every control:**
-jboot boots (instant ~4 µs reset strobe, then the machine's normal
-8 ms + 129 ms sequence) fail into the EARLY wedge **11/11**, while OSD ROM
-reloads (which hold reset for the multi-second download) frequently reach the
-late stages (grey screen / 138k IRQs / late sad-mac). Something needs TIME IN
-RESET (or time-without-bus-activity) to settle: Egret state, PLL, SDRAM bank
-state, V8...
+## 4. FORMER LEAD — reset-hold duration [RESOLVED]
 
-**Next experiment (one small build): make the jboot hold configurable** —
-widen the JBOO source to carry a hold-duration field (e.g. 0.1 s → 5 s sweep),
-then binary-search the threshold hands-free. If long holds rescue jboots, the
-fault is settling-time-dependent and the threshold's magnitude points at the
-subsystem (ms → SDRAM/PLL; ~1 s → Egret's ONESEC timer).
+The jboot-vs-OSD discriminator was CONTENT FRESHNESS, not time in reset:
+jboot re-executes the same scarred ROM (deterministic early wedge, 11/11);
+an OSD reload re-rolls the ~27%-of-row-starts scar dice (variable outcomes,
+occasionally a clean-enough image that boots — the golden era's "2-3
+reloads"). No hold-duration sweep is needed unless buildS validation fails.
 
 ## 5. THE INSTRUMENT SUITE (all on instr/stm-console, all JTAG, no user hands)
 
@@ -177,6 +177,10 @@ polling) — interrogation works there too.
    on this branch — stripped in recon), cold_rst generator disconnected.
 5. `pocket_sdram` additions: `sdram_ready` output (inert), `dout_stb`
    completion strobe (v3 oracle dependency).
+6. **Download path = MiSTer arbiter form** (`download_cycle = dio_download &&
+   dioBusControl`, latched `dio_data`, one-shot `dio_write`) — this is the
+   ROOT-CAUSE FIX for the row-crossing tear, restores MacLC.sv parity, and
+   must NOT be reverted to the `ioctl_wr` sim form (see boot_problems ★★★).
 
 ## 8. STATE OF KNOWLEDGE (details in boot_problems.md — trust its "RESULTS" sections)
 

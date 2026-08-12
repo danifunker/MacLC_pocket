@@ -247,9 +247,117 @@ state of knowledge — record so nobody re-walks it:
   source-configurable jboot hold time — sweep it; if long holds rescue
   jboots, the fault is time-in-reset-dependent state settling (Egret, PLL,
   SDRAM bank state, ...).
+  [RESOLVED 2026-08-12 — see the ROOT CAUSE section below: the discriminator
+  was content freshness, not reset duration. jboot re-executes the SAME
+  scarred ROM; an OSD reload re-rolls the scar dice.]
 * Instrument suite now standing: hands-free boot (JBOO), diag-mode-on-demand
   (DIAG/PA0), two-way STM console at working speed (STMC/SCCR/SCCS + three
   scc.v truth fixes), ROM retention oracle v3 (ROMV/RVSU/RVAX).
+
+---
+
+## ★★★ 2026-08-12 — ROOT CAUSE FOUND AND MEASURED: the download-path
+## row-crossing tear scatter-corrupts the ROM as it lands
+
+ROMV v3's first honest look at SDRAM content (buildR, post-push, no reload)
+found the ROM differing from the file — **stable across 4 identical full
+scans** (sum=350797DA axsum=F488E2C4 vs reference 350F8EEE/F486F3D8), so a
+real, frozen content difference, not the v2.x mirage. A binary-descent survey
+(`scripts/romv_survey.tcl`, 5,616 range scans, ~3 min) then located every bad
+word. After isolated-read verification (`romv_peek.tcl`, majority-of-3):
+
+* **~278 corrupt words. EVERY one at an SDRAM row-boundary word**
+  (word addr xx00 — pocket_sdram maps addr[7:0] to column, addr[19:8] to row).
+* **EVERY one holds exactly `content(addr+0x100)`** — the NEXT row's col-0
+  value. 278/278 byte-exact against boot0.rom, zero exceptions. (Values like
+  8902 with 5 occurrences in all 256K words rule out coincidence.)
+* 278 of 1023 row crossings hit ≈ 27% — matching the 1-in-4 t-phase odds of
+  the mechanism below.
+* Flip "direction" mixed both ways, all 16 data lanes uniform: value
+  REPLACEMENT, not charge decay. **The decay theory is dead** — DRAM leakage
+  cannot copy the next row's value into this row.
+
+### The mechanism (RTL-level, exact)
+
+`pocket_sdram` samples the LIVE `addr` twice per access: row/bank at t=0
+(ACT), column + data at t=2 (CAS), ~31 ns apart. The sim-form download path
+(`download_cycle = dio_download && ioctl_wr`) switches `ram_addr` to the
+download the moment the loader raises `ioctl_wr` (a level) — but the latched
+`dio_a` takes one more clk_sys to load the new word's address. For that one
+cycle: `ram_we=1`, addr = OLD word's, din = NEW word's (live `ioctl_dout`).
+If the controller's t=0 lands in that window the access tears: **ACT opens
+the old row, CAS writes the new column with the new data.**
+
+* Mid-row the tear is INVISIBLE: old row == new row, and the torn write lands
+  exactly where the next word was about to be written anyway.
+* At a row crossing it writes `(row R, col 0) <= value(row R+1, col 0)` —
+  the exact observed corruption. The victim word's own correct write (255
+  words earlier) is clobbered; no other word is lost (the new word's level
+  hold rewrites it correctly in later chipset cycles).
+* The new word's `valid` rise is timed by the loader pop / bridge arrival
+  (clk_74a-flavored, async to the t counter), so the t=0 alignment is a
+  ~1-in-4 dice roll per boundary — hence ~27% of row starts scarred, and a
+  DIFFERENT scar set every download.
+
+### Why every previous instrument said "fine"
+
+* `rom_sum`/`rom_axsum` accumulate the STREAM (latched dio word at ack time),
+  not what landed — a torn write is invisible to them by construction. Every
+  historical "ROM verified byte-perfect" was measuring the stream.
+* The SDRAM BIST holds its addresses stable per access — no tear, 0 errors.
+* CPU/chipset accesses hold addresses stable across the whole access — the
+  running machine never tears its own reads/writes.
+* Word COUNTS are exact: no word is dropped; one extra (mis-addressed) write
+  fires.
+
+### What it explains (the whole season, plausibly)
+
+* **The per-reload boot lottery**: each OSD reload re-rolls ~250-300 scarred
+  words across the ROM. Boots then die at random depths — early POST wedge,
+  grey-screen + late sad-mac, occasionally a full boot ("2-3 reloads to the
+  ?") — on IDENTICAL checksums.
+* **jboot 11/11 early wedge**: jboot re-executes the SAME scarred content —
+  deterministic failure. OSD reloads re-roll — variable outcomes. The
+  "reset-hold duration" discriminator dissolves.
+* **Fit-to-fit and thermal variance**: the clk_74a->clk_sys arrival phase and
+  FIFO occupancy patterns shift the per-boundary odds with placement and
+  temperature. The golden fit had friendly odds; nothing about the code
+  changed.
+* The post-push content diff that looked like "decay across the reconfig
+  refresh gap" was the last pre-push download's scar set, frozen.
+
+### The fix (buildS)
+
+Re-applied the MiSTer arbiter form in mac_lc_pocket.sv — the exact form
+MacLC.sv.reference:2185-2206 ships and the 2026-08-11 bisection panic had
+reverted:
+
+    wire download_cycle = dio_download && dioBusControl;  // slot-gated
+    ram_din = download_cycle ? dio_data  : ...            // latched, not live
+    ram_we  = download_cycle ? dio_write : ...            // frozen through slot
+
+Tear-proof by construction: `dio_write` is sampled only while
+`~dioBusControl` (frozen through the slot), and a new word's `valid` can only
+rise after the ack at slot end, so every `dio_write=1` slot sees `dio_a`/
+`dio_data` that latched before the slot began. The floppy download path is
+cured by the same change (its images got the same row-start scars — likely
+the real face of "mounting a floppy crashes the core").
+
+**Acceptance protocol for buildS**: push -> user does ONE OSD reload ->
+`romv.tcl` x3 must return EXACTLY 350F8EEE/F486F3D8 -> then boot testing.
+With clean content, cold boots and reloads go through the same fixed path;
+the cold-vs-reload distinction should disappear entirely.
+
+### Instrument honesty note (ROMV v3 characterization)
+
+Misreads are per-TRIGGER (scan startup), ~1% of triggers, not per-word —
+four full-ROM scans were bit-identical while the 5,616-trigger descent
+produced ~14 phantoms (values smeared onto neighbor addresses, e.g. flagged
+xx01 entries whose isolated re-reads were correct while the real scar sat at
+the xx00 sibling). Rules: trust single-trigger range sums; verify every
+bottom-level (lg=0) finding with `romv_peek.tcl` majority-of-3 before calling
+it content. The transient "SCAN WEDGED st=0" is the same startup glitch —
+`romv_survey.tcl` now retries.
 
 ---
 
