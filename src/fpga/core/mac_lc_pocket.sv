@@ -1677,30 +1677,20 @@ module mac_lc_pocket
 	wire        ram_we   = download_cycle ? dio_write : !_ramWE;
 	wire        ram_oe   = romv_run ? 1'b1 : download_cycle ? 1'b0 : (!_ramOE || !_romOE || dskReadAckInt);
 	wire [15:0] ram_do_raw;
-	// --- FORCED-WARM BOOT (2026-08-12) — inverse of the old dead patch -------
-	// History: the block this replaces was inherited from MacLC.sv and claimed
-	// to force the COLD path by patching the warm-vs-cold `bne.w`. Its address
-	// was wrong by one hex digit ($52322F = ROM byte $4645E, mid-instruction
-	// data 0x0206) so its opcode guard NEVER matched: it was dormant on MiSTer
-	// and here, always. The real branch, verified against the ROM disassembly:
-	//     $46558: 0C83 574C 5343   cmpi.l #'WLSC',D3   (warm-start magic)
-	//     $4655E: 6600 0016        bne.w  $46576       (taken = COLD march)
-	// i.e. SDRAM words $5232AC-...  branch opcode at word $5232AF.
-	//
-	// On the Pocket the COLD march is what fails (POST dies in it or fails a
-	// subtest -> sad mac -> STM), while the WARM path is the one the golden-era
-	// reload workaround rode to the "?" screen. So force WARM: NOP out both
-	// words of the bne.w. Every boot then falls through to the warm path
-	// regardless of the flag in RAM. Guarded on address AND expected opcode so
-	// any other ROM passes through untouched. THIS IS A WORKAROUND/EXPERIMENT:
-	// if it boots, everything downstream of the march is healthy and the fault
-	// is confined to the cold-march path; it also gives a usable core. A true
-	// cold boot enters the warm path with uninitialized low memory — first
-	// attempt may still misbehave; a reload then mimics the golden pattern.
-	wire [15:0] ram_do_patched =
-		(!_romOE && memoryAddr == 23'h5232AF && ram_do_raw == 16'h6600) ? 16'h4E71 :
-		(!_romOE && memoryAddr == 23'h5232B0 && ram_do_raw == 16'h0016) ? 16'h4E71 :
-		ram_do_raw;
+	// --- FORCED-WARM BOOT: RETIRED (buildU, 2026-08-12) ----------------------
+	// The 2026-08-12 forced-warm experiment NOPed the warm-vs-cold `bne.w`
+	// ($4655E, SDRAM words $5232AF/B0; the inherited MiSTer patch aimed at
+	// $52322F and never fired — address typo). It was cover for the cold RAM
+	// march failing — which the ROMV v3 oracle then explained: the march was
+	// executing SCARRED ROM (download row-crossing tears, see the root-cause
+	// block above). With the download path fixed and content verified
+	// byte-perfect, the patch became actively harmful: it forced warm-boot
+	// semantics onto uninitialized RAM on every true cold boot, which failed
+	// POST into the $A49xxx reporter deterministically. Honest branch
+	// restored; the cold march runs on clean code now. (If a forced-warm
+	// experiment is ever needed again: NOP words $5232AF/B0 when ram_do_raw
+	// reads 6600/0016, guarded on !_romOE and the exact address.)
+	wire [15:0] ram_do_patched = ram_do_raw;
 	wire [15:0] ram_do   = download_cycle ? 16'hffff : dskReadAckInt ? extra_rom_data_demux : ram_do_patched;
 	// Disk byte-parity select: must be dskReadAddr[0], NOT memoryAddr[0] (which
 	// is dskReadAddr[1] after the >>1 word conversion drops bit 0). See the long
