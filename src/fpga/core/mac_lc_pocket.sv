@@ -1567,33 +1567,41 @@ module mac_lc_pocket
 	// arriving stream; this measures what the cells still hold — the missing
 	// oracle for the refresh-gap/decay hypothesis. Trigger: ROMV source rising
 	// edge. Holds the machine in reset for the ~32 ms scan (clk8-paced).
-	wire        romv_src;
+	// v2: RANGE scans. Source = {go(rising edge), start[17:0], log2len[4:0]}:
+	// sums words [start, start + 2^log2len). log2len=18 with start=0 = the
+	// full-ROM scan. Binary search over ranges localizes every corrupt word
+	// over JTAG in seconds. romv_sum doubles as the WORD PEEK for len=1.
+	wire [23:0] romv_src;   // [23] go, [22:5] start, [4:0] log2len
 	reg         romv_d   = 1'b0;
 	reg  [1:0]  romv_st  = 2'd0;    // 0 idle, 1 scanning, 2 done
-	reg  [18:0] romv_idx = 19'd0;   // one past-the-end tail tick at 0x40000
+	reg  [18:0] romv_idx = 19'd0;   // counts 0..len inclusive tail
+	reg  [17:0] romv_base = 18'd0;
+	reg  [18:0] romv_len  = 19'd0;
 	reg  [31:0] romv_sum = 32'd0;
 	reg  [31:0] romv_axs = 32'd0;
 	wire        romv_run = (romv_st == 2'd1);
 	always @(posedge clk_sys) begin
-		romv_d <= romv_src;
-		if (!romv_d && romv_src && romv_st != 2'd1) begin
-			romv_st  <= 2'd1;
-			romv_idx <= 19'd0;
-			romv_sum <= 32'd0;
-			romv_axs <= 32'd0;
+		romv_d <= romv_src[23];
+		if (!romv_d && romv_src[23] && romv_st != 2'd1) begin
+			romv_st   <= 2'd1;
+			romv_idx  <= 19'd0;
+			romv_base <= romv_src[22:5];
+			romv_len  <= (romv_src[4:0] > 5'd18) ? 19'h40000 : (19'd1 << romv_src[4:0]);
+			romv_sum  <= 32'd0;
+			romv_axs  <= 32'd0;
 		end else if (romv_run && clk8_en_p) begin
 			// data returning on this tick belongs to the address driven on the
-			// previous tick (romv_idx-1)
+			// previous tick (base + romv_idx - 1)
 			if (romv_idx != 19'd0) begin
 				romv_sum <= romv_sum + {16'd0, ram_do_raw};
-				romv_axs <= romv_axs + ({14'd0, romv_idx[17:0] - 18'd1} ^ {16'd0, ram_do_raw});
+				romv_axs <= romv_axs + ({14'd0, romv_base + romv_idx[17:0] - 18'd1} ^ {16'd0, ram_do_raw});
 			end
-			if (romv_idx == 19'h40000) romv_st <= 2'd2;
+			if (romv_idx == romv_len) romv_st <= 2'd2;
 			else romv_idx <= romv_idx + 19'd1;
 		end
 	end
 
-	wire [24:0] ram_addr = romv_run       ? {2'b00, 5'b10100, romv_idx[17:0]} :
+	wire [24:0] ram_addr = romv_run       ? {2'b00, 5'b10100, romv_base + romv_idx[17:0]} :
 	                       download_cycle ? {2'b00, dio_a[22:0]} :
 	                                        {2'b00, memoryAddr[22:0]};
 
@@ -2016,7 +2024,7 @@ module mac_lc_pocket
 	) cp_diag (.probe(diag_src), .source(diag_src), .source_clk(clk_sys), .source_ena(1'b1));
 
 	altsource_probe #(
-		.instance_id ("ROMV"), .probe_width (4), .source_width (1),
+		.instance_id ("ROMV"), .probe_width (4), .source_width (24),
 		.sld_auto_instance_index ("YES")
 	) cp_romv (.probe({2'b00, romv_st}), .source(romv_src), .source_clk(clk_sys), .source_ena(1'b1));
 
