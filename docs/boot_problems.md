@@ -149,6 +149,39 @@ workaround FIRST on every build):**
   overlap bug is fixed). Blocked on: the cold RAM march must pass, since
   10 MB runs the full 8 MB SIMM test.
 
+### 2026-08-12 evening — the console works both ways; the failure flow decoded
+
+Ring v2 ({rw, port, byte} tagged transcript, `instr/stm-console` branch,
+builds G-J archived in scratch/builds/) produced the register-level truth:
+
+* **The SCC was structurally deaf AND mute since import** — MiSTer-era shims:
+  RX chars dropped forever post-loopback (scc.v:259) + RR0 RxAvail forced 0
+  (scc.v:962) + TxEmpty forced busy post-loopback (scc.v:926). All three now
+  truth-with-a-one-shot-flush on the instr branch. This Pocket port is the
+  first thing to ever actually USE this SCC's port.
+* **The famous cold-boot "$E00000-$EFFFFF wedge" is the DIAGNOSTIC FLOW, not
+  a hang**: after an early failure the ROM (a) polls the serial port ~50
+  times for a TechStep terminal (captured: R-ctA RR0=0x04 ~50-75x), then
+  (b) walks the PDS slot space looking for a diag card — the "endless" sweep,
+  which LOOPS (observed wrapping $EF->$E8 within one boot). The wedge is a
+  symptom; the failure that routes boots into it happens EARLIER, overlay
+  still on, and per-boot randomly (the race).
+* **Forced-warm results**: many boots now reach grey-screen + deep
+  interrupt-driven running (138k IRQs) before a late sad-mac (stages 16-18);
+  other boots
+  still divert into the diag flow before the patch's branch point. The race
+  has (at least) two strike points: early POST and stages 16-18.
+* **Live lever discovered**: if a character arrives DURING the post-failure
+  serial poll window, the ROM should enter the interactive STM instead of the
+  slot scan — a sanctioned command prompt at the instant of failure, with the
+  *T test suite (Size Memory / Data Bus / Mod3 / Address Line) runnable
+  against the just-failed hardware state. `scripts/stm_spam.tcl` streams '*'
+  for ~90 s; run it OVERLAPPING a ROM reload. First attempt missed (reload
+  didn't coincide); repeat coordinated.
+* Next instruments queued: JTAG boot strobe (ISSP source faking the ROM-
+  download latch + reset — the ROM persists in SDRAM, so boots would need NO
+  user hands), and if the window-catch works, a scripted *T battery.
+
 ---
 
 ## 1. The symptom, precisely
