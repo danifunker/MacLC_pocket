@@ -294,52 +294,6 @@ module mac_lc_pocket
 	end
 	assign pram_save_req_o = pram_save_req_r;
 
-	// ---- COLD-BOOT RE-RESET (2026-08-11) ----------------------------------
-	// See docs/boot_problems.md §1. A cold core load does not boot; reloading
-	// boot0.rom two or three times does -- and the ROM in SDRAM is
-	// BYTE-IDENTICAL either way (proved with rom_sum / rom_axsum, which fold
-	// the word index in and so catch addressing errors too). So the ROM is not
-	// the problem; the machine's state around its FIRST reset release after a
-	// fresh download is.
-	//
-	// What a manual reload actually does is assert
-	// (dio_download && dio_index==0), which drives n_reset low and then
-	// releases it through the whole 8 ms + 129 ms sequence -- a COMPLETE
-	// machine reset with the ROM already resident. The cold path releases
-	// reset only once, immediately after the ROM lands. This reproduces the
-	// reload automatically: exactly once, after the first ROM download
-	// completes and the machine has had time to start, assert one more reset.
-	//
-	// If this boots reliably it is a workaround, NOT the root cause -- the real
-	// question stays "what is different about the first release". Keep hunting.
-	localparam [22:0] COLD_RST_DELAY = 23'd4_062_500;   // ~500 ms at 8.125 MHz
-	reg        cold_rst_done = 1'b0;
-	reg [22:0] cold_rst_dly  = 23'd0;
-	reg [4:0]  cold_rst_hold = 5'd0;
-	reg        rom_dl_d      = 1'b0;
-	wire       rom_dl        = dio_download && (dio_index == 8'd0);
-	wire       cold_rst      = (cold_rst_hold != 5'd0);
-
-	always @(posedge clk_sys) if (clk8_en_p) begin
-		rom_dl_d <= rom_dl;
-		// Arm on the FALLING edge of the ROM download, once ever.
-		if (rom_dl_d && !rom_dl && !cold_rst_done) begin
-			cold_rst_dly <= 23'd1;
-		end else if (cold_rst_dly != 23'd0) begin
-			if (cold_rst_dly == COLD_RST_DELAY) begin
-				// Hold for 31 clk8 ticks: the reset block below samples only
-				// on clk8_en_p, so a single-cycle pulse would be missed (see
-				// RESUME.md -- this bit us before with the interact actions).
-				cold_rst_hold <= 5'd31;
-				cold_rst_done <= 1'b1;
-				cold_rst_dly  <= 23'd0;
-			end else begin
-				cold_rst_dly <= cold_rst_dly + 23'd1;
-			end
-		end
-		if (cold_rst_hold != 5'd0) cold_rst_hold <= cold_rst_hold - 5'd1;
-	end
-
 	// Reset logic
 	// NOTE: Do NOT include _cpuReset_o here! The RESET instruction drives
 	// reset_n low to reset peripherals, but should NOT reset the CPU itself.
@@ -1456,7 +1410,7 @@ module mac_lc_pocket
 		// throw the word away. The loader keeps dio_wr asserted and its 512-word
 		// FIFO absorbs the ~126 us wait, so nothing is lost -- the words are
 		// simply written once memory is live.
-		if(dio_old_cyc & ~dioBusControl & dio_write & sdram_ready) ioctl_wait <= 0;
+		if(dio_old_cyc & ~dioBusControl & dio_write) ioctl_wait <= 0;
 	end
 
 	// ---- Boot forensics: words actually RETIRED into SDRAM ------------------
@@ -1495,14 +1449,6 @@ module mac_lc_pocket
 	// which is by far the more likely failure for a download path.
 	// (The ROM file's own embedded checksum verifies independently:
 	//  stored 0x350EACF0 == computed 0x350EACF0, so the source is good.)
-	// Proof the race was real: counts clk_sys cycles in which a download word
-	// was ready to retire but SDRAM was still initialising. Non-zero on a cold
-	// boot = the words WOULD have been discarded before this fix.
-	wire       sdram_ready;
-	reg [31:0] dl_held_cycles = 32'd0;
-	always @(posedge clk_sys)
-		if (ioctl_wait && !sdram_ready) dl_held_cycles <= dl_held_cycles + 32'd1;
-
 	reg [31:0] rom_sum   = 32'd0;
 	reg [31:0] rom_axsum = 32'd0;
 	wire [31:0] rom_widx = {14'd0, dio_a[17:0]};   // word index within the file
@@ -1564,77 +1510,13 @@ module mac_lc_pocket
 	// SDRAM word address mapping:
 	// memoryAddr[22:0] is already the SDRAM word address from addrController
 	// Download path uses the LATCHED dio_a[22:0] (set when ioctl_wr arrived).
-	// =======================================================================
-	// SDRAM BIST -- does a CPU-STYLE write/read of the RAM region actually work?
-	// =======================================================================
-	// Everything verified so far exercises a DIFFERENT path than the RAM test:
-	//   * rom_sum/rom_axsum prove the DOWNLOAD write path and its addressing.
-	//   * Hundreds of millions of correct instruction fetches prove READS.
-	// Nothing has ever confirmed a write to the RAM region followed by reading
-	// it back -- which is precisely what the ROM's memory test does, and what it
-	// now reports as FAILED (10 MB setting: error chime; 2 MB: loops for ever).
-	//
-	// This walks a strided sample of the RAM word range through the same
-	// ram_addr/ram_din/ram_we muxes the CPU uses, then reads it back and
-	// compares. It runs ONLY while the machine is in reset and only after the
-	// ROM has landed, so it cannot race the CPU, and it finishes long before
-	// n_reset releases:
-	//   8192 samples x 2 passes = 16384 chipset cycles @ 8.125 MHz = ~2 ms,
-	//   inside the ~8 ms rst_cnt hold.
-	// Stride 512 words spreads the samples over 4 M words (8 MB) so it covers
-	// the motherboard RAM AND the SIMM range that the 10 MB config enables.
-	//
-	// The pattern is address-derived (addr ^ 0x5A5A), so a wrong-address write
-	// fails the compare just as loudly as a wrong-data one -- the same reason
-	// rom_axsum folds the index in.
-	localparam        BIST_ENABLE = 1'b0;     // 0 = compiled out (golden parity)
-	localparam [12:0] BIST_N = 13'd8191;      // samples - 1
-	localparam [8:0]  BIST_SH = 9'd9;          // stride = 512 words
-	reg  [1:0]  bist_st   = 2'd0;              // 0 idle, 1 write, 2 read, 3 done
-	reg  [12:0] bist_idx  = 13'd0;
-	reg  [15:0] bist_errs = 16'd0;
-	reg  [22:0] bist_first= 23'h7FFFFF;        // first failing word address
-	reg         bist_ran  = 1'b0;
-	wire [22:0] bist_addr = {bist_idx, 10'd0} >> (10 - BIST_SH);
-	wire [15:0] bist_pat  = bist_addr[15:0] ^ 16'h5A5A;
-	wire        bist_active = (bist_st == 2'd1) || (bist_st == 2'd2);
-
-	always @(posedge clk_sys) begin
-		if (clk8_en_p) begin
-			case (bist_st)
-			// BIST_ENABLE=0 for the 2026-08-12 baseline-anchor build (golden had
-			// no BIST). With the start gated off, bist_st stays 0, bist_active
-			// stays 0, and every BIST mux term below folds to its golden form.
-			2'd0: if (BIST_ENABLE && !bist_ran && rom_loaded && !dio_download && !n_reset) begin
-			          bist_st <= 2'd1; bist_idx <= 13'd0;
-			      end
-			2'd1: begin                       // write pass
-			          if (bist_idx == BIST_N) begin bist_idx <= 13'd0; bist_st <= 2'd2; end
-			          else bist_idx <= bist_idx + 13'd1;
-			      end
-			2'd2: begin                       // read-back pass, one cycle behind
-			          if (ram_do_raw != bist_pat) begin
-			              if (bist_errs != 16'hFFFF) bist_errs <= bist_errs + 16'd1;
-			              if (bist_first == 23'h7FFFFF) bist_first <= bist_addr;
-			          end
-			          if (bist_idx == BIST_N) begin bist_st <= 2'd3; bist_ran <= 1'b1; end
-			          else bist_idx <= bist_idx + 13'd1;
-			      end
-			default: ;
-			endcase
-		end
-	end
-
-	wire [31:0] dbg_bist = { bist_st, bist_ran, bist_errs, bist_first[12:0] };
-
-	wire [24:0] ram_addr = bist_active    ? {2'b00, bist_addr} :
-	                       download_cycle ? {2'b00, dio_a[22:0]} :
+	wire [24:0] ram_addr = download_cycle ? {2'b00, dio_a[22:0]} :
 	                                        {2'b00, memoryAddr[22:0]};
 
-	wire [15:0] ram_din  = bist_active    ? bist_pat  : download_cycle ? ioctl_dout : memoryDataOut;
-	wire  [1:0] ram_ds   = bist_active    ? 2'b11     : download_cycle ? 2'b11    : { !_memoryUDS, !_memoryLDS };
-	wire        ram_we   = (bist_st==2'd1)? 1'b1      : download_cycle ? 1'b1     : !_ramWE;
-	wire        ram_oe   = (bist_st==2'd2)? 1'b1      : download_cycle ? 1'b0     : (!_ramOE || !_romOE || dskReadAckInt);
+	wire [15:0] ram_din  = download_cycle ? ioctl_dout : memoryDataOut;
+	wire  [1:0] ram_ds   = download_cycle ? 2'b11 : { !_memoryUDS, !_memoryLDS };
+	wire        ram_we   = download_cycle ? 1'b1 : !_ramWE;
+	wire        ram_oe   = download_cycle ? 1'b0 : (!_ramOE || !_romOE || dskReadAckInt);
 	wire [15:0] ram_do_raw;
 	// --- Force cold-boot path (warm-reset hang workaround) — keep in sync with MacLC.sv.
 	// Patch the boot ROM's warm-vs-cold `bne.w` at ROM byte $4655E (SDRAM word
@@ -1679,8 +1561,7 @@ module mac_lc_pocket
 		.ds             ( ram_ds      ),
 		.we             ( ram_we      ),
 		.oe             ( ram_oe      ),
-		.dout           ( ram_do_raw  ),
-		.sdram_ready    ( sdram_ready )
+		.dout           ( ram_do_raw  )
 	);
 
 	// Dedicated SDRAM re-init pulse on explicit user resets only.
@@ -1827,32 +1708,6 @@ module mac_lc_pocket
 		if (fc7_iack && !iack_d) iack_cnt <= iack_cnt + 24'd1;
 	end
 
-	// ---- SCC TX capture (2026-08-12) --------------------------------------
-	// The STM diagnostic monitor continuously transmits its banner + status
-	// digits on the modem port ($F040xx), which has no pin on the Pocket. The
-	// banner carries the 12 status/flag hex digits (see MacLC_MiSTer
-	// docs/diagnostic_mode_reference.md), i.e. the FAILING POST SUBTEST is in
-	// this byte stream. Latch every CPU write into the SCC window; the count
-	// plus a rolling 3-byte window lets repeated ISSP polls reconstruct the
-	// repeating stream (9600 baud ≈ 1 byte/ms vs ~10 polls/s, banner loops
-	// forever). Ctl-pointer writes ($08 etc.) interleave with data bytes —
-	// decode offline, do not filter here.
-	reg [7:0]  scc_wr_cnt  = 8'd0;
-	reg [23:0] scc_last3   = 24'd0;
-	reg        scc_wr_pend = 1'b0;
-	reg [7:0]  scc_wr_byte = 8'd0;
-	always @(posedge clk_sys) begin
-		if (!_cpuAS && !_cpuRW && (cpuAddr[23:8] == 16'hF040)) begin
-			scc_wr_pend <= 1'b1;
-			if (!_cpuUDS)      scc_wr_byte <= cpuDataOut[15:8];
-			else if (!_cpuLDS) scc_wr_byte <= cpuDataOut[7:0];
-		end else if (scc_wr_pend) begin
-			scc_wr_pend <= 1'b0;
-			scc_wr_cnt  <= scc_wr_cnt + 8'd1;
-			scc_last3   <= { scc_last3[15:0], scc_wr_byte };
-		end
-	end
-	wire [31:0] dbg_scc_tx = { scc_wr_cnt, scc_last3 };
 	wire [31:0] dbg_irq_state = {
 		_cpuIPL_dc,      // [31:29] raw IPL from dataController
 		pseudovia_irq,   // [28] level-2 source
@@ -1959,21 +1814,6 @@ module mac_lc_pocket
 		.instance_id ("RAXS"), .probe_width (32), .source_width (1),
 		.sld_auto_instance_index ("YES")
 	) cp_raxs (.probe(rom_axsum),      .source(), .source_clk(clk_sys), .source_ena(1'b1));
-
-	altsource_probe #(
-		.instance_id ("BIST"), .probe_width (32), .source_width (1),
-		.sld_auto_instance_index ("YES")
-	) cp_bist (.probe(dbg_bist),       .source(), .source_clk(clk_sys), .source_ena(1'b1));
-
-	altsource_probe #(
-		.instance_id ("DHLD"), .probe_width (32), .source_width (1),
-		.sld_auto_instance_index ("YES")
-	) cp_dhld (.probe(dl_held_cycles), .source(), .source_clk(clk_sys), .source_ena(1'b1));
-
-	altsource_probe #(
-		.instance_id ("SCCT"), .probe_width (32), .source_width (1),
-		.sld_auto_instance_index ("YES")
-	) cp_scct (.probe(dbg_scc_tx), .source(), .source_clk(clk_sys), .source_ena(1'b1));
 
 	altsource_probe #(
 		.instance_id ("ROMC"), .probe_width (32), .source_width (1),

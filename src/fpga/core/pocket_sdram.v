@@ -86,17 +86,7 @@ module pocket_sdram
 	input [23:0]        addr,       // 24 bit word address
 	input [1:0]         ds,         // upper/lower data strobe
 	input               oe,         // cpu/chipset requests read
-	input               we,         // cpu/chipset requests write
-	// ★ 2026-08-11: the JEDEC init ladder below (1023 chipset cycles of NOPs,
-	// then PRECHARGE / 8x AUTO REFRESH / LOAD MODE, ~126 us) runs entirely
-	// inside this module and NOTHING outside knew when it finished. During it
-	// the state machine ignores oe/we completely, so every write is silently
-	// discarded. The ROM download starts as soon as the Analogue OS is ready,
-	// which on a cold boot is inside that window -- so the first words of
-	// boot0.rom went nowhere while every counter upstream reported success.
-	// Reloading the ROM later, with the ladder long since done, stored it
-	// properly and the machine booted. Hence "it takes two or three ROM loads".
-	output              sdram_ready // init ladder complete; writes will stick
+	input               we          // cpu/chipset requests write
 );
 
 localparam RASCAS_DELAY   = 3'd2;   // tRCD=20ns -> 3 cycles@65MHz
@@ -118,7 +108,6 @@ localparam MODE = { 3'b000, NO_WRITE_BURST, OP_MODE, CAS_LATENCY, ACCESS_TYPE, B
 // is correct: the JEDEC sequence wants a stable clock and CKE high during the
 // 100 us NOP wait.
 assign sd_cke = 1'b1;
-
 
 // ---------------------------------------------------------------------
 // ------------------------ cycle state machine ------------------------
@@ -166,7 +155,6 @@ end
 
 initial reset = 10'h3FF;
 
-assign sdram_ready = (reset == 10'd0);
 
 // ---------------------------------------------------------------------
 // ------------------ generate ram control signals ---------------------
