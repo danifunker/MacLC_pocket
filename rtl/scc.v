@@ -923,7 +923,16 @@ module scc
 	// deadlocks the 7.x LAP open (the ROM 'atlk' self-test always runs loopback
 	// first, so post_loopback is true by then). MAME's truthful z80scc boots
 	// both 6.0.8 and 7.x; sync mode now reports the real latch.
-	wire tx_empty_gated_a = (post_loopback_a && !sync_mode_a) ? 1'b0 : tx_empty_latch_a;
+	// ★ 2026-08-12 (instr/stm-console branch): channel A reports the TRUTHFUL
+	// latch in async mode too. The old forced-0-after-loopback made the
+	// transmitter permanently "busy", which silently strangled the ROM's STM
+	// diagnostic monitor: it inits the port, then polls Tx status in a storm
+	// and can never send its banner/answers (captured live on the SCC ring,
+	// 2026-08-12 — 90 pointer-writes, zero data bytes). A real Z8530 reports
+	// empty when idle, and this file's own note says MAME's truthful z80scc
+	// boots 6.0.8 and 7.x. If the forced-0 shim protected some OS behavior,
+	// re-evaluate before release — but the diagnostic console requires truth.
+	wire tx_empty_gated_a = tx_empty_latch_a;
 	wire tx_empty_gated_b = (post_loopback_b && !sync_mode_b) ? 1'b0 : tx_empty_latch_b;
 
 	/* RR0

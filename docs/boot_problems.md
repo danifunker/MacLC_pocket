@@ -122,6 +122,33 @@ workaround FIRST on every build):**
   marathon session with many JTAG fabric swaps under it; golden ran on fresh
   sessions).
 
+### 2026-08-12 afternoon — FORCED-WARM breakthrough + standing decisions
+
+* Fresh-session/SD-flow control: FAILED (7 perfect loads, still the early
+  wedge). `main` is untestable by construction (pre-loader-fix). Device runs
+  warmer than usual; thermal drift on a marginal path remains the leading
+  environment theory. Cool-silicon testing preferred.
+* **FORCED-WARM PATCH WORKS** (`instr/stm-console` 9cf81bf): NOP the ROM's
+  warm-vs-cold `bne.w` (words $5232AF/$5232B0 — the inherited MiSTer patch
+  aimed at $52322F was a typo and NEVER fired anywhere). First reload on cool
+  silicon: **grey DrawBeepScreen + clean audio + 138k interrupts serviced**
+  before a late-stage sad-mac. Everything through Stage 15 (screen setup) is
+  healthy; the fault is now confined to (a) the bypassed cold RAM march and
+  (b) something in Stages 16-18 (InitSoundMgr/InitFS/INITSCSIBOOT/BootMe).
+* **STM console works** — JTAG serial injector (STMC) reached the monitor; a
+  `*R` drew a 90-write response. Full-transcript readback via the SCCR ring
+  (4e30241) is the current build.
+* The cold "$E00000-$EFFFFF wedge" may be FINITE: cycles complete via VPA, so
+  the crawl is ROM-paced; at SDMA=250 µs the sweep projects to ~1-2 min (at
+  the old 250 ms it projected to HOURS, hence "for ever"). The fresh-session
+  capture sat at $EFxxxx — nearly done. **Nobody has ever waited a cold boot
+  out. Standing experiment: cold boot, hands off, five minutes.**
+* **USER DECISION: lock the core to 10 MB eventually** (single config). The
+  SDRAM occupancy map audits clean at 10 MB (mb $000000 / SIMM $100000-$4FFFFF
+  / ROM $500000 / VRAM shadow $580000 / floppy $600000 — the old ROM@$280000
+  overlap bug is fixed). Blocked on: the cold RAM march must pass, since
+  10 MB runs the full 8 MB SIMM test.
+
 ---
 
 ## 1. The symptom, precisely
