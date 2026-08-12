@@ -412,7 +412,10 @@ module mac_lc_pocket
 	reg  [3:0]  stm_bitn     = 4'd0;
 	reg  [10:0] stm_shift    = 11'h7FF;
 	reg         stm_line     = 1'b1;
-	localparam [11:0] STM_BAUD_DIV = 12'd3385;   // 32.5 MHz / 9600 baud
+	// ★ must match scc.v's console-speed shim (baud_divid=100 for the STM's
+	// WR12=0A config) — both ends of this internal line run at ~325 kbaud.
+	// Before the shim this was 3385 (true 9600).
+	localparam [11:0] STM_BAUD_DIV = 12'd100;
 	always @(posedge clk_sys) begin
 		stm_go_d <= stm_src[8];
 		if (stm_bitn == 4'd0) begin

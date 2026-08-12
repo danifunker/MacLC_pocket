@@ -1549,7 +1549,20 @@ wr_3_a[7:6]  -- bits per char
                         // Special case: For the ROM selftest which sets WR12=5E, WR13=00
                         // with WR4=44 or 4C (x1 or x16 clock mode, async), we need a much faster rate
                         // The selftest expects TX to complete very quickly
-                        if (wr13_a == 8'h00 && wr12_a == 8'h5E && (wr4_a == 8'h44 || wr4_a == 8'h4C)) begin
+                        // ★ 2026-08-12 (instr branch): the STM diagnostic monitor's config
+                        // (WR12=0A WR13=00 x16 ≈ 9600 baud). Its transmit routine polls
+                        // RR1 All-Sent ~45 times (~200 us) per byte — five times shorter
+                        // than a 9600-baud character — so at honest speed every answer
+                        // dies after one byte (captured live: W-dtA then 45x RR1=00).
+                        // Both ends of this line are internal (JTAG injector + capture),
+                        // so run the engines fast enough to finish inside the poll
+                        // budget. ÷100 ≈ 325 kbaud ≈ 31 us/char. The JTAG injector's
+                        // STM_BAUD_DIV in mac_lc_pocket.sv MUST match this value.
+                        if (wr13_a == 8'h00 && wr12_a == 8'h0A && wr4_a == 8'h4C) begin
+                            if (baud_divid_speed_a != 24'd100)
+                                $display("SCC_BRG_FAST: console-speed shim for STM config");
+                            baud_divid_speed_a <= 24'd100;
+                        end else if (wr13_a == 8'h00 && wr12_a == 8'h5E && (wr4_a == 8'h44 || wr4_a == 8'h4C)) begin
                             // Use a very fast baud rate for the ROM selftest case
                             // WR12=5E, WR13=00 would normally give a slow rate, but
                             // the test expects it to complete within ~255 polls
