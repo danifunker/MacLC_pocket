@@ -155,7 +155,13 @@ module apf_blockdev #(
 	// [29] acked, [28] done, [27] sector delivered to the machine,
 	// [26] mount seen, [25:23] mount count, [22:0] img_size[31:9] (512-byte
 	// block count of the LAST mount; 0 here = the OS sent no/zero size).
-	output wire [31:0] dbg_bdst
+	output wire [31:0] dbg_bdst,
+	// ★ buildY: the direct eye on served data. BDW0 = first two 16-bit words
+	// of the LAST read sector as handed to scsi.v (block 0 of a partitioned
+	// Apple disk must read 4552 0200 = "ER",512). BDLB = {deliveries[7:0],
+	// last requested LBA[23:0]}.
+	output wire [31:0] dbg_bdw0,
+	output wire [31:0] dbg_bdlb
 );
 
 	localparam integer SECTOR_BYTES = 512;
@@ -809,6 +815,23 @@ assign dbg_stage = dlv_s[1]    ? 3'd5 :
 	assign dbg_bdst = { saw_tmo, saw_read_74, saw_ack_74, saw_done_74,
 	                    saw_deliver_sys, saw_mount_sys, dbg_mount_cnt,
 	                    img_size[31:9] };
+
+	// Served-data capture (clk_sys, C_DRN_B is SCSI-read-only by construction).
+	// Word mux mirror of the sd_buff_dout line: cidx 0 -> MS half, 1 -> LS half.
+	reg [15:0] dbg_w0 = 16'd0, dbg_w1 = 16'd0;
+	reg [7:0]  dbg_dlv_cnt = 8'd0;
+	reg [23:0] dbg_last_lba = 24'd0;
+	always @(posedge clk_sys) begin
+		if (cstate == C_DRN_B) begin
+			if (cidx == 9'd0) dbg_w0 <= rdbuf_rd_sys[31:16];
+			if (cidx == 9'd1) dbg_w1 <= rdbuf_rd_sys[15:0];
+			if (cidx == SECTOR_WORDS-1) dbg_dlv_cnt <= dbg_dlv_cnt + 8'd1;
+		end
+		if (cstate == C_REQ && !req_is_pram && !req_is_flp && !req_is_wr)
+			dbg_last_lba <= req_lba[23:0];
+	end
+	assign dbg_bdw0 = { dbg_w0, dbg_w1 };
+	assign dbg_bdlb = { dbg_dlv_cnt, dbg_last_lba };
 
 endmodule
 
