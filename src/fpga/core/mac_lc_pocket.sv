@@ -2247,12 +2247,21 @@ module mac_lc_pocket
 	reg        pcrb_arm_d  = 1'b0;
 	wire [7:0] pcrb_src;
 	reg [31:0] pcrb_q;
+	// ★ buildAG: the crash is a SOFTWARE restart — n_reset never falls (the
+	// buildAF ring never froze; wptr kept advancing through the wander). The
+	// dying System jumps through the ROM's reset entry (initial-PC vector =
+	// ROM offset 2A), so freeze on THAT fetch instead: with the ring armed
+	// mid-round, the first entry fetch IS the crash restart, and the ring
+	// holds the 64 PCs that led there. n_reset stays in the OR (harmless,
+	// catches hard resets too).
+	wire pcrb_entry_fetch = fetch_valid &&
+	     (last_fetch_pc[23:0] == 24'hA0002A || last_fetch_pc[23:0] == 24'h00002A);
 	always @(posedge clk_sys) begin
 		pcrb_nrst_d <= n_reset;
 		pcrb_arm_d  <= pcrb_src[7];
 		if (pcrb_src[7] && !pcrb_arm_d)
 			pcrb_frozen <= 1'b0;                       // re-arm: capture again
-		else if (pcrb_nrst_d && !n_reset)
+		else if ((pcrb_nrst_d && !n_reset) || pcrb_entry_fetch)
 			pcrb_frozen <= 1'b1;                       // machine died: hold
 		if (!pcrb_frozen && fetch_valid && last_fetch_pc != pcrb_last) begin
 			pcrb[pcrb_w] <= last_fetch_pc;
