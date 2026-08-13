@@ -68,7 +68,10 @@ module egret_wrapper (
     output wire        dbg_byteack_in,       // BYTEACK input from VIA (synced)
     output wire [7:0]  dbg_pb_out,           // Egret Port B output register
     output wire [7:0]  dbg_pc_out,           // Egret Port C output register
-    output wire        dbg_cpu_running       // HC05 is executing (not in reset)
+    output wire        dbg_cpu_running,      // HC05 is executing (not in reset)
+    // ★ buildAN: the firmware's live PC — read against egret_rom_disasm.md
+    // to name where the HC05 parked when it stopped clocking the VIA SR.
+    output wire [15:0] dbg_hc05_pc
 );
 
 // ============================================================================
@@ -954,7 +957,8 @@ m68hc05_core u_cpu (
     .wr(cpu_wr),
     .datain(cpu_din),
     .state(cpu_state),
-    .dataout(cpu_dout)
+    .dataout(cpu_dout),
+    .dbg_pc(dbg_hc05_pc)
 );
 
 // ============================================================================

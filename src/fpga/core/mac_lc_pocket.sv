@@ -1346,7 +1346,8 @@ module mac_lc_pocket
 		.egret_dbg_tip(dbg_eg_tip),
 		.egret_dbg_byteack(dbg_eg_byteack),
 		.egret_dbg_reset_680x0(dbg_eg_reset_680x0),
-		.egret_dbg_cpu_reset_out(dbg_eg_cpu_reset_out)
+		.egret_dbg_cpu_reset_out(dbg_eg_cpu_reset_out),
+		.egret_dbg_hc05_pc(dbg_hc05_pc_w)
 	);
 
 	// ---- SignalTap capture bundle -----------------------------------------
@@ -1364,6 +1365,7 @@ module mac_lc_pocket
 	wire       dbg_sr_active, dbg_sr_dir, dbg_sr_cb1, dbg_sr_cb2;
 	wire       dbg_eg_running, dbg_eg_port_test_done, dbg_eg_handshake_done;
 	wire       dbg_eg_treq, dbg_eg_tip, dbg_eg_byteack;
+	wire [15:0] dbg_hc05_pc_w;   // ★ buildAN: HC05 live PC
 	wire       dbg_eg_reset_680x0, dbg_eg_cpu_reset_out;
 
 	(* preserve *) reg [31:0] dbg_boot_bus;
@@ -2271,6 +2273,7 @@ module mac_lc_pocket
 	reg         pcrb_trig_d = 1'b0, pcrb_armed_cnt = 1'b0;
 	reg  [31:0] pcsn1 = 32'd0, pcsn2 = 32'd0;   // bus snapshot at window freeze
 	reg  [31:0] egsn1 = 32'd0;                  // Egret/SR snapshot at freeze
+	reg  [15:0] egsn3 = 16'd0;                  // HC05 PC at freeze (buildAN)
 	// ★ buildAL live handshake counters (cleared at each PCRB arm): CB1
 	// falling edges (the Egret's SR clock — what coalescing loses) vs
 	// BYTEACK/TIP toggles (the per-byte protocol strobes). Which counter
@@ -2335,6 +2338,9 @@ module mac_lc_pocket
 					// wipe these flops; latching perturbs nothing.
 					pcsn1 <= {dbg_scsi2_w, dbg_scsi_w};
 					pcsn2 <= {dbg_scsi5_w, dbg_scsi4_w};
+					// ★ buildAN: where the firmware parked when it stopped
+					// clocking (read against egret_rom_disasm.md).
+					egsn3 <= dbg_hc05_pc_w;
 					// ★ buildAL: Egret/VIA1-SR snapshot at the same instant —
 					// the stalled PRAM-write transaction's live handshake.
 					egsn1 <= {8'd0,
@@ -2395,6 +2401,13 @@ module mac_lc_pocket
 		.instance_id ("EGS2"), .probe_width (32), .source_width (1),
 		.sld_auto_instance_index ("YES")
 	) cp_egs2 (.probe({eg_cb1_cnt, eg_ba_cnt, eg_tip_cnt}), .source(), .source_clk(clk_sys), .source_ena(1'b1));
+
+	// ★ buildAN: the HC05 firmware PC at the window freeze — the exact
+	// wait/abort site it parked in (egret_rom_disasm.md is the map).
+	altsource_probe #(
+		.instance_id ("EGS3"), .probe_width (16), .source_width (1),
+		.sld_auto_instance_index ("YES")
+	) cp_egs3 (.probe(egsn3), .source(), .source_clk(clk_sys), .source_ena(1'b1));
 
 	// ★ buildY: the SCSI target's own testimony — why does the ROM read a
 	// perfect block 0 and never command the driver read? SCS1 = {dbg_scsi2

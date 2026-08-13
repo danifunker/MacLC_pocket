@@ -120,6 +120,10 @@ if {[info exists idx(EGS2)]} {
     puts [format "  EGRET counters since arm: cb1_falls=%d byteack_tgl=%d tip_tgl=%d" \
         [expr {($e2 >> 20) & 0xFFF}] [expr {($e2 >> 10) & 0x3FF}] [expr {$e2 & 0x3FF}]]
 }
+if {[info exists idx(EGS3)]} {
+    scan [read_probe_data -instance_index $idx(EGS3) -value_in_hex] %x e3
+    puts [format "  HC05 PC @window: %04X   (map: rtl/egret/egret_rom_disasm.md)" [expr {$e3 & 0xFFFF}]]
+}
 if {[info exists idx(SCS2)]} {
     scan [read_probe_data -instance_index $idx(SCS2) -value_in_hex] %x s2
     set s2 [expr {$s2 & 0xFFFFFFFF}]

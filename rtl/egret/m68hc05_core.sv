@@ -16,7 +16,11 @@ module m68hc05_core (
     output logic        wr,
     input  logic [7:0]  datain,
     output logic [3:0]  state,
-    output logic [7:0]  dataout
+    output logic [7:0]  dataout,
+    // ★ buildAN: live PC for the Egret stall forensics (read against
+    // rtl/egret/egret_rom_disasm.md; the firmware stopped clocking the VIA
+    // SR mid-byte and this names the wait/abort site it parked in).
+    output logic [15:0] dbg_pc
 );
 
     // Constants
@@ -55,6 +59,7 @@ module m68hc05_core (
     logic [7:0]  regX;
     logic [15:0] regSP;
     logic [15:0] regPC;
+    assign dbg_pc = regPC;   // buildAN forensics tap
     
     // CPU flags
     logic flagH;  // Half carry

@@ -159,6 +159,7 @@ module dataController_top(
 	output        egret_dbg_byteack,       // BYTEACK from VIA (synced in Egret)
 	output        egret_dbg_reset_680x0,   // Egret holding 68K in reset
 	output        egret_dbg_cpu_reset_out, // Final _cpuReset signal
+	output [15:0] egret_dbg_hc05_pc,       // ★ buildAN: HC05 live PC
 
 	// Floppy diagnostic passthroughs (PFLP probes; internal drive)
 	output [15:0] dbg_flp_byte_cnt,
@@ -859,7 +860,8 @@ module dataController_top(
 		.dbg_byteack_in     (egret_dbg_byteack),
 		.dbg_pb_out         (),
 		.dbg_pc_out         (),
-		.dbg_cpu_running    (egret_dbg_running)
+		.dbg_cpu_running    (egret_dbg_running),
+		.dbg_hc05_pc        (egret_dbg_hc05_pc)
 	);
 
 	wire _ADBint;
