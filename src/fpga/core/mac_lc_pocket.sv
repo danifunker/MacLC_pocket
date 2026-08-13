@@ -2270,16 +2270,36 @@ module mac_lc_pocket
 	reg  [8:0]  pcrb_klat = 9'd0;    // K latched at arm (polls spray the source)
 	reg         pcrb_trig_d = 1'b0, pcrb_armed_cnt = 1'b0;
 	reg  [31:0] pcsn1 = 32'd0, pcsn2 = 32'd0;   // bus snapshot at window freeze
+	reg  [31:0] egsn1 = 32'd0;                  // Egret/SR snapshot at freeze
+	// ★ buildAL live handshake counters (cleared at each PCRB arm): CB1
+	// falling edges (the Egret's SR clock — what coalescing loses) vs
+	// BYTEACK/TIP toggles (the per-byte protocol strobes). Which counter
+	// stops first names the dying side of the stalled Egret transaction.
+	reg  [11:0] eg_cb1_cnt = 12'd0;
+	reg  [9:0]  eg_ba_cnt  = 10'd0;
+	reg  [9:0]  eg_tip_cnt = 10'd0;
+	reg         eg_cb1_d = 1'b0, eg_ba_d = 1'b0, eg_tip_d = 1'b0;
 	always @(posedge clk_sys) begin
 		pcrb_nrst_d <= n_reset;
 		pcrb_arm_d  <= pcrb_src[15];
 		pcrb_trig_d <= ext_trig;
+		// Live Egret handshake counters: free-run, cleared at each arm so a
+		// capture reads "activity since arm". Saturating.
+		eg_cb1_d <= dbg_sr_cb1;
+		eg_ba_d  <= dbg_eg_byteack;
+		eg_tip_d <= dbg_eg_tip;
+		if (eg_cb1_d && !dbg_sr_cb1 && eg_cb1_cnt != 12'hFFF) eg_cb1_cnt <= eg_cb1_cnt + 12'd1;
+		if ((eg_ba_d  ^ dbg_eg_byteack) && eg_ba_cnt  != 10'h3FF) eg_ba_cnt  <= eg_ba_cnt  + 10'd1;
+		if ((eg_tip_d ^ dbg_eg_tip)     && eg_tip_cnt != 10'h3FF) eg_tip_cnt <= eg_tip_cnt + 10'd1;
 		if (pcrb_src[15] && !pcrb_arm_d) begin
 			pcrb_frozen    <= 1'b0;                    // re-arm: capture again
 			pcrb_armed_cnt <= 1'b0;
 			pcrb_klat      <= pcrb_src[14:6];          // K latched AT ARM —
 			                                           // JTAG polls spray the
 			                                           // source afterwards
+			eg_cb1_cnt     <= 12'd0;
+			eg_ba_cnt      <= 10'd0;
+			eg_tip_cnt     <= 10'd0;
 		end else if (pcrb_nrst_d && !n_reset)
 			pcrb_frozen <= 1'b1;                       // hard reset: hold
 		// ★ buildAK: the trigger edge RE-OPENS a frozen ring and starts the
@@ -2305,6 +2325,22 @@ module mac_lc_pocket
 					// wipe these flops; latching perturbs nothing.
 					pcsn1 <= {dbg_scsi2_w, dbg_scsi_w};
 					pcsn2 <= {dbg_scsi5_w, dbg_scsi4_w};
+					// ★ buildAL: Egret/VIA1-SR snapshot at the same instant —
+					// the stalled PRAM-write transaction's live handshake.
+					egsn1 <= {8'd0,
+					          dbg_sr_shift_reg,           // [23:16]
+					          1'b0, dbg_sr_bit_cnt,       // [14:12]
+					          dbg_sr_edge_pending,        // [11]
+					          dbg_sr_fall_pending,        // [10]
+					          dbg_sr_active,              // [9]
+					          dbg_sr_dir,                 // [8]
+					          dbg_sr_cb1,                 // [7]
+					          dbg_sr_cb2,                 // [6]
+					          dbg_eg_treq,                // [5]
+					          dbg_eg_tip,                 // [4]
+					          dbg_eg_byteack,             // [3]
+					          dbg_eg_running,             // [2]
+					          2'b00};
 				end
 				else pcrb_k <= pcrb_k - 13'd1;
 			end
@@ -2336,6 +2372,19 @@ module mac_lc_pocket
 		.instance_id ("PSN2"), .probe_width (32), .source_width (1),
 		.sld_auto_instance_index ("YES")
 	) cp_psn2 (.probe(pcsn2), .source(), .source_clk(clk_sys), .source_ena(1'b1));
+
+	// ★ buildAL: the Egret story. EGS1 = SR/handshake snapshot at the window
+	// freeze; EGS2 = live handshake counters since the last PCRB arm —
+	// {cb1_falls[11:0], byteack_toggles[9:0], tip_toggles[9:0]}.
+	altsource_probe #(
+		.instance_id ("EGS1"), .probe_width (32), .source_width (1),
+		.sld_auto_instance_index ("YES")
+	) cp_egs1 (.probe(egsn1), .source(), .source_clk(clk_sys), .source_ena(1'b1));
+
+	altsource_probe #(
+		.instance_id ("EGS2"), .probe_width (32), .source_width (1),
+		.sld_auto_instance_index ("YES")
+	) cp_egs2 (.probe({eg_cb1_cnt, eg_ba_cnt, eg_tip_cnt}), .source(), .source_clk(clk_sys), .source_ena(1'b1));
 
 	// ★ buildY: the SCSI target's own testimony — why does the ROM read a
 	// perfect block 0 and never command the driver read? SCS1 = {dbg_scsi2

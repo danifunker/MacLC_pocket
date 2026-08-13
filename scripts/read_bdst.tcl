@@ -103,6 +103,23 @@ if {[info exists idx(PSN2)]} {
         [expr {($p2 >> 16) & 0xFF}] [expr {($p2 >> 24) & 0xFF}] \
         [expr {($p2 >> 8) & 0xFF}] [expr {($p2 >> 4) & 0xF}] [expr {$p2 & 0xF}]]
 }
+if {[info exists idx(EGS1)]} {
+    scan [read_probe_data -instance_index $idx(EGS1) -value_in_hex] %x e1
+    set e1 [expr {$e1 & 0xFFFFFFFF}]
+    puts [format "  EGRET@window: SR=%02X bit=%d edgeP=%d fallP=%d act=%d dir=%d CB1=%d CB2=%d | TREQ=%d TIP=%d BYTEACK=%d run=%d" \
+        [expr {($e1 >> 16) & 0xFF}] [expr {($e1 >> 12) & 7}] \
+        [expr {($e1 >> 11) & 1}] [expr {($e1 >> 10) & 1}] \
+        [expr {($e1 >> 9) & 1}] [expr {($e1 >> 8) & 1}] \
+        [expr {($e1 >> 7) & 1}] [expr {($e1 >> 6) & 1}] \
+        [expr {($e1 >> 5) & 1}] [expr {($e1 >> 4) & 1}] \
+        [expr {($e1 >> 3) & 1}] [expr {($e1 >> 2) & 1}]]
+}
+if {[info exists idx(EGS2)]} {
+    scan [read_probe_data -instance_index $idx(EGS2) -value_in_hex] %x e2
+    set e2 [expr {$e2 & 0xFFFFFFFF}]
+    puts [format "  EGRET counters since arm: cb1_falls=%d byteack_tgl=%d tip_tgl=%d" \
+        [expr {($e2 >> 20) & 0xFFF}] [expr {($e2 >> 10) & 0x3FF}] [expr {$e2 & 0x3FF}]]
+}
 if {[info exists idx(SCS2)]} {
     scan [read_probe_data -instance_index $idx(SCS2) -value_in_hex] %x s2
     set s2 [expr {$s2 & 0xFFFFFFFF}]
