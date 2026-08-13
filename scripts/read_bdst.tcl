@@ -33,6 +33,18 @@ if {[info exists idx(BDLB)]} {
     set l [expr {$l & 0xFFFFFFFF}]
     puts [format "  deliveries=%d  last LBA=%d" [expr {($l >> 24) & 0xFF}] [expr {$l & 0xFFFFFF}]]
 }
+if {[info exists idx(SDW0)]} {
+    scan [read_probe_data -instance_index $idx(SDW0) -value_in_hex] %x sw
+    set sw [expr {$sw & 0xFFFFFFFF}]
+    puts [format "  CPU-received words 0,1 (last burst): %04X %04X   <- compare with blockdev words above" \
+        [expr {($sw >> 16) & 0xFFFF}] [expr {$sw & 0xFFFF}]]
+}
+if {[info exists idx(SDCT)]} {
+    scan [read_probe_data -instance_index $idx(SDCT) -value_in_hex] %x sc
+    set sc [expr {$sc & 0xFFFFFFFF}]
+    puts [format "  bursts=%d  prev-burst beats=%d  current=%d   (word sector=256 beats, byte=512)" \
+        [expr {($sc >> 24) & 0xFF}] [expr {($sc >> 12) & 0xFFF}] [expr {$sc & 0xFFF}]]
+}
 if {[info exists idx(SCS1)]} {
     scan [read_probe_data -instance_index $idx(SCS1) -value_in_hex] %x s1
     set s1 [expr {$s1 & 0xFFFFFFFF}]
