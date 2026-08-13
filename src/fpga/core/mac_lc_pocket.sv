@@ -2254,12 +2254,17 @@ module mac_lc_pocket
 	// mid-round, the first entry fetch IS the crash restart, and the ring
 	// holds the 64 PCs that led there. n_reset stays in the OR (harmless,
 	// catches hard resets too).
-	// Any fetch in the ROM's first 64 bytes = a restart stub (0x0A StBoot /
-	// 0x0E BadDisk-eject-and-reboot / 0x2A ResetEntry — all JMP StartBoot;
-	// docs/MacLC_ROM_Boot_Sequence_Analysis.md:104-108). Matching the whole
-	// region catches whichever stub the dying code enters through.
+	// Any fetch in the ROM's first 0x200 bytes catches every restart path:
+	// the front stubs (0x0A StBoot / 0x0E BadDisk / 0x2A ResetEntry), the
+	// real StartBoot (~0xB8) AND Stage-8 BootRetry (0x1A6) — "the system
+	// returns here if boot fails" (docs/MacLC_ROM_Boot_Sequence_Analysis.md
+	// :104-208). These addresses also run once during every NORMAL boot's
+	// early stages — arm the ring only once the round is underway (the
+	// scripted jboot→arm JTAG gap is ~7 s, stages 2-9 are long past) so the
+	// first post-arm fetch here is the CRASH restart. A too-early freeze
+	// (early-boot PCs in the dump) just means re-arm and re-dump.
 	wire pcrb_entry_fetch = fetch_valid &&
-	     (last_fetch_pc[23:6] == 18'h28000 || last_fetch_pc[23:6] == 18'h00000);
+	     (last_fetch_pc[23:9] == 15'h5000 || last_fetch_pc[23:9] == 15'h0000);
 	always @(posedge clk_sys) begin
 		pcrb_nrst_d <= n_reset;
 		pcrb_arm_d  <= pcrb_src[7];
