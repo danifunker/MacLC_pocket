@@ -115,6 +115,11 @@ module mac_lc_pocket
 	input  [2:0]  img_mounted,
 	input  [63:0] img_size,
 
+	// ★ buildAD: hold the machine in reset while high (FRZE lever in
+	// core_top — manual bit or auto-trigger at a blockdev delivery count).
+	// RAM freezes for the ROMV v4 oracle; SDRAM refresh unaffected.
+	input         ext_freeze,
+
 	// CPU debug outputs
 	output [31:0] debug_pc,
 	output [15:0] debug_opcode,
@@ -336,8 +341,15 @@ module mac_lc_pocket
 			// when that workaround stopped working, so it is backed out until
 			// the regression is bisected. The generator above is left in place
 			// and simply drives nothing; re-add `cold_rst ||` here to retry.
+			// ★ buildAD: ext_freeze holds the machine in reset INDEFINITELY
+			// (manual bit or the FRZE auto-trigger at a delivery count —
+			// core_top). SDRAM keeps refreshing, so RAM is a frozen corpse
+			// the ROMV v4 oracle can dump at leisure; without this, every
+			// scan's reset release let the machine reboot and march its RAM
+			// test straight through the evidence (seen live 2026-08-13:
+			// low RAM full of the DB6D:B6DB march pattern mid-dump).
 			if(~pll_locked || !rom_loaded || reset || jboot_rst || romv_run ||
-			   (dio_download && dio_index == 8'd0)) begin
+			   ext_freeze || (dio_download && dio_index == 8'd0)) begin
 				rst_cnt <= '1;
 				n_reset <= 0;
 			end
