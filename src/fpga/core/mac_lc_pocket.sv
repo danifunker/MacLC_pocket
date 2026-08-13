@@ -2266,6 +2266,7 @@ module mac_lc_pocket
 	wire [15:0] pcrb_src;
 	reg  [12:0] pcrb_k = 13'd0;      // countdown, in ring writes
 	reg         pcrb_trig_d = 1'b0, pcrb_armed_cnt = 1'b0;
+	reg  [31:0] pcsn1 = 32'd0, pcsn2 = 32'd0;   // bus snapshot at window freeze
 	always @(posedge clk_sys) begin
 		pcrb_nrst_d <= n_reset;
 		pcrb_arm_d  <= pcrb_src[15];
@@ -2284,8 +2285,17 @@ module mac_lc_pocket
 			pcrb_w      <= pcrb_w + 6'd1;
 			pcrb_last   <= last_fetch_pc;
 			if (pcrb_armed_cnt) begin
-				if (pcrb_k == 13'd0) pcrb_frozen <= 1'b1;
-				else                 pcrb_k <= pcrb_k - 13'd1;
+				if (pcrb_k == 13'd0) begin
+					pcrb_frozen <= 1'b1;
+					// ★ buildAI: one-shot SCSI bus snapshot AT the window
+					// freeze — the dying selection's live state (busdata =
+					// the ID bits on the bus, SEL/BSY/out_en, per-target
+					// phase/opcode/completions). A machine reset-hold would
+					// wipe these flops; latching perturbs nothing.
+					pcsn1 <= {dbg_scsi2_w, dbg_scsi_w};
+					pcsn2 <= {dbg_scsi5_w, dbg_scsi4_w};
+				end
+				else pcrb_k <= pcrb_k - 13'd1;
 			end
 		end
 		pcrb_q <= pcrb[pcrb_src[5:0]];
@@ -2300,6 +2310,21 @@ module mac_lc_pocket
 		.instance_id ("PCRS"), .probe_width (7), .source_width (1),
 		.sld_auto_instance_index ("YES")
 	) cp_pcrs (.probe({pcrb_frozen, pcrb_w}), .source(), .source_clk(clk_sys), .source_ena(1'b1));
+
+	// ★ buildAI: SCSI bus state latched at the PCRB window freeze.
+	// PSN1 = {dbg_scsi2 (phases + io handshake), dbg_scsi (out_en/SEL/BSY/
+	// tbsy/mounted/busdata)} — busdata carries the ID bits of the selection
+	// in flight. PSN2 = {dbg_scsi5 (last opcodes), dbg_scsi4 (rst count +
+	// completions)}. Same decode as SCS1/SCS2 in read_bdst.tcl.
+	altsource_probe #(
+		.instance_id ("PSN1"), .probe_width (32), .source_width (1),
+		.sld_auto_instance_index ("YES")
+	) cp_psn1 (.probe(pcsn1), .source(), .source_clk(clk_sys), .source_ena(1'b1));
+
+	altsource_probe #(
+		.instance_id ("PSN2"), .probe_width (32), .source_width (1),
+		.sld_auto_instance_index ("YES")
+	) cp_psn2 (.probe(pcsn2), .source(), .source_clk(clk_sys), .source_ena(1'b1));
 
 	// ★ buildY: the SCSI target's own testimony — why does the ROM read a
 	// perfect block 0 and never command the driver read? SCS1 = {dbg_scsi2

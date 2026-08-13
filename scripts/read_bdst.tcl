@@ -79,6 +79,24 @@ if {[info exists idx(CDA1)]} {
         [expr {($c1 >> 28) & 1}] [expr {($c1 >> 20) & 0xFF}] [expr {($c1 >> 16) & 0xF}] \
         [expr {($c1 >> 8) & 0xFF}] [expr {$c1 & 0xFF}]]
 }
+if {[info exists idx(PSN1)]} {
+    scan [read_probe_data -instance_index $idx(PSN1) -value_in_hex] %x p1
+    set p1 [expr {$p1 & 0xFFFFFFFF}]
+    puts [format "  PSN1(@window)=%08X phase0=%d phase1=%d io_rd=%d%d io_ack=%d%d | out_en=%d SEL=%d BSY=%d tbsy=%d%d mounted=%d%d busdata=%02X" $p1 \
+        [expr {($p1 >> 24) & 7}] [expr {($p1 >> 27) & 7}] \
+        [expr {($p1 >> 21) & 1}] [expr {($p1 >> 20) & 1}] \
+        [expr {($p1 >> 17) & 1}] [expr {($p1 >> 16) & 1}] \
+        [expr {($p1 >> 15) & 1}] [expr {($p1 >> 14) & 1}] [expr {($p1 >> 13) & 1}] \
+        [expr {($p1 >> 12) & 1}] [expr {($p1 >> 11) & 1}] \
+        [expr {($p1 >> 10) & 1}] [expr {($p1 >> 9) & 1}] [expr {$p1 & 0xFF}]]
+}
+if {[info exists idx(PSN2)]} {
+    scan [read_probe_data -instance_index $idx(PSN2) -value_in_hex] %x p2
+    set p2 [expr {$p2 & 0xFFFFFFFF}]
+    puts [format "  PSN2(@window) opcodes tgt0=%02X tgt1=%02X rst=%d hs2_t1=%X hs2_t0=%X" \
+        [expr {($p2 >> 16) & 0xFF}] [expr {($p2 >> 24) & 0xFF}] \
+        [expr {($p2 >> 8) & 0xFF}] [expr {($p2 >> 4) & 0xF}] [expr {$p2 & 0xF}]]
+}
 if {[info exists idx(SCS2)]} {
     scan [read_probe_data -instance_index $idx(SCS2) -value_in_hex] %x s2
     set s2 [expr {$s2 & 0xFFFFFFFF}]
