@@ -33,4 +33,26 @@ if {[info exists idx(BDLB)]} {
     set l [expr {$l & 0xFFFFFFFF}]
     puts [format "  deliveries=%d  last LBA=%d" [expr {($l >> 24) & 0xFF}] [expr {$l & 0xFFFFFF}]]
 }
+if {[info exists idx(SCS1)]} {
+    scan [read_probe_data -instance_index $idx(SCS1) -value_in_hex] %x s1
+    set s1 [expr {$s1 & 0xFFFFFFFF}]
+    puts [format "  SCS1=%08X  phase0=%d phase1=%d io_rd=%d%d io_wr=%d%d io_ack=%d%d" $s1 \
+        [expr {($s1 >> 24) & 7}] [expr {($s1 >> 27) & 7}] \
+        [expr {($s1 >> 21) & 1}] [expr {($s1 >> 20) & 1}] \
+        [expr {($s1 >> 19) & 1}] [expr {($s1 >> 18) & 1}] \
+        [expr {($s1 >> 17) & 1}] [expr {($s1 >> 16) & 1}]]
+    puts [format "        out_en=%d SEL=%d BSY=%d tbsy=%d%d mounted=%d%d adata=%d busdata=%02X" \
+        [expr {($s1 >> 15) & 1}] [expr {($s1 >> 14) & 1}] [expr {($s1 >> 13) & 1}] \
+        [expr {($s1 >> 12) & 1}] [expr {($s1 >> 11) & 1}] \
+        [expr {($s1 >> 10) & 1}] [expr {($s1 >> 9) & 1}] \
+        [expr {($s1 >> 8) & 1}] [expr {$s1 & 0xFF}]]
+}
+if {[info exists idx(SCS2)]} {
+    scan [read_probe_data -instance_index $idx(SCS2) -value_in_hex] %x s2
+    set s2 [expr {$s2 & 0xFFFFFFFF}]
+    puts [format "  SCS2=%08X  LAST OPCODE tgt0=%02X tgt1=%02X  rst_count=%d hs2_t1=%X hs2_t0=%X" $s2 \
+        [expr {($s2 >> 16) & 0xFF}] [expr {($s2 >> 24) & 0xFF}] \
+        [expr {($s2 >> 8) & 0xFF}] [expr {($s2 >> 4) & 0xF}] [expr {$s2 & 0xF}]]
+    puts "        (opcodes: 00=TUR 03=REQ-SENSE 08=READ6 12=INQUIRY 15=MODE-SEL 1A=MODE-SENSE 25=READCAP 28=READ10)"
+}
 end_insystem_source_probe
