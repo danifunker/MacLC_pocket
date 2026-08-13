@@ -37,23 +37,31 @@ across separate rounds frozen at the same drained delivery count.
 - CD at ID 3: passive and polite through every round (CDA1 answers no-disc
   sense; boot proceeds past it). Not a factor.
 
-## 1. NEXT ACTION — one capture, then read code
+## 1. NEXT ACTION — land the K=384 window on the death decision
 
-buildAF (PCRB) flow, all JTAG, card stays in:
-1. Push `scratch/builds/2026-08-13-buildAF-pcrb.sof`, wait BRGC/ROMC=262144
-   (`scratch/tools/rom_repush_check.tcl`), user OSD-mounts maclc.hda.
-2. `jboot.tcl` → wait ~2 s (round underway) → `pcrb.tcl arm` (arming before
-   jboot is useless — jboot's own reset would freeze the ring).
-3. Round crashes (~10 s). `pcrb.tcl` → 64 PCs, oldest→newest.
-4. Read PCs against `docs/MacLC_ROM_disasm.txt` (ROM = 00A0xxxx) /
-   `docs/MacLC_ROM_Boot_Sequence_Analysis.md`. RAM PCs = System/driver code
-   (the re-read driver image or System startup — correlate with where the
-   19-sector re-read landed if needed).
-5. The routine names the divergence; fix follows. Candidate classes if the
-   PC lands in: driver Open (env divergence: V8/pseudovia flags, memory
-   config — note Memory=2MB is still the default from the diag era); the
-   ROM blind-transfer primitive $A08CFA (its $8-vector bus-error dance —
-   MiSTer MacLC.sv:826 records that contract); slot/PDS scan artifacts.
+The capture flow is PROVEN end-to-end (K=128 landed mid-consumption of the
+final pmap READ10: the SCSI Manager's polled byte loop at ROM A08D5A,
+bytes flowing, target in DATA phase with BSY — everything healthy at that
+depth). The death lies a few hundred loop iterations further. buildAK made
+the flow RACE-FREE (trigger re-opens a frozen ring; K latches at arm).
+
+Per capture round (all JTAG):
+1. `frze.tcl off` -> `frze.tcl trig +59` -> `pcrb.tcl arm 384` -> `jboot.tcl`
+   (order no longer matters post-buildAK, but this one is canonical).
+2. Poll `pcrb.tcl` for frozen=1 (~15 s). `read_bdst.tcl` -> PSN1/PSN2 =
+   bus snapshot AT the window; `pcrb.tcl` dump = the 64 PCs.
+3. ROM PC -> disasm line = 40800000 + (pc & 7FFFF) in
+   docs/MacLC_ROM_disasm.txt. Sweep K (re-arm, no rebuilds) until the
+   window shows post-consumption decision code: expect the pmap-entry
+   check that concludes "give up", or a further SCSI op that fails.
+4. Round-start lore (measured): a fresh fabric push + first OSD mount
+   auto-runs a round; REPEAT mounts are invisible (mounted latch already
+   set — only 0->1 registers); jboot restarts rounds reliably when the
+   fabric is fresh-ish; the post-crash wander never retries ID 0
+   (BootMask — busdata histogram: five empty IDs mid-timeout, zero 0x81).
+5. Watch CDPH during walks if rounds refuse to start: cd_bsy=1 parked
+   with phase!=0 = the transient CD wedge deafening the disks (its gate
+   excludes cd_bsy; the disks' includes it). Theory OPEN, now observable.
 
 ## 2. THE INSTRUMENT SUITE (buildAF carries everything)
 
