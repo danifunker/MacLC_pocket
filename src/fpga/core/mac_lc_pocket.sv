@@ -2267,6 +2267,7 @@ module mac_lc_pocket
 	//   0..8176 writes)  [5:0]=read index. n_reset freeze stays (harmless).
 	wire [15:0] pcrb_src;
 	reg  [12:0] pcrb_k = 13'd0;      // countdown, in ring writes
+	reg  [8:0]  pcrb_klat = 9'd0;    // K latched at arm (polls spray the source)
 	reg         pcrb_trig_d = 1'b0, pcrb_armed_cnt = 1'b0;
 	reg  [31:0] pcsn1 = 32'd0, pcsn2 = 32'd0;   // bus snapshot at window freeze
 	always @(posedge clk_sys) begin
@@ -2276,11 +2277,19 @@ module mac_lc_pocket
 		if (pcrb_src[15] && !pcrb_arm_d) begin
 			pcrb_frozen    <= 1'b0;                    // re-arm: capture again
 			pcrb_armed_cnt <= 1'b0;
+			pcrb_klat      <= pcrb_src[14:6];          // K latched AT ARM —
+			                                           // JTAG polls spray the
+			                                           // source afterwards
 		end else if (pcrb_nrst_d && !n_reset)
 			pcrb_frozen <= 1'b1;                       // hard reset: hold
-		if (ext_trig && !pcrb_trig_d && !pcrb_frozen && !pcrb_armed_cnt) begin
-			pcrb_k         <= {pcrb_src[14:6], 4'd0}; // K x16 writes to go
+		// ★ buildAK: the trigger edge RE-OPENS a frozen ring and starts the
+		// countdown — a jboot's n_reset freeze between arm and trigger no
+		// longer kills the capture, and the arm/jboot/trigger JTAG ordering
+		// races are gone. One capture per arm (armed_cnt gates re-fire).
+		if (ext_trig && !pcrb_trig_d && !pcrb_armed_cnt) begin
+			pcrb_k         <= {pcrb_klat, 4'd0};      // K x16 writes to go
 			pcrb_armed_cnt <= 1'b1;
+			pcrb_frozen    <= 1'b0;
 		end
 		if (!pcrb_frozen && fetch_valid && last_fetch_pc != pcrb_last) begin
 			pcrb[pcrb_w] <= last_fetch_pc;
