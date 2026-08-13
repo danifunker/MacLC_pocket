@@ -1123,6 +1123,8 @@ module mac_lc_pocket
 	assign sd_buff_din[1] = scsi_buff_din[1];
 	assign sd_buff_din[2] = 16'd0;
 
+	// SCSI debug buses (wired to the SCS1/SCS2 probes; see the ISSP deck)
+	wire [15:0] dbg_scsi_w, dbg_scsi2_w, dbg_scsi4_w, dbg_scsi5_w;
 	dataController_top #(SCSI_DEVS) dc0
 	(
 		.clk32(clk_sys),
@@ -1151,10 +1153,10 @@ module mac_lc_pocket
 		.scsiIRQ(scsiIRQ),
 		// JTAG probe feeds — FPGA-only (dbg_probes.sv lives in MacLC.sv;
 		// altsource_probe is an Altera primitive, never bring it into sim)
-		.dbg_scsi(),
-		.dbg_scsi2(),
-		.dbg_scsi4(),
-		.dbg_scsi5(),
+		.dbg_scsi(dbg_scsi_w),
+		.dbg_scsi2(dbg_scsi2_w),
+		.dbg_scsi4(dbg_scsi4_w),
+		.dbg_scsi5(dbg_scsi5_w),
 		.dbg_ncr(),
 		.dbg_ncr2(),
 		.dbg_wr(),
@@ -2105,6 +2107,21 @@ module mac_lc_pocket
 		.instance_id ("FLPC"), .probe_width (32), .source_width (1),
 		.sld_auto_instance_index ("YES")
 	) cp_flpc (.probe(dbg_flp_words), .source(), .source_clk(clk_sys), .source_ena(1'b1));
+
+	// ★ buildY: the SCSI target's own testimony — why does the ROM read a
+	// perfect block 0 and never command the driver read? SCS1 = {dbg_scsi2
+	// (target phases + io handshake), dbg_scsi (selection/arbitration)};
+	// SCS2 = {dbg_scsi5 (per-target last-opcode bitmap), dbg_scsi4
+	// (bus-reset count + per-target completion flags)}.
+	altsource_probe #(
+		.instance_id ("SCS1"), .probe_width (32), .source_width (1),
+		.sld_auto_instance_index ("YES")
+	) cp_scs1 (.probe({dbg_scsi2_w, dbg_scsi_w}), .source(), .source_clk(clk_sys), .source_ena(1'b1));
+
+	altsource_probe #(
+		.instance_id ("SCS2"), .probe_width (32), .source_width (1),
+		.sld_auto_instance_index ("YES")
+	) cp_scs2 (.probe({dbg_scsi5_w, dbg_scsi4_w}), .source(), .source_clk(clk_sys), .source_ena(1'b1));
 `endif
 
 endmodule
