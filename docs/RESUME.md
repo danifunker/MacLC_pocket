@@ -9,70 +9,64 @@ history; this file wins on current state.
 
 ## 0. THE IMMEDIATE STATE
 
-**Cold boot SOLVED. SCSI reads verified. The frontier is unchanged — the
-deterministic +59-sector System-load crash — but the day produced a prime
-suspect WITH a fix already in the tree, plus the witness to convict or
-acquit it:**
+**Cold boot SOLVED. SCSI reads verified. And the crash-round evidence is
+IN: the SCSI write path was corrupting the disk on every System startup —
+two root causes, both found and FIXED this session (boot_problems.md ★★★
+2026-08-13 has the full forensics):**
 
-- ★ **FOUND BY INSPECTION (2026-08-13): the SCSI WRITE path staged corrupt
-  data.** apf_blockdev's C_FILL sampled `sd_buff_din` one cycle early
-  (scsi.v's sector buffer is a registered read; every other RAM reader in
-  the file has a wait state, the write fill didn't). Every sector the Mac
-  wrote reached the card shifted one 16-bit word — word 0 doubled, word 255
-  lost. **Fixed** (`C_FILL_W`, commit `1eabeae`). If System startup flushes
-  the MDB (it typically does, early), every pre-fix boot wrote a corrupt MDB
-  onto `maclc.hda`. This is RESUME-suspect-3's exact mechanism.
-- **BDWR/BDWW probes now exist** (write count + LBA + err-sticky, first
-  staged pair): one crash round answers "do writes fire, where, and did the
-  OS accept them" — no more guessing.
-- **CD-ROM (ISO-only) is back at SCSI ID 3** — scsi.v CDROM mode + the new
-  `rtl/cd_toc_stub.sv` (single-data-track TOC synthesized from img_blocks,
-  byte-per-byte cd_audio's no-blob fallback). Slot 320, `maclc.iso`
-  auto-mounts, read-only, CDA1 probe. NO audio/bin-cue/Toolbox/Changer.
-  HW-unvalidated.
-- Disks already had the 16KB read-ahead (RING_LOG=5 default = 32 sectors per
-  target, identical to MiSTer) — the user's question is answered, nothing to
-  add.
+- ★ **PROVEN ON-CARD:** after the 08-12 crash rounds, the card's
+  `maclc.hda` differs from the user's authoritative zip in **3,846
+  sectors**. The on-card MDB (LBA 98) is the guest's own (sane) MDB
+  shifted LEFT one 16-bit word, 'BD' signature wrapped to the tail —
+  the exact composition of the two defects below. The System DOES write
+  during startup (MDB, bitmap, catalog), every write shipped corrupt, and
+  the first re-read of a just-written sector at a fixed point in the
+  startup sequence is the most economical explanation of the
+  deterministic +59 crash.
+- **Fix 1 — C_FILL off-by-one** (`C_FILL_W`): the fill sampled
+  `sd_buff_din` one cycle early → staged sectors right-shifted one 16-bit
+  word. Found via the MiSTer diff (scsi.v/ncr5380/dataController are
+  byte-identical to 5a75f9b modulo cuts; apf_blockdev is the only
+  divergence surface).
+- **Fix 2 — bridge readback lag** (`buf_ridx = widx-1`): the OS pairs
+  each bulk SPI read response with the PREVIOUS transaction → file word w
+  arrived as wrbuf[w+1]. Only multi-word readbacks see it; the sector
+  buffer is the core's only one. Measured from the card fingerprint
+  (127/128 words at exactly +1×32-bit).
+- **Card RESTORED** — maclc.hda re-copied from `C:\files\MacLC_6-0-8.hda.zip`
+  and cmp-verified. ★ Old .sofs corrupt it again on any System boot.
+- **BDWR/BDWW probes** (write count/LBA/err + first staged pair) ride
+  along; **CD-ROM (ISO-only) is back at SCSI ID 3** — cd_toc_stub TOC,
+  slot 320, `maclc.iso` auto-mount, read-only, CDA1 probe. NO
+  audio/bin-cue/Toolbox/Changer. HW-unvalidated.
+- Disks already had 16KB read-ahead (RING_LOG=5, MiSTer-identical).
 
-**buildAB** (all of the above) was building at session end — check
-`scratch/builds/` and `src/fpga/output_files/`. buildAA (.sof archived)
-remains the pre-bundle baseline. ★ buildAB is deliberately a THREE-part
-bundle (fix + instruments + CD) — the one-variable rule was traded for a
-card-trip's worth of progress; the single-axis levers if it regresses vs
-buildAA: revert `C_FILL_W` (one hunk) / rebuild with `cd_enable=1'b0` in
-mac_lc_pocket.sv (the CD A/B lever).
+**buildAB** (both fixes + probes + CD) was building at session end.
+buildAA (.sof archived) = pre-bundle baseline. Single-axis levers if
+needed: revert `C_FILL_W` / revert `buf_ridx` / `cd_enable=1'b0`.
 
 ## 1. FIRST ACTIONS NEXT SESSION
 
-1. Confirm buildAB finished clean (map/fit/asm/sta all green, fit deltas vs
-   13,021 ALM / 252 M10K — the CD body should cost ~2K ALMs, ~6 M10K).
-   Archive the .sof to `scratch/builds/2026-08-13-buildAB-*.sof` BEFORE
-   anything else.
-2. ★ **BEFORE flashing: capture the evidence.** Copy `maclc.hda` OFF the
-   card and diff against the user's master copy. Pre-fix crash rounds may
-   have written shifted sectors (the MDB block is the prime spot). A diff
-   showing exactly the C_FILL signature (content shifted +2 bytes, first
-   word doubled) CONVICTS the write path as the crash mechanism with zero
-   further builds. If they differ, re-copy a fresh maclc.hda before testing.
-3. Flash buildAB (JTAG push → OSD-mount maclc.hda after EVERY push, or SD
-   launch → auto-mount; §5 crib of the 08-12 RESUME still applies verbatim).
-4. Reproduce: OSD Reset PRAM → `quartus_stp_tcl -t scripts/jboot.tcl` →
-   `scripts/watch_lba.tcl`. Then `scripts/read_bdst.tcl` and read the NEW
-   rows: **WRITES err/count/LBA + last-written words** (BDWR/BDWW).
-   - If the crash is GONE and System boots: the write path was the killer;
-     mission System-6-Finder likely COMPLETE — validate with a second cold
-     boot, then commit/tag/release.
-   - If writes fired and were REJECTED (err=1): the OS refuses
-     target_dataslot_write on deferload-by-filename slots → different fix
-     (surface the error to the guest? investigate APF write rules).
-   - If NO writes fired: suspect 3 is dead; fall back to §3 instruments
-     (ROMV v4 RAM-range oracle stays the favorite; polled-path SDW0 mirror
-     second).
-5. CD smoke test (independent): put any ISO on the card as `maclc.iso`
-   (Assets/maclc/common/), boot with an AppleCD-driver-equipped System, and
-   read CDA1 via read_bdst.tcl — cmds>0 proves the driver talked to ID 3;
-   toc_rdy=1 + mounted=1 + a Finder desktop volume = mission accomplished.
-   (System 6.0.8 needs the Apple CD-ROM extension installed to mount CDs.)
+1. Confirm buildAB finished clean (map/fit/asm/sta green; fit delta vs
+   13,021 ALM / 252 M10K — CD body ≈ +2K ALMs, +6 M10K). Archive the .sof
+   to `scratch/builds/2026-08-13-buildAB-*.sof`, then `bash
+   scripts/package.sh` and copy to the card (card is at `D:`).
+2. Boot it (SD launch auto-mounts; after any JTAG push, OSD-mount
+   manually). Expect: the +59 crash GONE and System 6.0.8 reaching the
+   Finder. Watch `read_bdst.tcl`: BDWR count>0 err=0 says writes fired and
+   were accepted; BDWW shows the first pair of the last write (file
+   order).
+   - Crash gone → **write round-trip acceptance**: let the Finder settle,
+     power off, pull the card, diff maclc.hda vs the zip — differences
+     must now be ONLY legitimate (valid 'BD' MDB, sane fields). Then
+     commit/tag/release; floppy validation next per the user's list.
+   - Crash persists → BDWR tells whether writes even fired this round;
+     the §3 ladder takes over (ROMV v4 RAM-range oracle first,
+     polled-path SDW0 mirror second).
+3. CD smoke test (independent): any ISO as `maclc.iso` in
+   Assets/maclc/common/, boot a System with the Apple CD-ROM extension,
+   read CDA1 (cmds>0 = driver talked to ID 3; toc_rdy=1 + desktop volume
+   = done). System 6.0.8 needs the AppleCD extension installed to mount.
 
 ## 2. WHAT THE MISTER COMPARISON SETTLED (2026-08-13)
 

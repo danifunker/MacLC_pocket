@@ -794,3 +794,69 @@ export PATH=/c/intelFPGA_lite/18.1/quartus/bin64:$PATH
 cd src/fpga && quartus_map ap_core && quartus_fit ap_core && quartus_asm ap_core && quartus_sta ap_core
 cd ../.. && bash scripts/package.sh && cp info.txt dist/Cores/danifunker.MacLC/
 ```
+
+---
+
+## ★★★ 2026-08-13 — THE WRITE-PATH DOUBLE SHIFT: on-card proof, two root
+## causes, both fixed. Very likely the +59 crash mechanism.
+
+The 08-12 frontier ended with three suspects for the deterministic
++59-sector System-load crash. Suspect 3 ("SCSI writes corrupt the disk") is
+now PROVEN — not by a new instrument, but by diffing the card's `maclc.hda`
+against the user's authoritative zip (`C:\files\MacLC_6-0-8.hda.zip`) after
+the 08-12 crash rounds:
+
+* **3,846 of 82,016 sectors differ.** The System writes plenty during
+  startup (MDB, volume bitmap, catalog/extents, desktop) — every one of
+  those writes shipped corrupt.
+* **The on-card MDB (LBA 98) is the fingerprint.** It aligned to the
+  guest's (sane, real) MDB at exactly ONE 16-bit word left: crDate/name/
+  geometry all at k+1, the guest's legitimate updates visible (lsMod stamped
+  by a post-PRAM-reset 1960s clock, nxtCNID 0x17F→0x18C, freeBks moved),
+  the 'BD' signature WRAPPED to the sector tail. Volume bitmap (LBA 99)
+  matches the same shift at 500/510 bytes.
+
+The observed left-by-one-16-bit-word transform is the COMPOSITION of two
+independent defects, and the arithmetic only works with both present:
+
+1. **apf_blockdev C_FILL sampled `sd_buff_din` one cycle early** (staged
+   word j = guest word j-1; word 0 doubled, word 255 lost — a RIGHT shift
+   by one 16-bit word). scsi.v's sector buffer is a registered read; every
+   other RAM reader in the file has a wait state, the write fill alone did
+   not. Found by code inspection after the MiSTer diff isolated
+   apf_blockdev as the only divergence surface (scsi.v/ncr5380/
+   dataController are byte-identical to 5a75f9b modulo the documented
+   cuts). FIX: `C_FILL_W` wait state.
+2. **The bridge readback is consumed one 32-bit word ahead** (file word w =
+   wrbuf[w+1] — a LEFT shift by two 16-bit words). The OS pairs each bulk
+   SPI read response with the PREVIOUS transaction (full-duplex framing;
+   io_bridge_peripheral's unused `pmp_rd_data_buf` "buffer the last word
+   for immediate response" names the convention). Invisible to every
+   single-register readback (BDST, interact, handshakes) — the sector
+   buffer is the core's only multi-word readback, so the first SCSI write
+   was the first time anything could see it. FIX: serve `wrbuf[widx-1]`
+   (apf_blockdev only; the compensation also makes the OS's wrapped 129th
+   read deliver wrbuf[127] naturally). ★ If an Analogue OS update changes
+   the association, this shifts ±1 again — re-run the write round-trip
+   after OS updates.
+
+Net effect pre-fix: right-1×16 ∘ left-2×16 = left-1×16 — exactly the card.
+(A one-word tail anomaly at word 253 of the MDB remains unexplained —
+likely residue of back-to-back flushes of the same sector; the write
+round-trip on the fixed build is the acceptance test that matters.)
+
+**Why this plausibly IS the +59 crash:** the System's startup writes land
+corrupt ON DISK while its in-memory copies stay clean; the first re-read of
+a just-written catalog/bitmap sector (cache miss) returns garbage at a
+FIXED point in the fixed startup sequence → deterministic death, driver
+error path re-reads the partition map (the observed last-LBA), reset. The
+PRAM startup-device write (Egret path, un-corrupted) survives — the
+observed poisoning. Confirm on the fixed build: if the crash vanishes,
+this was it; if not, BDWR/BDWW (the new write witness) and the §3
+instrument ladder take over.
+
+**Card state: RESTORED** — `maclc.hda` re-copied from the zip and verified
+byte-identical (2026-08-13). Every pre-fix build corrupts it again at the
+first System boot attempt, so do not boot old .sofs against a card image
+you care about. `Mac68KColorGames_v1.hda` was not checked (no master here)
+— if it was ever attached during a crash round, re-image it too.

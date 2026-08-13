@@ -209,10 +209,30 @@ module apf_blockdev #(
 	wire       buf_hit  = (bridge_addr[31:24] == BUF_BASE[31:24]);
 	wire [6:0] buf_widx = bridge_addr[8:2];
 
+	// ★ 2026-08-13: BRIDGE READBACK LAG COMPENSATION (-1 word). Measured on
+	// hardware, not inferred: the OS pairs each bulk-read response with the
+	// PREVIOUS transaction — file32[w] arrived as wrbuf[w+1] (SPI full-duplex
+	// pipelining; io_bridge_peripheral's half-implemented pmp_rd_data_buf
+	// "buffer the last word for immediate response" describes the lag). The
+	// proof is the card image after System-boot writes: the on-card MDB
+	// (LBA 98) aligned to the guest's MDB at exactly +1 x 32-bit word across
+	// 127 of 128 words — every guest-preserved field one word early, the 'BD'
+	// signature wrapped to the tail (wrbuf[128 % 128]=wrbuf[0]) — and the
+	// volume bitmap (LBA 99) matched the same shift at 500/510 bytes.
+	// Serving widx-1 makes transaction w+1 deliver wrbuf[w], and the wrap
+	// turns NATURAL: the 129th read (addr 512 -> widx 0 -> ridx 127) delivers
+	// wrbuf[127]. Single-register readbacks (dbg_stage/interact) never see
+	// the lag — one value regardless of association — which is why nothing
+	// caught this before the first multi-word readback (SCSI writes) ran.
+	// ★ If an Analogue OS update ever changes the association, writes shift
+	// again by ±1 word — re-run the write round-trip (in-guest write, pull
+	// card, diff) after OS updates.
+	wire [6:0] buf_ridx = buf_widx - 7'd1;
+
 	reg [31:0] wrbuf_rd_74;
 always @(posedge clk_74a) begin
 	if (bridge_wr && buf_hit) rdbuf[buf_widx] <= bridge_wr_data;
-	wrbuf_rd_74 <= wrbuf[buf_widx];
+	wrbuf_rd_74 <= wrbuf[buf_ridx];
 end
 assign bridge_rd_data = wrbuf_rd_74;
 
