@@ -3,8 +3,10 @@
 # scan) compared against the known-good sums. THE decay oracle.
 # Runs 3 scans by default so repeat-scan stability comes for free.
 #   quartus_stp_tcl -t scripts/romv.tcl [nscans]
-# Trigger encoding (v2/v3): src[23]=go rising edge, src[22:5]=start word,
-# src[4:0]=log2len. Full ROM = arm 0x000012 then fire 0x800012.
+# Trigger encoding (v4): src[31]=go rising edge, src[27:5]=ABSOLUTE 23-bit
+# SDRAM word base (ROM region at word 500000), src[4:0]=log2len.
+# Full ROM = arm 0x0A000012 then fire 0x8A000012. (v3 ref sums still apply:
+# the 500000 base adds 5*2^38 across 2^18 XOR terms, which is 0 mod 2^32.)
 set nscans 3
 if {[llength $quartus(args)] > 0} { set nscans [lindex $quartus(args) 0] }
 
@@ -24,8 +26,8 @@ set ref_a [expr {0xF486F3D8}]
 set allmatch 1
 for {set n 1} {$n <= $nscans} {incr n} {
     # arm (go=0) then fire (go=1 rising edge)
-    write_source_data -instance_index $idx(ROMV) -value 0x000012 -value_in_hex
-    write_source_data -instance_index $idx(ROMV) -value 0x800012 -value_in_hex
+    write_source_data -instance_index $idx(ROMV) -value 0x0A000012 -value_in_hex
+    write_source_data -instance_index $idx(ROMV) -value 0x8A000012 -value_in_hex
     set st 0
     for {set i 0} {$i < 100} {incr i} {
         after 50

@@ -1642,12 +1642,21 @@ module mac_lc_pocket
 	// sums words [start, start + 2^log2len). log2len=18 with start=0 = the
 	// full-ROM scan. Binary search over ranges localizes every corrupt word
 	// over JTAG in seconds. romv_sum doubles as the WORD PEEK for len=1.
-	wire [23:0] romv_src;   // [23] go, [22:5] start, [4:0] log2len
+	// ★ v4 (2026-08-13, buildAC): ARBITRARY SDRAM ranges. The v3 source
+	// hardwired the {5'b10100} ROM segment; the +59 crash hunt needs to scan
+	// the RAM the System landed in and diff it against the file offline —
+	// the exact technique that cracked the ROM download tears, aimed at RAM.
+	// Source is now 32-bit: [31]=go, [27:5]=base (23-bit SDRAM WORD address,
+	// full 16 MB space — the ROM region starts at word 23'h500000), [4:0]=
+	// log2len (words; >23 clamps to 8M = the whole part). A full-SDRAM scan
+	// is ~2.5 s. Decoders: scripts/romv.tcl / romv_survey.tcl / romv_peek.tcl
+	// (all updated to the v4 encoding — v3 command words are NOT compatible).
+	wire [31:0] romv_src;   // [31] go, [27:5] base, [4:0] log2len
 	reg         romv_d   = 1'b0;
 	reg  [1:0]  romv_st  = 2'd0;    // 0 idle, 1 scanning, 2 done
-	reg  [18:0] romv_idx = 19'd0;   // counts 0..len inclusive tail
-	reg  [17:0] romv_base = 18'd0;
-	reg  [18:0] romv_len  = 19'd0;
+	reg  [23:0] romv_idx = 24'd0;   // counts 0..len inclusive tail
+	reg  [22:0] romv_base = 23'd0;
+	reg  [23:0] romv_len  = 24'd0;
 	reg  [31:0] romv_sum = 32'd0;
 	reg  [31:0] romv_axs = 32'd0;
 	reg  [2:0]  romv_settle = 3'd0;
@@ -1655,12 +1664,12 @@ module mac_lc_pocket
 	wire        ram_do_stb;
 	wire        romv_run = (romv_st == 2'd1);
 	always @(posedge clk_sys) begin
-		romv_d <= romv_src[23];
-		if (!romv_d && romv_src[23] && romv_st != 2'd1) begin
+		romv_d <= romv_src[31];
+		if (!romv_d && romv_src[31] && romv_st != 2'd1) begin
 			romv_st   <= 2'd1;
-			romv_idx  <= 19'd0;
-			romv_base <= romv_src[22:5];
-			romv_len  <= (romv_src[4:0] > 5'd18) ? 19'h40000 : (19'd1 << romv_src[4:0]);
+			romv_idx  <= 24'd0;
+			romv_base <= romv_src[27:5];
+			romv_len  <= (romv_src[4:0] > 5'd23) ? 24'h800000 : (24'd1 << romv_src[4:0]);
 			romv_sum  <= 32'd0;
 			romv_axs  <= 32'd0;
 			romv_settle <= 3'd7;   // absorb any machine-era read still in flight
@@ -1680,16 +1689,18 @@ module mac_lc_pocket
 				romv_stb_d <= ram_do_stb;
 				if (romv_stb_d != ram_do_stb) begin
 					romv_sum <= romv_sum + {16'd0, ram_do_raw};
-					romv_axs <= romv_axs + ({14'd0, romv_base + romv_idx[17:0]} ^ {16'd0, ram_do_raw});
+					romv_axs <= romv_axs + ({9'd0, romv_base + romv_idx[22:0]} ^ {16'd0, ram_do_raw});
 					romv_settle <= 3'd7;
-					if (romv_idx == romv_len - 19'd1) romv_st <= 2'd2;
-					else romv_idx <= romv_idx + 19'd1;
+					if (romv_idx == romv_len - 24'd1) romv_st <= 2'd2;
+					else romv_idx <= romv_idx + 24'd1;
 				end
 			end
 		end
 	end
 
-	wire [24:0] ram_addr = romv_run       ? {2'b00, 5'b10100, romv_base + romv_idx[17:0]} :
+	// v4: the oracle addresses the FULL 23-bit SDRAM word space directly —
+	// the ROM region is base 23'h500000 (the old implicit {5'b10100} prefix).
+	wire [24:0] ram_addr = romv_run       ? {2'b00, romv_base + romv_idx[22:0]} :
 	                       download_cycle ? {2'b00, dio_a[22:0]} :
 	                                        {2'b00, memoryAddr[22:0]};
 
@@ -2106,7 +2117,7 @@ module mac_lc_pocket
 	) cp_diag (.probe(diag_src), .source(diag_src), .source_clk(clk_sys), .source_ena(1'b1));
 
 	altsource_probe #(
-		.instance_id ("ROMV"), .probe_width (4), .source_width (24),
+		.instance_id ("ROMV"), .probe_width (4), .source_width (32),
 		.sld_auto_instance_index ("YES")
 	) cp_romv (.probe({2'b00, romv_st}), .source(romv_src), .source_clk(clk_sys), .source_ena(1'b1));
 

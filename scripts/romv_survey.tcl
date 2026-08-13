@@ -35,8 +35,8 @@ proc exp_sum {base lg} { global CUM
 }
 set nscans 0
 proc hw_scan_once {base lg} { global idx
-    write_source_data -instance_index $idx(ROMV) -value [format "0x%06X" [expr {($base << 5) | $lg}]] -value_in_hex
-    write_source_data -instance_index $idx(ROMV) -value [format "0x%06X" [expr {(1 << 23) | ($base << 5) | $lg}]] -value_in_hex
+    write_source_data -instance_index $idx(ROMV) -value [format "0x%08X" [expr {((0x500000 + $base) << 5) | $lg}]] -value_in_hex
+    write_source_data -instance_index $idx(ROMV) -value [format "0x%08X" [expr {(1 << 31) | ((0x500000 + $base) << 5) | $lg}]] -value_in_hex
     for {set i 0} {$i < 80} {incr i} {
         after 20
         scan [read_probe_data -instance_index $idx(ROMV) -value_in_hex] %x st

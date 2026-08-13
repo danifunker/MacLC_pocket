@@ -18,8 +18,8 @@ start_insystem_source_probe -device_name $dev -hardware_name $hw
 # hardware range scan: returns the sum of len=2^lg words starting at base
 proc hw_scan {base lg} { global idx
     # go=0 first (arm), then go=1 with the range (rising edge starts)
-    write_source_data -instance_index $idx(ROMV) -value [format "0x%06X" [expr {($base << 5) | $lg}]] -value_in_hex
-    write_source_data -instance_index $idx(ROMV) -value [format "0x%06X" [expr {(1 << 23) | ($base << 5) | $lg}]] -value_in_hex
+    write_source_data -instance_index $idx(ROMV) -value [format "0x%08X" [expr {((0x500000 + $base) << 5) | $lg}]] -value_in_hex
+    write_source_data -instance_index $idx(ROMV) -value [format "0x%08X" [expr {(1 << 31) | ((0x500000 + $base) << 5) | $lg}]] -value_in_hex
     for {set i 0} {$i < 25} {incr i} {
         scan [read_probe_data -instance_index $idx(ROMV) -value_in_hex] %x st
         if {($st & 3) == 2} { break }

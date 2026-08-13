@@ -15,8 +15,8 @@ foreach ah $quartus(args) {
     # three isolated reads of the same word, well separated in time
     set vals {}
     for {set r 0} {$r < 3} {incr r} {
-        write_source_data -instance_index $idx(ROMV) -value [format "0x%06X" [expr {($a << 5)}]] -value_in_hex
-        write_source_data -instance_index $idx(ROMV) -value [format "0x%06X" [expr {(1 << 23) | ($a << 5)}]] -value_in_hex
+        write_source_data -instance_index $idx(ROMV) -value [format "0x%08X" [expr {((0x500000 + $a) << 5)}]] -value_in_hex
+        write_source_data -instance_index $idx(ROMV) -value [format "0x%08X" [expr {(1 << 31) | ((0x500000 + $a) << 5)}]] -value_in_hex
         for {set i 0} {$i < 10} {incr i} {
             scan [read_probe_data -instance_index $idx(ROMV) -value_in_hex] %x st
             if {($st & 3) == 2} { break }
