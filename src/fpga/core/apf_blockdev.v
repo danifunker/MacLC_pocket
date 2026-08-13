@@ -148,7 +148,14 @@ module apf_blockdev #(
 	// resolves parks this somewhere identifiable instead of leaving us to
 	// guess (C_REQ=3 waiting to issue, C_WAIT=4 waiting on the OS, C_PV_*=16-18
 	// validating, C_PR_*=13-15 copying into the Egret).
-	output wire [4:0]  dbg_cstate
+	output wire [4:0]  dbg_cstate,
+	// ★ 2026-08-12 (buildX): the whole SCSI-serving story in one JTAG word —
+	// dbg_stage is bridge-readable only, which is useless when the question
+	// IS the bridge. [31] saw_tmo (OS failed to answer), [30] read raised,
+	// [29] acked, [28] done, [27] sector delivered to the machine,
+	// [26] mount seen, [25:23] mount count, [22:0] img_size[31:9] (512-byte
+	// block count of the LAST mount; 0 here = the OS sent no/zero size).
+	output wire [31:0] dbg_bdst
 );
 
 	localparam integer SECTOR_BYTES = 512;
@@ -783,6 +790,15 @@ assign dbg_stage = dlv_s[1]    ? 3'd5 :
                    saw_ack_74  ? 3'd3 :
                    saw_read_74 ? 3'd2 :
                    mnt_s[1]    ? 3'd1 : 3'd0;
+
+	// JTAG probe word (see the port comment). Sticky bits are 0->1 only, so
+	// sampling them from the ISSP's clk_sys side needs no handshake; img_size
+	// is quasi-static after the mount pulse.
+	reg [2:0] dbg_mount_cnt = 3'd0;
+	always @(posedge clk_sys) if (img_mounted != 2'b00) dbg_mount_cnt <= dbg_mount_cnt + 3'd1;
+	assign dbg_bdst = { saw_tmo, saw_read_74, saw_ack_74, saw_done_74,
+	                    saw_deliver_sys, saw_mount_sys, dbg_mount_cnt,
+	                    img_size[31:9] };
 
 endmodule
 

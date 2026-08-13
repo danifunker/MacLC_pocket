@@ -698,8 +698,10 @@ apf_blockdev #(
     .pram_loaded    ( bd_pram_loaded ),
 
     .dbg_stage      ( bd_dbg_stage ),
-    .dbg_cstate     ( bd_dbg_cstate )
+    .dbg_cstate     ( bd_dbg_cstate ),
+    .dbg_bdst       ( bd_dbg_bdst )
 );
+    wire [31:0] bd_dbg_bdst;
 
 // PRAM persistence nets. The load path must complete before the machine's
 // pram_ready rises -- see the ordering note in apf_blockdev.v.
@@ -885,6 +887,11 @@ apf_bridge_loader #(
         .instance_id ("DLST"), .probe_width (32), .source_width (1),
         .sld_auto_instance_index ("YES")
     ) cp_dlst (.probe(dbg_dl_status),        .source(), .source_clk(clk_sys), .source_ena(1'b1));
+
+    altsource_probe #(
+        .instance_id ("BDST"), .probe_width (32), .source_width (1),
+        .sld_auto_instance_index ("YES")
+    ) cp_bdst (.probe(bd_dbg_bdst),          .source(), .source_clk(clk_sys), .source_ena(1'b1));
 `endif
 
 
