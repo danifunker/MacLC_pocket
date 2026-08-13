@@ -10,10 +10,10 @@ This session: the SCSI **write** staging path was found off-by-one-cycle
 probes BDWR/BDWW added, and the **CD-ROM target is BACK at SCSI ID 3 —
 ISO-only** (`rtl/cd_toc_stub.sv` replaces cd_audio's TOC planes; no audio, no
 bin/cue, no Toolbox/changer — those stay cut). CD slot = data.json id 320,
-`maclc.iso` auto-mounts. Budget: buildAA sat at 13,021 ALMs (70%) / 252 M10K
-(82%); the slimmed CD target adds roughly the scsi.v CDROM body + an
-8-sector ring (~4 M10K) — Analysis & Elaboration clean, fit numbers land with
-the next build.
+`maclc.iso` auto-mounts. Budget, measured (buildAB, 2026-08-13): the slimmed
+CD target + TOC stub + write witness cost **+2,083 ALMs and +4 M10K** over
+buildAA — 15,104/18,480 ALMs (82%), 256/308 M10K (83%), zero negative slack
+on every corner (worst setup +2.039, worst hold +0.275).
 
 **As of 2026-08-10. The core builds, loads on hardware, and BOOTS to the
 "insert disk" screen.** The 68020 executes the real ROM, POST completes, the
