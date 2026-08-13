@@ -84,7 +84,7 @@ Driver43 64..95), `system_ref.txt`, `burst_id.py`.
 - Ops crib (push/mount/jboot/JTAG traps): unchanged, boot_problems §8 +
   the 08-12 RESUME at git 8cc9782.
 
-## 2. WHAT THE MISTER COMPARISON SETTLED (2026-08-13)
+## 4. APPENDIX — the MiSTer comparison (settled 2026-08-13)
 
 The user's hint "compare the SCSI from the mister maclc core" is DONE:
 - `rtl/scsi.v` / `rtl/ncr5380.sv` / `rtl/dataController_top.sv` are
@@ -100,39 +100,6 @@ The user's hint "compare the SCSI from the mister maclc core" is DONE:
      one fetch per envelope) is satisfied; same clk domain, no races found.
 - The read ring: RING_LOG=5 → 16KB/disk target, MiSTer-identical. CD ring
   RING_LOG=3 → 4KB (M10K budget; CD is never the boot device).
-
-## 3. THE FRONTIER (unchanged facts, from 08-12)
-
-- Each boot round delivers exactly +59 sectors (83→142→201): DDM(1) +
-  Driver43(32) + pmap(3) + boot blocks + ~21-26 System sectors. Last
-  requested LBA at death = partition-map block 3 (a re-read — driver error
-  path?). Happy Mac shows, then reset to `?`, PRAM poisoned (startup-device
-  entry) so later boots skip SCSI until OSD Reset PRAM.
-- ROM-phase reads go through pseudo-DMA (48 × 512-beat byte-mode bursts,
-  SDW0/SDCT); System-phase reads go through the driver's POLLED NCR path —
-  data through PDMA verified correct post-buildAA; polled-path data still
-  never captured (SDW0 mirror at selectSCSI data reads = instrument #3).
-- Next instruments if the write theory dies: ROMV v4 (widen the oracle to
-  arbitrary SDRAM ranges, scan where the System landed, diff offline — the
-  technique that cracked the ROM tears), dbg_ring0/1 to ISSPs, polled-path
-  capture, in that order. (§3 of the 08-12 RESUME, git `8cc9782`, has the
-  full text — this file supersedes but does not repeat it.)
-
-## 4. INSTRUMENT SUITE (buildAB = buildAA deck + three new)
-
-| probe | meaning | decoder |
-|---|---|---|
-| BDST/BDW0/BDLB | blockdev serving story / first served words / deliveries+LBA | `scripts/read_bdst.tcl` |
-| **BDWR** | {saw_wr_err, wr_cnt[6:0], last write LBA[23:0]} | same |
-| **BDWW** | first two staged words of the last WRITE (file order) | same |
-| **CDA1** | CD target: {toc_rdy,no_media,mounted,ok,sense,cmds,last_op} | same |
-| SDW0/SDCT | CPU-side pseudo-DMA capture | same |
-| SCS1/SCS2 | phases+handshake / last opcode+resets | same |
-| ROMV/RVSU/RVAX | ROM-region oracle (v3, ROM-only) | `scripts/romv.tcl` etc. |
-| JBOO/DIAG/STMC/... | boot strobe / STM console | `scripts/jboot.tcl` etc. |
-
-★ Ops crib (mount/push/boot cycle, JTAG traps, card workflow, build chain):
-§5-6 of the 08-12 RESUME at git `8cc9782` — unchanged, still authoritative.
 
 ## 5. WORKING AGREEMENTS
 
