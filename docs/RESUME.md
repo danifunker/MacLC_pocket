@@ -1,72 +1,88 @@
-# RESUME — MacLC Pocket, session handoff (2026-08-13: write-path fix + ISO CD-ROM in; crash hunt armed)
+# RESUME — MacLC Pocket (2026-08-13 evening: data path EXONERATED, the crash is IN CODE; PCRB names it)
 
 Paste into a fresh session: **"Resume docs/RESUME.md — continue the SCSI boot
-crash hunt."** Read this file fully, then the two ★★★ sections at the end of
-`docs/boot_problems.md`. Where they disagree, boot_problems.md wins on
-history; this file wins on current state.
+crash hunt."** boot_problems.md ★★★ sections carry the history; this file is
+current state.
 
 ---
 
-## 0. THE IMMEDIATE STATE
+## 0. WHERE THE HUNT STANDS (read this, believe this)
 
-**Cold boot SOLVED. SCSI reads verified. And the crash-round evidence is
-IN: the SCSI write path was corrupting the disk on every System startup —
-two root causes, both found and FIXED this session (boot_problems.md ★★★
-2026-08-13 has the full forensics):**
+**The +59 crash is NOT a data problem. Every face is measured byte-perfect:**
+- Card: `maclc.hda` restored from the zip; the retried sector (LBA 82 class)
+  serves `FFFC 4ED0` = master-exact at the blockdev face (BDW0, repeated).
+- CPU receipt: **SDCP** (buildAE, full-burst capture) caught the driver
+  re-read's sector as the CPU received it: **LBA 64, 512/512 bytes perfect**.
+- The final command before death (READ10, pmap block 3) completes GOOD with
+  correct bytes ('PM' received, hs2=F). **Then the machine dies executing
+  code.** The dying routine is the question; buildAF's **PCRB** (64-PC ring,
+  frozen at the crash reset) answers it.
 
-- ★ **PROVEN ON-CARD:** after the 08-12 crash rounds, the card's
-  `maclc.hda` differs from the user's authoritative zip in **3,846
-  sectors**. The on-card MDB (LBA 98) is the guest's own (sane) MDB
-  shifted LEFT one 16-bit word, 'BD' signature wrapped to the tail —
-  the exact composition of the two defects below. The System DOES write
-  during startup (MDB, bitmap, catalog), every write shipped corrupt, and
-  the first re-read of a just-written sector at a fixed point in the
-  startup sequence is the most economical explanation of the
-  deterministic +59 crash.
-- **Fix 1 — C_FILL off-by-one** (`C_FILL_W`): the fill sampled
-  `sd_buff_din` one cycle early → staged sectors right-shifted one 16-bit
-  word. Found via the MiSTer diff (scsi.v/ncr5380/dataController are
-  byte-identical to 5a75f9b modulo cuts; apf_blockdev is the only
-  divergence surface).
-- **Fix 2 — bridge readback lag** (`buf_ridx = widx-1`): the OS pairs
-  each bulk SPI read response with the PREVIOUS transaction → file word w
-  arrived as wrbuf[w+1]. Only multi-word readbacks see it; the sector
-  buffer is the core's only one. Measured from the card fingerprint
-  (127/128 words at exactly +1×32-bit).
-- **Card RESTORED** — maclc.hda re-copied from `C:\files\MacLC_6-0-8.hda.zip`
-  and cmp-verified. ★ Old .sofs corrupt it again on any System boot.
-- **BDWR/BDWW probes** (write count/LBA/err + first staged pair) ride
-  along; **CD-ROM (ISO-only) is back at SCSI ID 3** — cd_toc_stub TOC,
-  slot 320, `maclc.iso` auto-mount, read-only, CDA1 probe. NO
-  audio/bin-cue/Toolbox/Changer. HW-unvalidated.
-- Disks already had 16KB read-ahead (RING_LOG=5, MiSTer-identical).
+**The +59 round's true anatomy** (freeze-mapped): DDM + pmap + boot blocks +
+~26 System-file sectors + **a ~19-sector driver RE-read (READ6 from LBA 64,
+fetch frontier parks at 82)** — that's System startup re-loading Driver43 to
+install it — then pmap 2,3 re-reads (driver Open locating its partition?),
+then death. Rounds are BIT-DETERMINISTIC: 2 MB of RAM is sum-identical
+across separate rounds frozen at the same drained delivery count.
 
-**buildAB** (both fixes + probes + CD) was building at session end.
-buildAA (.sof archived) = pre-bundle baseline. Single-axis levers if
-needed: revert `C_FILL_W` / revert `buf_ridx` / `cd_enable=1'b0`.
+**Theories executed this session (do not resurrect):**
+- Write-path corruption: was REAL (two bugs, fixed buildAB, on-card proof in
+  boot_problems ★★★) but NOT the crash — a zero-write round crashes at +59.
+- PRAM poisoning: DEAD. The user's ROM-reload experiment (PRAM untouched)
+  booted a full round. Post-crash wander is ROM boot-search state, cleared
+  by any machine reset, sometimes self-clears (~2 min retries).
+- scsi_irq -> pseudovia IFR3: tie-off is CORRECT (MAME LC ground truth;
+  MiSTer MacLC.sv 1184-1205 carries the full reversal history; System 6 was
+  immune there). Do NOT re-wire.
+- CD at ID 3: passive and polite through every round (CDA1 answers no-disc
+  sense; boot proceeds past it). Not a factor.
 
-## 1. FIRST ACTIONS NEXT SESSION
+## 1. NEXT ACTION — one capture, then read code
 
-1. Confirm buildAB finished clean (map/fit/asm/sta green; fit delta vs
-   13,021 ALM / 252 M10K — CD body ≈ +2K ALMs, +6 M10K). Archive the .sof
-   to `scratch/builds/2026-08-13-buildAB-*.sof`, then `bash
-   scripts/package.sh` and copy to the card (card is at `D:`).
-2. Boot it (SD launch auto-mounts; after any JTAG push, OSD-mount
-   manually). Expect: the +59 crash GONE and System 6.0.8 reaching the
-   Finder. Watch `read_bdst.tcl`: BDWR count>0 err=0 says writes fired and
-   were accepted; BDWW shows the first pair of the last write (file
-   order).
-   - Crash gone → **write round-trip acceptance**: let the Finder settle,
-     power off, pull the card, diff maclc.hda vs the zip — differences
-     must now be ONLY legitimate (valid 'BD' MDB, sane fields). Then
-     commit/tag/release; floppy validation next per the user's list.
-   - Crash persists → BDWR tells whether writes even fired this round;
-     the §3 ladder takes over (ROMV v4 RAM-range oracle first,
-     polled-path SDW0 mirror second).
-3. CD smoke test (independent): any ISO as `maclc.iso` in
-   Assets/maclc/common/, boot a System with the Apple CD-ROM extension,
-   read CDA1 (cmds>0 = driver talked to ID 3; toc_rdy=1 + desktop volume
-   = done). System 6.0.8 needs the AppleCD extension installed to mount.
+buildAF (PCRB) flow, all JTAG, card stays in:
+1. Push `scratch/builds/2026-08-13-buildAF-pcrb.sof`, wait BRGC/ROMC=262144
+   (`scratch/tools/rom_repush_check.tcl`), user OSD-mounts maclc.hda.
+2. `jboot.tcl` → wait ~2 s (round underway) → `pcrb.tcl arm` (arming before
+   jboot is useless — jboot's own reset would freeze the ring).
+3. Round crashes (~10 s). `pcrb.tcl` → 64 PCs, oldest→newest.
+4. Read PCs against `docs/MacLC_ROM_disasm.txt` (ROM = 00A0xxxx) /
+   `docs/MacLC_ROM_Boot_Sequence_Analysis.md`. RAM PCs = System/driver code
+   (the re-read driver image or System startup — correlate with where the
+   19-sector re-read landed if needed).
+5. The routine names the divergence; fix follows. Candidate classes if the
+   PC lands in: driver Open (env divergence: V8/pseudovia flags, memory
+   config — note Memory=2MB is still the default from the diag era); the
+   ROM blind-transfer primitive $A08CFA (its $8-vector bus-error dance —
+   MiSTer MacLC.sv:826 records that contract); slot/PDS scan artifacts.
+
+## 2. THE INSTRUMENT SUITE (buildAF carries everything)
+
+| lever/probe | what | script |
+|---|---|---|
+| FRZE | manual freeze + auto-freeze at ABSOLUTE delivery count (8-bit, wraps — mind thresholds; drain quantizes to command boundaries) | `scripts/frze.tcl` on/off/arm N/arm +K/cycle |
+| PCRB/PCRS | last-64-PCs ring, freezes on machine reset | `scripts/pcrb.tcl` [arm] |
+| SDCP | full last pseudo-DMA burst (512 beats) | `scripts/sdcp.tcl`; identify with `scratch/evidence/burst_id.py` |
+| ROMV v4 | arbitrary-SDRAM-range sums/peeks (machine resets per scan unless FRZE holds it) | `scripts/ramv_sum.tcl`, `ramv_dump.tcl`, `ramv_sweep.tcl`, `romv.tcl` (refs still valid) |
+| BDST/BDW0/BDLB/BDWR/BDWW/CDA1/SDW0/SDCT/SCS1/SCS2 | serving/write/CD/burst deck | `scripts/read_bdst.tcl` |
+
+★ ROMV scans RELEASE the machine after each trigger — RAM dumps of a dead
+machine REQUIRE `frze.tcl on` first or the reboot marches over the corpse
+(measured: DB6D:B6DB pattern mid-dump).
+★ The offline side lives in `scratch/evidence/` (gitignored, regenerable):
+master image + HFS map (System rsrc fork abs LBA 2075+, catalog 749+,
+Driver43 64..95), `system_ref.txt`, `burst_id.py`.
+
+## 3. BUILD/RELEASE STATE
+
+- dist/ (SD card release) = **buildAB** (write fixes + BDWR/BDWW + ISO
+  CD-ROM at ID 3 + 16KB-read-ahead-confirmed). The card carries it + the
+  restored maclc.hda + data.json with CD slot 320 (`maclc.iso`
+  auto-mounts; the image's System Folder already has the Apple CD-ROM
+  extension).
+- JTAG-only instrument builds: AC (ROMV v4) → AD (FRZE) → AE (SDCP) →
+  AF (PCRB). All archived in scratch/builds/, all STA-clean, ~83% ALMs.
+- Ops crib (push/mount/jboot/JTAG traps): unchanged, boot_problems §8 +
+  the 08-12 RESUME at git 8cc9782.
 
 ## 2. WHAT THE MISTER COMPARISON SETTLED (2026-08-13)
 
