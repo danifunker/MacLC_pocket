@@ -2283,14 +2283,21 @@ module mac_lc_pocket
 		pcrb_nrst_d <= n_reset;
 		pcrb_arm_d  <= pcrb_src[15];
 		pcrb_trig_d <= ext_trig;
-		// Live Egret handshake counters: free-run, cleared at each arm so a
-		// capture reads "activity since arm". Saturating.
+		// ★ buildAM: WINDOW-SCOPED Egret counters — cleared at the ext_trig
+		// edge, frozen with the ring. They measure exactly the death window
+		// [trigger .. freeze]: cb1_falls=0 there means the Egret truly sent
+		// no shift clocks (HC05/wrapper side); >0 with the SR bit counter
+		// still parked means the VIA swallowed them (the documented
+		// ext_fall_edge_pending coalescing). The whole-round free-run form
+		// saturated into uselessness (4095/1023/1023).
 		eg_cb1_d <= dbg_sr_cb1;
 		eg_ba_d  <= dbg_eg_byteack;
 		eg_tip_d <= dbg_eg_tip;
-		if (eg_cb1_d && !dbg_sr_cb1 && eg_cb1_cnt != 12'hFFF) eg_cb1_cnt <= eg_cb1_cnt + 12'd1;
-		if ((eg_ba_d  ^ dbg_eg_byteack) && eg_ba_cnt  != 10'h3FF) eg_ba_cnt  <= eg_ba_cnt  + 10'd1;
-		if ((eg_tip_d ^ dbg_eg_tip)     && eg_tip_cnt != 10'h3FF) eg_tip_cnt <= eg_tip_cnt + 10'd1;
+		if (!pcrb_frozen && pcrb_armed_cnt) begin
+			if (eg_cb1_d && !dbg_sr_cb1 && eg_cb1_cnt != 12'hFFF) eg_cb1_cnt <= eg_cb1_cnt + 12'd1;
+			if ((eg_ba_d  ^ dbg_eg_byteack) && eg_ba_cnt  != 10'h3FF) eg_ba_cnt  <= eg_ba_cnt  + 10'd1;
+			if ((eg_tip_d ^ dbg_eg_tip)     && eg_tip_cnt != 10'h3FF) eg_tip_cnt <= eg_tip_cnt + 10'd1;
+		end
 		if (pcrb_src[15] && !pcrb_arm_d) begin
 			pcrb_frozen    <= 1'b0;                    // re-arm: capture again
 			pcrb_armed_cnt <= 1'b0;
@@ -2310,6 +2317,9 @@ module mac_lc_pocket
 			pcrb_k         <= {pcrb_klat, 4'd0};      // K x16 writes to go
 			pcrb_armed_cnt <= 1'b1;
 			pcrb_frozen    <= 1'b0;
+			eg_cb1_cnt     <= 12'd0;                  // window-scope: zero at
+			eg_ba_cnt      <= 10'd0;                  // the trigger
+			eg_tip_cnt     <= 10'd0;
 		end
 		if (!pcrb_frozen && fetch_valid && last_fetch_pc != pcrb_last) begin
 			pcrb[pcrb_w] <= last_fetch_pc;
