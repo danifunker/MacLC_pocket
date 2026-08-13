@@ -6,62 +6,58 @@ current state.
 
 ---
 
-## 0. WHERE THE HUNT STANDS (read this, believe this)
+## 0. WHERE THE HUNT STANDS — THE CRASH IS AN EGRET STALL, NOT SCSI
 
-**The +59 crash is NOT a data problem. Every face is measured byte-perfect:**
-- Card: `maclc.hda` restored from the zip; the retried sector (LBA 82 class)
-  serves `FFFC 4ED0` = master-exact at the blockdev face (BDW0, repeated).
-- CPU receipt: **SDCP** (buildAE, full-burst capture) caught the driver
-  re-read's sector as the CPU received it: **LBA 64, 512/512 bytes perfect**.
-- The final command before death (READ10, pmap block 3) completes GOOD with
-  correct bytes ('PM' received, hs2=F). **Then the machine dies executing
-  code.** The dying routine is the question; buildAF's **PCRB** (64-PC ring,
-  frozen at the crash reset) answers it.
+**The +59 "SCSI crash" is the System's first PRAM write (startup-device
+entry) STALLING mid-Egret-transaction.** The "+59" is merely how much disk
+I/O precedes it. The "PRAM poisoning" of the last two days was never a
+side effect — the half-completed write IS the crash. Chain of proof:
 
-**The +59 round's true anatomy** (freeze-mapped): DDM + pmap + boot blocks +
-~26 System-file sectors + **a ~19-sector driver RE-read (READ6 from LBA 64,
-fetch frontier parks at 82)** — that's System startup re-loading Driver43 to
-install it — then pmap 2,3 re-reads (driver Open locating its partition?),
-then death. Rounds are BIT-DETERMINISTIC: 2 MB of RAM is sum-identical
-across separate rounds frozen at the same drained delivery count.
+- Every SCSI data face measured byte-perfect (card, blockdev face, target
+  face, CPU receipt via SDCP full-burst: LBA 64, 512/512).
+- K=384 PC window (PCRB): the masked-interrupt ioResult wait at ROM
+  A14872, hand-pumping VIA1's SR (A148D8 cluster writes VIA1+$1400 = SR)
+  — an Egret transaction being fed byte by byte.
+- K=511 window: post-give-up wander ADB machinery — the abandonment is
+  inside the ~2000 instructions between.
+- **buildAL2 EGS1 snapshot at the death window: SR=$01 loaded, shift-OUT
+  active, bit counter parked at 7 (ZERO bits shifted), CB1 idle high, no
+  edge pending, HC05 running.** The Mac waits; the Egret never clocks the
+  byte out. Mid-packet (earlier bytes pumped fine).
+- Why MiSTer never saw it: its us-scale serving completed the async I/O
+  before the wait loop ever needed the completion path; Pocket ms-scale
+  serving makes the wait real and the Egret transaction runs under
+  masked-interrupt hand-pumped pacing for the first time.
 
-**Theories executed this session (do not resurrect):**
-- Write-path corruption: was REAL (two bugs, fixed buildAB, on-card proof in
-  boot_problems ★★★) but NOT the crash — a zero-write round crashes at +59.
-- PRAM poisoning: DEAD. The user's ROM-reload experiment (PRAM untouched)
-  booted a full round. Post-crash wander is ROM boot-search state, cleared
-  by any machine reset, sometimes self-clears (~2 min retries).
-- scsi_irq -> pseudovia IFR3: tie-off is CORRECT (MAME LC ground truth;
-  MiSTer MacLC.sv 1184-1205 carries the full reversal history; System 6 was
-  immune there). Do NOT re-wire.
-- CD at ID 3: passive and polite through every round (CDA1 answers no-disc
-  sense; boot proceeds past it). Not a factor.
+**The one remaining fork (buildAM decides):** did the Egret send NO CB1
+edges in the death window (HC05/egret_wrapper side — fix its pacing), or
+did it send them and the VIA swallowed them (the documented
+ext_fall_edge_pending coalescing, CLAUDE.md's standing suspect — fix the
+SR path / rate-limit CB1 per the repo's own recommendation)? EGS2 is now
+window-scoped [trigger..freeze]: cb1_falls=0 => Egret side; >0 with bit
+still parked => VIA side.
 
-## 1. NEXT ACTION — land the K=384 window on the death decision
+Also measured today (all in boot_problems/CLAUDE-adjacent comments):
+write-path double-shift fixed & proven; ISO CD at ID 3 shipped (its
+transient-wedge theory is UNCONVICTED — CDPH exists to check);
+BootMask explains the wander (no PRAM); repeat mounts invisible;
+seed-7 had a clk_sys hold violation at buildAL — seed 2 now.
 
-The capture flow is PROVEN end-to-end (K=128 landed mid-consumption of the
-final pmap READ10: the SCSI Manager's polled byte loop at ROM A08D5A,
-bytes flowing, target in DATA phase with BSY — everything healthy at that
-depth). The death lies a few hundred loop iterations further. buildAK made
-the flow RACE-FREE (trigger re-opens a frozen ring; K latches at arm).
+## 1. NEXT ACTION — run buildAM's fork-decider, then fix
 
-Per capture round (all JTAG):
-1. `frze.tcl off` -> `frze.tcl trig +59` -> `pcrb.tcl arm 384` -> `jboot.tcl`
-   (order no longer matters post-buildAK, but this one is canonical).
-2. Poll `pcrb.tcl` for frozen=1 (~15 s). `read_bdst.tcl` -> PSN1/PSN2 =
-   bus snapshot AT the window; `pcrb.tcl` dump = the 64 PCs.
-3. ROM PC -> disasm line = 40800000 + (pc & 7FFFF) in
-   docs/MacLC_ROM_disasm.txt. Sweep K (re-arm, no rebuilds) until the
-   window shows post-consumption decision code: expect the pmap-entry
-   check that concludes "give up", or a further SCSI op that fails.
-4. Round-start lore (measured): a fresh fabric push + first OSD mount
-   auto-runs a round; REPEAT mounts are invisible (mounted latch already
-   set — only 0->1 registers); jboot restarts rounds reliably when the
-   fabric is fresh-ish; the post-crash wander never retries ID 0
-   (BootMask — busdata histogram: five empty IDs mid-timeout, zero 0x81).
-5. Watch CDPH during walks if rounds refuse to start: cd_bsy=1 parked
-   with phase!=0 = the transient CD wedge deafening the disks (its gate
-   excludes cd_bsy; the disks' includes it). Theory OPEN, now observable.
+1. buildAM (window-scoped EGS2) was compiling at session end — verify STA
+   CLEAN (the seed lesson), archive, push, mount.
+2. Canonical capture: `frze off` -> `frze trig +59` -> `pcrb arm 384` ->
+   `jboot` -> poll frozen -> `read_bdst` (EGS1/EGS2 lines).
+3. Fork: cb1_falls==0 -> instrument/inspect egret_wrapper + HC05 firmware
+   state at the stall (is the HC05 stuck in ADB autopoll? did it miss the
+   Mac's TIP/BYTEACK transition?). cb1_falls>0 -> via6522 SR shift-out
+   edge path (ext_fall_edge_pending) — fix per CLAUDE.md guidance
+   (rate-limit CB1 in egret_wrapper preferred over touching the SR).
+4. After the fix build: full boot expected — System 6.0.8 to Finder. Then
+   the write round-trip acceptance (card diff vs zip), the CD smoke test
+   (image already carries the Apple CD-ROM extension), and buildAB-class
+   release packaging.
 
 ## 2. THE INSTRUMENT SUITE (buildAF carries everything)
 
