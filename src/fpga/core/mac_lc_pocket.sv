@@ -2116,6 +2116,46 @@ module mac_lc_pocket
 		.sld_auto_instance_index ("YES")
 	) cp_flpc (.probe(dbg_flp_words), .source(), .source_clk(clk_sys), .source_ena(1'b1));
 
+	// ★ buildZ2: what the CPU actually RECEIVES through the SCSI pseudo-DMA
+	// window. The blockdev buffer is byte-perfect and the target serves it;
+	// the ROM loads the 32-block driver and rejects it — this captures the
+	// received words to split "corrupted on the CPU hop" from "driver fails
+	// after clean load". A burst = beats separated by <2 ms (sector gaps are
+	// OS-fetch ms-scale, so each sector is its own burst). SDW0 = words 0,1
+	// of the LAST burst (a block-0 burst must read 4552 0200). SDCT =
+	// {bursts[7:0], prev-burst beats[11:0], current-burst beats[11:0]}.
+	reg [15:0] sdw0 = 16'd0, sdw1 = 16'd0;
+	reg [11:0] sd_beats = 12'd0, sd_beats_prev = 12'd0;
+	reg [7:0]  sd_bursts = 8'd0;
+	reg [15:0] sd_idle = 16'hFFFF;
+	reg        sd_beat_d = 1'b0;
+	wire sd_beat = selectSCSIDMA && !_cpuAS && _cpuRW && !_cpuDTACK;
+	always @(posedge clk_sys) begin
+		sd_beat_d <= sd_beat;
+		if (sd_beat && !sd_beat_d) begin
+			if (sd_idle == 16'hFFFF) begin
+				sd_beats_prev <= sd_beats;
+				sd_beats      <= 12'd1;
+				sd_bursts     <= sd_bursts + 8'd1;
+				sdw0          <= dataControllerDataOut;
+			end else begin
+				if (sd_beats == 12'd1) sdw1 <= dataControllerDataOut;
+				if (sd_beats != 12'hFFF) sd_beats <= sd_beats + 12'd1;
+			end
+			sd_idle <= 16'd0;
+		end else if (sd_idle != 16'hFFFF) sd_idle <= sd_idle + 16'd1;
+	end
+
+	altsource_probe #(
+		.instance_id ("SDW0"), .probe_width (32), .source_width (1),
+		.sld_auto_instance_index ("YES")
+	) cp_sdw0 (.probe({sdw0, sdw1}), .source(), .source_clk(clk_sys), .source_ena(1'b1));
+
+	altsource_probe #(
+		.instance_id ("SDCT"), .probe_width (32), .source_width (1),
+		.sld_auto_instance_index ("YES")
+	) cp_sdct (.probe({sd_bursts, sd_beats_prev, sd_beats}), .source(), .source_clk(clk_sys), .source_ena(1'b1));
+
 	// ★ buildY: the SCSI target's own testimony — why does the ROM read a
 	// perfect block 0 and never command the driver read? SCS1 = {dbg_scsi2
 	// (target phases + io handshake), dbg_scsi (selection/arbitration)};
