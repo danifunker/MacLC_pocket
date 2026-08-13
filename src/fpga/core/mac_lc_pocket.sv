@@ -2265,11 +2265,18 @@ module mac_lc_pocket
 	// field: sweep it over re-arms (no rebuilds) until the dump shows the
 	// decision code. K counts ring WRITES (loop iterations re-log PCs), so
 	// think "instructions-ish", not unique addresses.
-	//   PCRB source[15]=arm(rising clears frozen)  [14:6]=K (9 bits, x16 =
-	//   0..8176 writes)  [5:0]=read index. n_reset freeze stays (harmless).
-	wire [15:0] pcrb_src;
+	//   PCRB source (★ buildAO, widened to 48 bits):
+	//     [47]    arm (rising edge clears frozen, latches K + match)
+	//     [46:38] K (x16 ring-writes of post-trigger countdown)
+	//     [37:32] read index
+	//     [23:0]  PC-match trigger address (0 = disabled). When set, a fetch
+	//             of this PC starts the countdown (OR'd with ext_trig) — used
+	//             to freeze at the ioResult-wait EXIT (A14882) or the wander
+	//             entry, places the delivery-count trigger cannot reach.
+	wire [47:0] pcrb_src;
 	reg  [12:0] pcrb_k = 13'd0;      // countdown, in ring writes
 	reg  [8:0]  pcrb_klat = 9'd0;    // K latched at arm (polls spray the source)
+	reg  [23:0] pcrb_match = 24'd0;  // PC-match trigger, latched at arm
 	reg         pcrb_trig_d = 1'b0, pcrb_armed_cnt = 1'b0;
 	reg  [31:0] pcsn1 = 32'd0, pcsn2 = 32'd0;   // bus snapshot at window freeze
 	reg  [31:0] egsn1 = 32'd0;                  // Egret/SR snapshot at freeze
@@ -2284,7 +2291,7 @@ module mac_lc_pocket
 	reg         eg_cb1_d = 1'b0, eg_ba_d = 1'b0, eg_tip_d = 1'b0;
 	always @(posedge clk_sys) begin
 		pcrb_nrst_d <= n_reset;
-		pcrb_arm_d  <= pcrb_src[15];
+		pcrb_arm_d  <= pcrb_src[47];
 		pcrb_trig_d <= ext_trig;
 		// ★ buildAM: WINDOW-SCOPED Egret counters — cleared at the ext_trig
 		// edge, frozen with the ring. They measure exactly the death window
@@ -2301,11 +2308,11 @@ module mac_lc_pocket
 			if ((eg_ba_d  ^ dbg_eg_byteack) && eg_ba_cnt  != 10'h3FF) eg_ba_cnt  <= eg_ba_cnt  + 10'd1;
 			if ((eg_tip_d ^ dbg_eg_tip)     && eg_tip_cnt != 10'h3FF) eg_tip_cnt <= eg_tip_cnt + 10'd1;
 		end
-		if (pcrb_src[15] && !pcrb_arm_d) begin
+		if (pcrb_src[47] && !pcrb_arm_d) begin
 			pcrb_frozen    <= 1'b0;                    // re-arm: capture again
 			pcrb_armed_cnt <= 1'b0;
-			pcrb_klat      <= pcrb_src[14:6];          // K latched AT ARM —
-			                                           // JTAG polls spray the
+			pcrb_klat      <= pcrb_src[46:38];         // K latched AT ARM —
+			pcrb_match     <= pcrb_src[23:0];          // polls spray the
 			                                           // source afterwards
 			eg_cb1_cnt     <= 12'd0;
 			eg_ba_cnt      <= 10'd0;
@@ -2316,7 +2323,10 @@ module mac_lc_pocket
 		// countdown — a jboot's n_reset freeze between arm and trigger no
 		// longer kills the capture, and the arm/jboot/trigger JTAG ordering
 		// races are gone. One capture per arm (armed_cnt gates re-fire).
-		if (ext_trig && !pcrb_trig_d && !pcrb_armed_cnt) begin
+		// ★ buildAO: OR'd with the PC-match trigger (fetch of pcrb_match).
+		if (((ext_trig && !pcrb_trig_d) ||
+		     (pcrb_match != 24'd0 && fetch_valid &&
+		      last_fetch_pc[23:0] == pcrb_match)) && !pcrb_armed_cnt) begin
 			pcrb_k         <= {pcrb_klat, 4'd0};      // K x16 writes to go
 			pcrb_armed_cnt <= 1'b1;
 			pcrb_frozen    <= 1'b0;
@@ -2361,11 +2371,11 @@ module mac_lc_pocket
 				else pcrb_k <= pcrb_k - 13'd1;
 			end
 		end
-		pcrb_q <= pcrb[pcrb_src[5:0]];
+		pcrb_q <= pcrb[pcrb_src[37:32]];
 	end
 
 	altsource_probe #(
-		.instance_id ("PCRB"), .probe_width (32), .source_width (16),
+		.instance_id ("PCRB"), .probe_width (32), .source_width (48),
 		.sld_auto_instance_index ("YES")
 	) cp_pcrb (.probe(pcrb_q), .source(pcrb_src), .source_clk(clk_sys), .source_ena(1'b1));
 
