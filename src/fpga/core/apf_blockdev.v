@@ -220,15 +220,19 @@ end
 	// those toggles alias, and an even count produces NO net edge -- so
 	// img_mounted never pulsed and neither the SCSI disks nor the floppy were
 	// ever seen. Edge-detect it.
+	// ★ 2026-08-12 (buildY): the update latch must NOT be gated on reset_n.
+	// Analogue OS announces named deferload slots (data.json "filename") at
+	// core launch — potentially within the pll_core_locked_s settling window.
+	// The old `if (!reset_n) ... else if (edge)` arm DISCARDED any
+	// announcement landing in that window, which is why auto-mount never
+	// worked while manual OSD mounts (minutes after lock) always did. Same
+	// defect family as the eaten power-up PRAM request (buildW). The sizes
+	// initialize to 0 by declaration; nothing needs a reset arm here.
 	reg dsu_d = 1'b0;
 always @(posedge clk_74a) begin
 	dsu_d <= dataslot_update;
 
-	if (!reset_n) begin
-		size0_74 <= 32'd0;
-		size1_74 <= 32'd0;
-		sizeF_74 <= 32'd0;
-	end else if (dataslot_update && !dsu_d) begin
+	if (dataslot_update && !dsu_d) begin
 		if (dataslot_update_id == slot_flp_id) begin
 			sizeF_74   <= dataslot_update_size;
 			mount_tglF <= ~mount_tglF;
@@ -794,8 +798,14 @@ assign dbg_stage = dlv_s[1]    ? 3'd5 :
 	// JTAG probe word (see the port comment). Sticky bits are 0->1 only, so
 	// sampling them from the ISSP's clk_sys side needs no handshake; img_size
 	// is quasi-static after the mount pulse.
+	// ★ buildY: mount_cnt now counts RAW clk_74a announcement edges for the
+	// HDD slots — before any gating — so "OS never sent one" (cnt=0) is
+	// distinguishable from "sent but the core dropped it" (cnt>0, mount=0).
 	reg [2:0] dbg_mount_cnt = 3'd0;
-	always @(posedge clk_sys) if (img_mounted != 2'b00) dbg_mount_cnt <= dbg_mount_cnt + 3'd1;
+	always @(posedge clk_74a)
+		if (dataslot_update && !dsu_d &&
+		    (dataslot_update_id == slot0_id || dataslot_update_id == slot1_id))
+			dbg_mount_cnt <= dbg_mount_cnt + 3'd1;
 	assign dbg_bdst = { saw_tmo, saw_read_74, saw_ack_74, saw_done_74,
 	                    saw_deliver_sys, saw_mount_sys, dbg_mount_cnt,
 	                    img_size[31:9] };
