@@ -1,0 +1,47 @@
+{
+    "input": {
+        "magic": "APF_VER_1",
+        "controllers": [
+            {
+                "type": "default",
+                "mappings": [
+                    {
+                        "id": 0,
+                        "name": "Click / Return",
+                        "key": "pad_btn_a"
+                    },
+                    {
+                        "id": 1,
+                        "name": "Space",
+                        "key": "pad_btn_b"
+                    },
+                    {
+                        "id": 2,
+                        "name": "Shift",
+                        "key": "pad_btn_x"
+                    },
+                    {
+                        "id": 3,
+                        "name": "N",
+                        "key": "pad_btn_y"
+                    },
+                    {
+                        "id": 4,
+                        "name": "Escape",
+                        "key": "pad_trig_l"
+                    },
+                    {
+                        "id": 5,
+                        "name": "Command",
+                        "key": "pad_btn_start"
+                    },
+                    {
+                        "id": 6,
+                        "name": "Mouse / Keyboard",
+                        "key": "pad_btn_select"
+                    }
+                ]
+            }
+        ]
+    }
+}

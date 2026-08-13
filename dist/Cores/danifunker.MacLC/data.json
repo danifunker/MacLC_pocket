@@ -1,0 +1,57 @@
+{
+    "data": {
+        "magic": "APF_VER_1",
+        "data_slots": [
+            {
+                "name": "ROM",
+                "id": "200",
+                "required": true,
+                "parameters": 1,
+                "filename": "boot0.rom",
+                "extensions": [
+                    "rom"
+                ],
+                "size_maximum": 524288,
+                "address": "0x10000000"
+            },
+            {
+                "name": "Floppy",
+                "id": "210",
+                "required": false,
+                "parameters": 1,
+                "extensions": [
+                    "dsk",
+                    "img"
+                ],
+                "size_maximum": 1474560,
+                "deferload": true
+            },
+            {
+                "name": "Hard Disk 1",
+                "id": "310",
+                "required": false,
+                "deferload": true,
+                "parameters": 1,
+                "filename": "maclc.hda",
+                "extensions": [
+                    "hda",
+                    "img",
+                    "vhd"
+                ]
+            },
+            {
+                "name": "Hard Disk 2",
+                "id": "311",
+                "required": false,
+                "deferload": true,
+                "parameters": 1,
+                "filename": "maclc2.hda",
+                "extensions": [
+                    "hda",
+                    "img",
+                    "vhd"
+                ]
+            }
+        ]
+    }
+}
