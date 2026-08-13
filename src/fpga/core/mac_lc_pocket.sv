@@ -2193,6 +2193,39 @@ module mac_lc_pocket
 		.sld_auto_instance_index ("YES")
 	) cp_sdct (.probe({sd_bursts, sd_beats_prev, sd_beats}), .source(), .source_clk(clk_sys), .source_ena(1'b1));
 
+	// ★ buildAE SDCP: the ENTIRE last pseudo-DMA burst, beat by beat — the
+	// full-sector version of SDW0's two words. 512x16 M10K; each burst
+	// restarts the write pointer, so after a FRZE mid-retry-loop freeze the
+	// RAM holds every beat of the final burst (byte-mode: beat k = byte k
+	// duplicated on both halves; word-mode: beat k = word k). Read back by
+	// index: write SDCP source = 0..511, read the 16-bit probe (registered,
+	// JTAG pacing dwarfs the settle). Decoder: scripts/sdcp.tcl — dumps the
+	// burst and diffs it against a master-image sector offline. Built to
+	// catch the LBA-82 retry loop's payload as the CPU received it (served
+	// face verified FFFC 4ED0; SDW0 saw 6060 0000 — this shows all 512
+	// bytes and therefore the corruption PATTERN, which names the mechanism.
+	(* ramstyle = "M10K" *) reg [15:0] sdcap [0:511];
+	reg  [9:0] sdcap_w = 10'd0;
+	wire [8:0] sdcap_rd_idx;
+	reg [15:0] sdcap_q = 16'd0;
+	always @(posedge clk_sys) begin
+		if (sd_beat && !sd_beat_d) begin
+			if (sd_idle == 16'hFFFF) begin
+				sdcap[0] <= dataControllerDataOut;
+				sdcap_w  <= 10'd1;
+			end else if (!sdcap_w[9]) begin
+				sdcap[sdcap_w[8:0]] <= dataControllerDataOut;
+				sdcap_w <= sdcap_w + 10'd1;
+			end
+		end
+		sdcap_q <= sdcap[sdcap_rd_idx];
+	end
+
+	altsource_probe #(
+		.instance_id ("SDCP"), .probe_width (16), .source_width (9),
+		.sld_auto_instance_index ("YES")
+	) cp_sdcp (.probe(sdcap_q), .source(sdcap_rd_idx), .source_clk(clk_sys), .source_ena(1'b1));
+
 	// ★ buildY: the SCSI target's own testimony — why does the ROM read a
 	// perfect block 0 and never command the driver read? SCS1 = {dbg_scsi2
 	// (target phases + io handshake), dbg_scsi (selection/arbitration)};

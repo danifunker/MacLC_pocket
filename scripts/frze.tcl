@@ -49,6 +49,21 @@ switch -- $cmd {
         write_source_data -instance_index $idx(FRZE) -value [format "0x%03X" [expr {0x100 | $thr}]] -value_in_hex
         puts "ARMED at dlv >= $thr (current dlv=$d, frozen=$f)"
     }
+    cycle {
+        # Release the current freeze and re-arm at an ABSOLUTE (or +K from
+        # the frozen count) threshold in ONE session: the disarm write and
+        # the re-arm write land milliseconds apart, long before the
+        # restarting machine's round can reach any plausible threshold.
+        lassign [rd] f d
+        if {[string index $arg 0] eq "+"} {
+            set thr [expr {($d + [string range $arg 1 end]) & 0xFF}]
+        } else {
+            set thr [expr {$arg & 0xFF}]
+        }
+        write_source_data -instance_index $idx(FRZE) -value 0x000 -value_in_hex
+        write_source_data -instance_index $idx(FRZE) -value [format "0x%03X" [expr {0x100 | $thr}]] -value_in_hex
+        puts "CYCLED: released, re-armed at dlv >= $thr (was frozen=$f dlv=$d)"
+    }
     default {
         lassign [rd] f d
         puts "FROZEN=$f dlv=$d"
