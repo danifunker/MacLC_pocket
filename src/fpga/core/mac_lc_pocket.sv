@@ -2254,8 +2254,12 @@ module mac_lc_pocket
 	// mid-round, the first entry fetch IS the crash restart, and the ring
 	// holds the 64 PCs that led there. n_reset stays in the OR (harmless,
 	// catches hard resets too).
+	// Any fetch in the ROM's first 64 bytes = a restart stub (0x0A StBoot /
+	// 0x0E BadDisk-eject-and-reboot / 0x2A ResetEntry — all JMP StartBoot;
+	// docs/MacLC_ROM_Boot_Sequence_Analysis.md:104-108). Matching the whole
+	// region catches whichever stub the dying code enters through.
 	wire pcrb_entry_fetch = fetch_valid &&
-	     (last_fetch_pc[23:0] == 24'hA0002A || last_fetch_pc[23:0] == 24'h00002A);
+	     (last_fetch_pc[23:6] == 18'h28000 || last_fetch_pc[23:6] == 18'h00000);
 	always @(posedge clk_sys) begin
 		pcrb_nrst_d <= n_reset;
 		pcrb_arm_d  <= pcrb_src[7];
