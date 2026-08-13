@@ -49,6 +49,18 @@ switch -- $cmd {
         write_source_data -instance_index $idx(FRZE) -value [format "0x%03X" [expr {0x100 | $thr}]] -value_in_hex
         puts "ARMED at dlv >= $thr (current dlv=$d, frozen=$f)"
     }
+    trig {
+        # buildAH: TRIGGER-ONLY — fires ext_trig at the threshold without
+        # freezing the machine (feeds PCRB's post-trigger countdown).
+        lassign [rd] f d
+        if {[string index $arg 0] eq "+"} {
+            set thr [expr {($d + [string range $arg 1 end]) & 0xFF}]
+        } else {
+            set thr [expr {$arg & 0xFF}]
+        }
+        write_source_data -instance_index $idx(FRZE) -value [format "0x%03X" [expr {0x500 | $thr}]] -value_in_hex
+        puts "TRIG-ONLY ARMED at dlv >= $thr (current dlv=$d)"
+    }
     cycle {
         # Release the current freeze and re-arm at an ABSOLUTE (or +K from
         # the frozen count) threshold in ONE session: the disarm write and

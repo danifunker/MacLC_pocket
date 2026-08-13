@@ -715,16 +715,21 @@ apf_blockdev #(
     wire [31:0] bd_dbg_bdww;
 
     // FRZE lever (probe under USE_BOOT_ISSP below; logic unconditional).
-    wire [9:0] frz_src;
+    // ★ buildAH: source[10] = TRIGGER-ONLY mode — the delivery-count hit
+    // fires mac_trig (for the PCRB post-trigger countdown) WITHOUT holding
+    // the machine, so the code that runs AFTER the final delivery — the
+    // boot code's check-and-decide path — keeps executing into the ring.
+    wire [10:0] frz_src;
 `ifndef USE_BOOT_ISSP
-    assign frz_src = 10'd0;   // no probe deck -> lever permanently released
+    assign frz_src = 11'd0;   // no probe deck -> lever permanently released
 `endif
     reg frz_hit = 1'b0;
     always @(posedge clk_sys) begin
         if (!frz_src[8])                              frz_hit <= 1'b0;
         else if (bd_dbg_bdlb[31:24] >= frz_src[7:0])  frz_hit <= 1'b1;
     end
-    wire mac_freeze = frz_src[9] | frz_hit;
+    wire mac_freeze = frz_src[9] | (frz_hit && !frz_src[10]);
+    wire mac_trig   = frz_hit && frz_src[10];
 
 // PRAM persistence nets. The load path must complete before the machine's
 // pram_ready rises -- see the ordering note in apf_blockdev.v.
@@ -943,7 +948,7 @@ apf_bridge_loader #(
     // frz_hit latches on arm+reach and clears only on disarm, so a wrapping
     // counter cannot un-freeze the corpse mid-dump.
     altsource_probe #(
-        .instance_id ("FRZE"), .probe_width (9), .source_width (10),
+        .instance_id ("FRZE"), .probe_width (9), .source_width (11),
         .sld_auto_instance_index ("YES")
     ) cp_frze (.probe({mac_freeze, bd_dbg_bdlb[31:24]}), .source(frz_src), .source_clk(clk_sys), .source_ena(1'b1));
 
@@ -1262,6 +1267,7 @@ mac_lc_pocket machine (
     // img_size[40:9] to get 512-byte block count.
     .img_size       ( {32'd0, bd_img_size} ),
     .ext_freeze     ( mac_freeze ),
+    .ext_trig       ( mac_trig ),
 
     // Simulation observability — unconnected; Quartus strips them.
     .debug_pc(), .debug_opcode(), .debug_fetch_valid(), .debug_data_addr(),

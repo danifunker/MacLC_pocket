@@ -119,6 +119,11 @@ module mac_lc_pocket
 	// core_top — manual bit or auto-trigger at a blockdev delivery count).
 	// RAM freezes for the ROMV v4 oracle; SDRAM refresh unaffected.
 	input         ext_freeze,
+	// ★ buildAH: trigger-only variant — fires at the delivery count WITHOUT
+	// holding the machine; starts PCRB's post-trigger countdown so the ring
+	// freezes K distinct PCs later, inside the boot code's check-and-decide
+	// window after the final sector.
+	input         ext_trig,
 
 	// CPU debug outputs
 	output [31:0] debug_pc,
@@ -2234,9 +2239,7 @@ module mac_lc_pocket
 	// target, CPU receipt — SDCP 512/512 on the driver re-read) and the last
 	// SCSI command completes with GOOD status + correct bytes; the machine
 	// dies IN CODE right after. This names the code.
-	//   PCRB source: [7]=arm (rising edge re-opens a frozen ring), [5:0]=
-	//   read index. PCRB probe = ring[idx] (32-bit). PCRS probe =
-	//   {frozen, write ptr} for status + where "newest" is.
+	// PCRB probe = ring[idx] (32-bit). PCRS probe = {frozen, write ptr}.
 	// Decoder: scripts/pcrb.tcl; read PCs against docs/MacLC_ROM_disasm.txt
 	// (ROM = 00A0xxxx) or RAM addresses (driver/System code).
 	(* ramstyle = "M10K" *) reg [31:0] pcrb [0:63];
@@ -2245,43 +2248,51 @@ module mac_lc_pocket
 	reg [31:0] pcrb_last = 32'hFFFFFFFF;
 	reg        pcrb_nrst_d = 1'b1;
 	reg        pcrb_arm_d  = 1'b0;
-	wire [7:0] pcrb_src;
 	reg [31:0] pcrb_q;
-	// ★ buildAG: the crash is a SOFTWARE restart — n_reset never falls (the
-	// buildAF ring never froze; wptr kept advancing through the wander). The
-	// dying System jumps through the ROM's reset entry (initial-PC vector =
-	// ROM offset 2A), so freeze on THAT fetch instead: with the ring armed
-	// mid-round, the first entry fetch IS the crash restart, and the ring
-	// holds the 64 PCs that led there. n_reset stays in the OR (harmless,
-	// catches hard resets too).
-	// Any fetch in the ROM's first 0x200 bytes catches every restart path:
-	// the front stubs (0x0A StBoot / 0x0E BadDisk / 0x2A ResetEntry), the
-	// real StartBoot (~0xB8) AND Stage-8 BootRetry (0x1A6) — "the system
-	// returns here if boot fails" (docs/MacLC_ROM_Boot_Sequence_Analysis.md
-	// :104-208). These addresses also run once during every NORMAL boot's
-	// early stages — arm the ring only once the round is underway (the
-	// scripted jboot→arm JTAG gap is ~7 s, stages 2-9 are long past) so the
-	// first post-arm fetch here is the CRASH restart. A too-early freeze
-	// (early-boot PCs in the dump) just means re-arm and re-dump.
-	wire pcrb_entry_fetch = fetch_valid &&
-	     (last_fetch_pc[23:9] == 15'h5000 || last_fetch_pc[23:9] == 15'h0000);
+	// (buildAG's front-stub fetch trigger is gone: the crash restart is
+	// `bra BootMe` deep in StartBoot.a — neither a reset nor a front-stub
+	// fetch; buildAF/AG both proved it by never freezing.)
+	// ★ buildAH: the crash is `bra BootMe` deep in StartBoot.a — no reset,
+	// no front-stub fetch (buildAF/AG both missed). New trigger: ext_trig
+	// (FRZE trigger-only mode) fires at the ROUND'S FINAL DELIVERY without
+	// stopping the machine; the ring then keeps capturing for K more
+	// DISTINCT PCs and freezes — landing the 64-entry window K PCs past the
+	// final sector, inside the consume→check→decide path. K is a SOURCE
+	// field: sweep it over re-arms (no rebuilds) until the dump shows the
+	// decision code. K counts ring WRITES (loop iterations re-log PCs), so
+	// think "instructions-ish", not unique addresses.
+	//   PCRB source[15]=arm(rising clears frozen)  [14:6]=K (9 bits, x16 =
+	//   0..8176 writes)  [5:0]=read index. n_reset freeze stays (harmless).
+	wire [15:0] pcrb_src;
+	reg  [12:0] pcrb_k = 13'd0;      // countdown, in ring writes
+	reg         pcrb_trig_d = 1'b0, pcrb_armed_cnt = 1'b0;
 	always @(posedge clk_sys) begin
 		pcrb_nrst_d <= n_reset;
-		pcrb_arm_d  <= pcrb_src[7];
-		if (pcrb_src[7] && !pcrb_arm_d)
-			pcrb_frozen <= 1'b0;                       // re-arm: capture again
-		else if ((pcrb_nrst_d && !n_reset) || pcrb_entry_fetch)
-			pcrb_frozen <= 1'b1;                       // machine died: hold
+		pcrb_arm_d  <= pcrb_src[15];
+		pcrb_trig_d <= ext_trig;
+		if (pcrb_src[15] && !pcrb_arm_d) begin
+			pcrb_frozen    <= 1'b0;                    // re-arm: capture again
+			pcrb_armed_cnt <= 1'b0;
+		end else if (pcrb_nrst_d && !n_reset)
+			pcrb_frozen <= 1'b1;                       // hard reset: hold
+		if (ext_trig && !pcrb_trig_d && !pcrb_frozen && !pcrb_armed_cnt) begin
+			pcrb_k         <= {pcrb_src[14:6], 4'd0}; // K x16 writes to go
+			pcrb_armed_cnt <= 1'b1;
+		end
 		if (!pcrb_frozen && fetch_valid && last_fetch_pc != pcrb_last) begin
 			pcrb[pcrb_w] <= last_fetch_pc;
 			pcrb_w      <= pcrb_w + 6'd1;
 			pcrb_last   <= last_fetch_pc;
+			if (pcrb_armed_cnt) begin
+				if (pcrb_k == 13'd0) pcrb_frozen <= 1'b1;
+				else                 pcrb_k <= pcrb_k - 13'd1;
+			end
 		end
 		pcrb_q <= pcrb[pcrb_src[5:0]];
 	end
 
 	altsource_probe #(
-		.instance_id ("PCRB"), .probe_width (32), .source_width (8),
+		.instance_id ("PCRB"), .probe_width (32), .source_width (16),
 		.sld_auto_instance_index ("YES")
 	) cp_pcrb (.probe(pcrb_q), .source(pcrb_src), .source_clk(clk_sys), .source_ena(1'b1));
 
