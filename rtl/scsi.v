@@ -1873,22 +1873,47 @@ end
 wire ca_grant = (phase == PHASE_IDLE || (cmd_read && phase == PHASE_DATA_OUT))
                 && !io_rd_d && !io_wr && !io_ack && mounted;
 
-// POCKET CUT: the `cd_audio` engine instance is deleted along with
-// rtl/cd_audio.sv. scsi.v keeps its CDROM-parameterised bodies (they fold
-// away at CDROM=0 and stripping 171 KB of validated SCSI code was not worth
-// the risk), but a generate branch naming a module that no longer exists is
-// a build hazard even when the branch is never taken -- so the instance goes
-// and the former `else` tie-offs become unconditional.
-// To restore CD support: recover cd_audio.sv + cd_vol_lut.vh from the MiSTer
-// core at 5a75f9b and put this block back as `generate if (CDROM != 0)`.
-	assign ca_io_active = 1'b0;
-	assign ca_io_rd_w   = 1'b0;
-	assign ca_io_lba    = 32'd0;
-	assign ca_ast_code  = 8'h05;
-	assign ca_cur_ctrl  = 8'h14;
-	assign ca_cur_trk   = 8'h01;
-	assign ca_abs_m = 8'h00; assign ca_abs_s = 8'h00; assign ca_abs_f = 8'h00;
-	assign ca_rel_m = 8'h00; assign ca_rel_s = 8'h00; assign ca_rel_f = 8'h00;
+// POCKET CUT, amended 2026-08-13: the `cd_audio` engine (playback, bin/cue
+// TOC blob, PCM) stays deleted with rtl/cd_audio.sv — but the CD-ROM target
+// is BACK, ISO-only, and the AppleCD driver cannot mount without the TOC
+// planes cd_audio used to own (0x43 format-2/format-1 are its real mount
+// dialect; zeroed tables held the boot at an alert — MiSTer 2a7b3db).
+// cd_toc_stub serves the one disc shape the Pocket has: a single data track
+// at LBA 0, byte-for-byte cd_audio's own no-blob synthesized fallback.
+//
+// The playback/position outputs stay tied to their data-disc idle values
+// below — those are exactly what MiSTer's g_no_cd_audio branch and a
+// never-played data disc present (ast 5 = idle, ctrl 0x14, track 1,
+// disc_audio 0 so READ HEADER answers "data" and data READs are served).
+// To restore FULL CD audio: recover cd_audio.sv + cd_vol_lut.vh from the
+// MiSTer core at 5a75f9b and swap it back in for the stub.
+generate if (CDROM != 0) begin : g_cd_toc
+	cd_toc_stub cd_toc_stub_i (
+		.clk        ( clk ),
+		.sys_rst    ( sys_rst ),
+		.mounted    ( mounted ),
+		.img_mounted( img_mounted ),
+		.img_blocks ( img_blocks ),
+		.toc_base   ( ca_toc_addr ),
+		.toc_q0     ( ca_toc_q0 ),
+		.toc_q1     ( ca_toc_q1 ),
+		.toc_q2     ( ca_toc_q2 ),
+		.toc_q3     ( ca_toc_q3 ),
+		.toc_ready  ( ca_toc_ready ),
+		.toc43_base ( ca_t43_addr ),
+		.toc43_q0   ( ca_t43_q0 ),
+		.toc43_q1   ( ca_t43_q1 ),
+		.toc43_q2   ( ca_t43_q2 ),
+		.toc43_q3   ( ca_t43_q3 ),
+		.toc43_len  ( ca_t43_len ),
+		.toc2_base  ( ca_t2_addr ),
+		.toc2_q0    ( ca_t2_q0 ),
+		.toc2_q1    ( ca_t2_q1 ),
+		.toc2_q2    ( ca_t2_q2 ),
+		.toc2_q3    ( ca_t2_q3 ),
+		.toc2_len   ( ca_t2_len )
+	);
+end else begin : g_no_cd_toc
 	assign ca_toc_q0 = 8'h00; assign ca_toc_q1 = 8'h00;
 	assign ca_toc_q2 = 8'h00; assign ca_toc_q3 = 8'h00;
 	assign ca_t43_q0 = 8'h00; assign ca_t43_q1 = 8'h00;
@@ -1897,8 +1922,18 @@ wire ca_grant = (phase == PHASE_IDLE || (cmd_read && phase == PHASE_DATA_OUT))
 	assign ca_t2_q0 = 8'h00; assign ca_t2_q1 = 8'h00;
 	assign ca_t2_q2 = 8'h00; assign ca_t2_q3 = 8'h00;
 	assign ca_t2_len = 10'd0;
-	assign ca_disc_audio = 1'b0;
 	assign ca_toc_ready = 1'b0;
+end endgenerate
+
+	assign ca_io_active = 1'b0;
+	assign ca_io_rd_w   = 1'b0;
+	assign ca_io_lba    = 32'd0;
+	assign ca_ast_code  = 8'h05;
+	assign ca_cur_ctrl  = 8'h14;
+	assign ca_cur_trk   = 8'h01;
+	assign ca_abs_m = 8'h00; assign ca_abs_s = 8'h00; assign ca_abs_f = 8'h00;
+	assign ca_rel_m = 8'h00; assign ca_rel_s = 8'h00; assign ca_rel_f = 8'h00;
+	assign ca_disc_audio = 1'b0;
 	assign cd_snd_l = 16'sd0;
 	assign cd_snd_r = 16'sd0;
 	assign dbg_cda0 = 32'd0;

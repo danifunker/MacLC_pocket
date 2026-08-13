@@ -46,15 +46,15 @@ module tb_blockdev;
 	wire [15:0] tgt_id;
 	wire [31:0] tgt_slotoffset, tgt_bridgeaddr, tgt_length;
 
-	// core side
-	reg  [31:0] sd_lba0 = 0, sd_lba1 = 0;
-	reg  [1:0]  sd_rd = 0, sd_wr = 0;
-	wire [1:0]  sd_ack;
+	// core side (slot 2 = CD-ROM, idle in this bench)
+	reg  [31:0] sd_lba0 = 0, sd_lba1 = 0, sd_lba2 = 0;
+	reg  [2:0]  sd_rd = 0, sd_wr = 0;
+	wire [2:0]  sd_ack;
 	wire [7:0]  sd_buff_addr;
 	wire [15:0] sd_buff_dout;
 	wire        sd_buff_wr;
 	reg  [15:0] sd_buff_din0 = 0, sd_buff_din1 = 0;
-	wire [1:0]  img_mounted;
+	wire [2:0]  img_mounted;
 	wire [31:0] img_size;
 
 	// floppy download port
@@ -75,11 +75,11 @@ apf_blockdev #(.BUF_BASE(BUF_BASE)) dut (
 	.target_dataslot_err(3'd0),
 	.target_dataslot_id(tgt_id), .target_dataslot_slotoffset(tgt_slotoffset),
 	.target_dataslot_bridgeaddr(tgt_bridgeaddr), .target_dataslot_length(tgt_length),
-	.slot0_id(ID_HDD0), .slot1_id(ID_HDD1), .slot_flp_id(ID_FLP),
+	.slot0_id(ID_HDD0), .slot1_id(ID_HDD1), .slot_cd_id(16'd320), .slot_flp_id(ID_FLP),
 	.dio_download(dio_download), .dio_index(dio_index), .dio_addr(dio_addr),
 	.dio_data(dio_data), .dio_wr(dio_wr), .dio_ack(dio_ack),
 	.clk_sys(clk_sys),
-	.sd_lba0(sd_lba0), .sd_lba1(sd_lba1), .sd_rd(sd_rd), .sd_wr(sd_wr),
+	.sd_lba0(sd_lba0), .sd_lba1(sd_lba1), .sd_lba2(sd_lba2), .sd_rd(sd_rd), .sd_wr(sd_wr),
 	.sd_ack(sd_ack), .sd_buff_addr(sd_buff_addr), .sd_buff_dout(sd_buff_dout),
 	.sd_buff_wr(sd_buff_wr), .sd_buff_din0(sd_buff_din0), .sd_buff_din1(sd_buff_din1),
 	.img_mounted(img_mounted), .img_size(img_size)
@@ -176,7 +176,7 @@ apf_blockdev #(.BUF_BASE(BUF_BASE)) dut (
 		got_n = 0;
 		@(posedge clk_sys);
 		sd_lba0 <= 32'd5;
-		sd_rd   <= 2'b01;
+		sd_rd   <= 3'b001;
 
 		// wait for the target command
 		timeout = 0;
@@ -211,9 +211,9 @@ apf_blockdev #(.BUF_BASE(BUF_BASE)) dut (
 			if (errors == 0) $display("PASS: sector content correct, byte order correct");
 		end
 
-		sd_rd <= 2'b00;
+		sd_rd <= 3'b000;
 		repeat (50) @(posedge clk_sys);
-		if (sd_ack != 2'b00) begin
+		if (sd_ack != 3'b000) begin
 			$display("FAIL: sd_ack still asserted after request dropped");
 			errors = errors + 1;
 		end else

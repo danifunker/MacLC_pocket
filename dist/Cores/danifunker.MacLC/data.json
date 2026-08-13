@@ -51,6 +51,17 @@
                     "img",
                     "vhd"
                 ]
+            },
+            {
+                "name": "CD-ROM",
+                "id": "320",
+                "required": false,
+                "deferload": true,
+                "parameters": 1,
+                "filename": "maclc.iso",
+                "extensions": [
+                    "iso"
+                ]
             }
         ]
     }

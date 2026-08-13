@@ -436,13 +436,18 @@ Re-verify boot (the screenshot check above) after ANY SR change.
   screen). Now true 4:3 (both LC monitor modes are 4:3). Offline gate:
   `scripts/aspect_check.py` (faithful model of sys/video_freak.sv
   `video_scale_int`; also demos the old failures with `--show-broken`).
-- ~~CD-ROM (SCSI ID 3)~~ **REMOVED in the Pocket fork.** The CD target,
-  cd_audio, the AppleCD command set and the BlueSCSI Toolbox / CD Changer are
-  all gone -- 7,762 ALUTs and 17 M10K the Pocket does not have. The MiSTer
-  core's CD work (SCSI-2 dialect on the CDU-8004 identity, mode page 0x0E
-  volume, sub-channel formats, the Main_MiSTer `maclc_cd` translation layer)
-  is intact upstream at 5a75f9b if it ever needs to come back; see
-  docs/PORT_STATUS.md for what it would cost.
+- CD-ROM (SCSI ID 3): **BACK as of 2026-08-13, ISO-only.** The full MiSTer
+  stack (7,762 ALUTs + 17 M10K) stays cut — what returned is the scsi.v
+  CDROM-mode target (AppleCD command set on the CDU-8004 identity) with
+  `rtl/cd_toc_stub.sv` serving the three TOC planes (vendor 0xC1, 0x43
+  format-0, format-2 + session page — the AppleCD driver's real mount
+  dialect) for a single data track, synthesized from img_blocks exactly like
+  cd_audio's no-blob fallback. **Still gone: cd_audio (playback/PCM), bin/cue,
+  BlueSCSI Toolbox, CD Changer.** Data slot 320 ("CD-ROM", .iso,
+  `maclc.iso` auto-mounts), blockdev slot 2, read-only (sd_wr[2] tied).
+  cd_enable is hardwired 1 in mac_lc_pocket.sv — rebuild with 0 as the A/B
+  lever if ID-3 bus presence ever misbehaves. CDA1 probe = the CD target's
+  command/sense story. HW-UNVALIDATED until the next card trip.
 - ~~"Original" aspect 256:171~~ moot here: the Pocket declares a single
   512x384 4:3 scaler mode in video.json and Analogue's scaler handles fitting.
   `sys/video_freak.sv` and `scripts/aspect_check.py` do not exist in this fork.

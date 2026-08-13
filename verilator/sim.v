@@ -855,11 +855,19 @@ module emu
 		.sd_buff_din(scsi_buff_din),
 		.sd_buff_wr(sd_buff_wr),
 
-		// POCKET CUT: the CD-ROM target (SCSI ID 3) and its slot-2 block
-		// interface are gone. The old sim boot regression deliberately
-		// exercised the disc-less CD target during the ROM's SCSI scan; with
-		// no CD target the scan simply finds nothing at ID 3, which is what
-		// a real LC without a CD-ROM drive does.
+		// ★ 2026-08-13: the CD-ROM target (SCSI ID 3, ISO-only) is BACK in
+		// dataController. The sim has no CD block-device model yet, so the
+		// slot is tied off DISC-LESS with the drive PRESENT (cd_enable=1) —
+		// which restores the old sim boot regression's coverage: the ROM's
+		// SCSI scan exercises the disc-less CD target's no-disc sense path.
+		.cd_enable(1'b1),
+		.cd_img_mounted(1'b0),
+		.cd_io_lba(),
+		.cd_io_rd(),
+		.cd_io_wr(),
+		.cd_io_ack(1'b0),
+		.cd_sd_buff_din(),
+		.dbg_cd(),
 
 		// PRAM persistence — tied off (step 1); FSM wired in step 2
 		.pram_load_wr(1'b0),

@@ -118,9 +118,17 @@ module dataController_top(
 	input                   sd_buff_wr,
 
 	// POCKET CUT: the BlueSCSI Toolbox block interface (tb_*), the Toolbox CD
-	// Changer interface (cdtb_*), the CD audio PCM outputs (cd_snd_*) and the
-	// CD-ROM target's block-device slot (cd_*) are all removed with the CD
-	// target itself. See rtl/ncr5380.sv.
+	// Changer interface (cdtb_*) and the CD audio PCM outputs (cd_snd_*) stay
+	// removed. ★ 2026-08-13: the CD-ROM target's block-device slot is BACK
+	// (ISO-only target at SCSI ID 3; see rtl/ncr5380.sv).
+	input                   cd_enable,
+	input                   cd_img_mounted,
+	output           [31:0] cd_io_lba,
+	output                  cd_io_rd,
+	output                  cd_io_wr,
+	input                   cd_io_ack,
+	output           [15:0] cd_sd_buff_din,
+	output           [31:0] dbg_cd,     // CD target command/sense visibility (CDA1)
 
 	// ---- PRAM persistence pass-through (to the Egret's pram[]) ----
 	input             [7:0] pram_load_addr,
@@ -411,7 +419,16 @@ module dataController_top(
 		.sd_buff_din(sd_buff_din),
 		.sd_buff_wr(sd_buff_wr),
 
-		// POCKET CUT: Toolbox / CD Changer / CD-ROM slot pass-throughs removed.
+		// POCKET CUT: Toolbox / CD Changer pass-throughs removed.
+		// CD-ROM target's own block-device slot (ISO-only, ID 3).
+		.cd_enable( cd_enable ),
+		.cd_img_mounted( cd_img_mounted ),
+		.cd_io_lba( cd_io_lba ),
+		.cd_io_rd( cd_io_rd ),
+		.cd_io_wr( cd_io_wr ),
+		.cd_io_ack( cd_io_ack ),
+		.cd_sd_buff_din( cd_sd_buff_din ),
+		.dbg_cd( dbg_cd ),
 
 		// JTAG probe feeds (consumed by dbg_probes.sv in the FPGA top)
 		.dbg_scsi(dbg_scsi),

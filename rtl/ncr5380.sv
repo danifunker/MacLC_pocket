@@ -81,12 +81,24 @@ module ncr5380
 	output      [15:0] sd_buff_din[DEVS],
 	input              sd_buff_wr,
 
-	// POCKET CUT: removed with the CD-ROM target and the BlueSCSI Toolbox --
+	// POCKET CUT: removed with the BlueSCSI Toolbox --
 	//   tb_*     Toolbox block transport (was on disk target ID 0)
 	//   cdtb_*   Toolbox CD Changer transport (was on the CD target)
 	//   cd_snd_* CD audio PCM into the top-level mixer
-	//   cd_*     CD-ROM target's own block-device slot + enable
-	// The Pocket has no CD image slot and no Toolbox host to talk to.
+	// The Pocket has no Toolbox host to talk to and no CD audio engine.
+	//
+	// ★ 2026-08-13: the CD-ROM target is BACK, ISO-only (SCSI ID 3, where
+	// MAME maclc.cpp attaches NSCSI_CDROM_APPLE). Read-only 2048-byte
+	// logical blocks over its own block-device slot; TOC served by
+	// cd_toc_stub inside scsi.v (single data track — a plain ISO). No
+	// Toolbox, no CD Changer, no bin/cue, no audio.
+	input              cd_enable,      // drive present (answers selection even w/o disc)
+	input              cd_img_mounted,
+	output      [31:0] cd_io_lba,
+	output             cd_io_rd,
+	output             cd_io_wr,
+	input              cd_io_ack,
+	output      [15:0] cd_sd_buff_din,
 
 	// JTAG debug: selection/arbitration state for the hardware hang
 	output      [15:0] dbg_scsi,
@@ -126,10 +138,18 @@ module ncr5380
 	//   [15:0]=data_cnt [18:16]=phase [19]=data_complete [20]=io_wr [21]=io_ack
 	//   [22]=io_busy [23]=sd_buff_sel [24]=cmd_write [30:25]=tlen [31]=req
 	output      [31:0] dbg_wr,
-	output      [31:0] dbg_wrfb   // JTAG WRFB: write first-beat forensics (data-phase-routed)
-	// POCKET CUT: dbg_cda0..4 / dbg_cdur (CD-audio engine visibility) removed.
+	output      [31:0] dbg_wrfb,  // JTAG WRFB: write first-beat forensics (data-phase-routed)
+	// POCKET CUT: dbg_cda0/2/3/4 + dbg_cdur (CD-audio engine visibility)
+	// stay removed with cd_audio. dbg_cd below is scsi.v's dbg_cda1 — the
+	// CD TARGET's own command/sense visibility, alive without the engine:
+	//   {toc_rdy, no_media, mounted, ok, sense_asc, sense_key, cmd_cnt, last_op}
+	output      [31:0] dbg_cd
 );
 	parameter DEVS = 2;
+	// Read-prefetch ring depth for the CD target. 3 => 8 sectors / 4KB.
+	// Kept smaller than the disks' RING_LOG=5: the Pocket is at 82% M10K,
+	// and the CD is never the boot device, so latency-hiding matters less.
+	parameter CD_RING_LOG = 3;
 
 	reg  [7:0] mr;        /* Mode Register */
 	reg  [7:0] icr;       /* Initiator Command Register */
@@ -658,21 +678,96 @@ module ncr5380
 	reg      [15:0] din_pair;
 	reg      [15:0] din_pair_next;
 
-	// POCKET CUT: the CD-ROM target (SCSI ID 3) is gone — see the deleted
-	// `cdrom_target` instance below. It was the single most expensive block in
-	// the design (7,762 ALUTs + 17 M10K + 768 MLAB cells, of which cd_audio
-	// alone was 3,076 ALUTs), and the Pocket has no room for it. The bus-merge
-	// logic downstream still references these names, so they are tied to their
-	// idle values and fold away.
-	wire cd_bsy            = 1'b0;
-	wire cd_msg            = 1'b0;
-	wire cd_io             = 1'b0;
-	wire cd_cd             = 1'b0;
-	wire cd_req            = 1'b0;
-	wire cd_req_bus        = 1'b0;
-	wire [7:0]  cd_dout           = 8'h00;
-	wire [15:0] cd_dout_pair      = 16'h0000;
-	wire [15:0] cd_dout_pair_next = 16'h0000;
+	// ★ 2026-08-13: the CD-ROM target is BACK, slimmed for the Pocket. The
+	// MiSTer full stack was 7,762 ALUTs + 17 M10K, but 3,076 of those ALUTs
+	// were cd_audio (deleted), and the Toolbox/CD-Changer command set +
+	// oversized tb buffer (TB_ADDRW 11) fold away at CDCHANGER_ENABLE(0)/
+	// TOOLBOX_ENABLE(0)/TB_ADDRW(8). What remains is the wedge-hardened
+	// scsi.v target in CDROM mode: AppleCD command set on the CDU-8004
+	// identity, read-only 2048-byte blocks, TOC from cd_toc_stub (ISO =
+	// one data track). RING_LOG(3) = 8-sector/4KB prefetch ring.
+	wire cd_bsy;
+	wire cd_msg;
+	wire cd_io;
+	wire cd_cd;
+	wire cd_req;
+	wire cd_req_bus;
+	wire [7:0]  cd_dout;
+	wire [15:0] cd_dout_pair;
+	wire [15:0] cd_dout_pair_next;
+
+	scsi #(.ID(3'd3), .CDROM(1), .CDCHANGER_ENABLE(0), .TOOLBOX_ENABLE(0),
+	       .TB_ADDRW(8), .RING_LOG(CD_RING_LOG)) cdrom_target
+	(
+		.clk    ( clk ),
+		.rst    ( scsi_rst ),
+		.sys_rst( reset ),
+		.sel    ( scsi_sel ),
+		.cd_enable ( cd_enable ),
+		// Selection requires a free bus — a wedged-BUSY device must not let a
+		// second selection create two active targets sharing the broadcast ACK
+		// stream (LBMacTwo corruption fix 4376c8f).
+		.bus_busy ( |target_bsy ),
+		.atn    ( scsi_atn ),
+
+		.ack    ( scsi_ack ),
+		.host_csr_rd ( csr_rd ),
+		.host_data_rd ( i_dma_rd ),
+
+		.bsy    ( cd_bsy  ),
+		.msg    ( cd_msg  ),
+		.cd     ( cd_cd   ),
+		.io     ( cd_io   ),
+		.req    ( cd_req  ),
+		.req_bus( cd_req_bus ),
+		.dout   ( cd_dout ),
+		.dout_pair ( cd_dout_pair ),
+		.dout_pair_next ( cd_dout_pair_next ),
+
+		.din    ( scsi_bus_data ),
+
+		.img_mounted( cd_img_mounted ),
+		.img_blocks( img_size ),
+		.io_lba ( cd_io_lba ),
+		.io_rd  ( cd_io_rd ),
+		.io_wr  ( cd_io_wr ),
+		// io_ack/sd_buff_wr are framed by the SLOT's session (cd_io_ack), NOT
+		// the SCSI bus state — inherited from MiSTer, where the CD-audio
+		// engine's bus-idle fetches needed it. With the stub there are no
+		// idle-phase fetches, but ack still frames every data transfer, and
+		// scsi.v's idle-phase consumers are safe (sd_buff_sel held in
+		// PHASE_IDLE; rd_hps_blk cmd_read-guarded).
+		.io_ack ( cd_io_ack ),
+
+		.sd_buff_addr( sd_buff_addr ),
+		.sd_buff_addr_hi( sd_buff_addr_hi ),
+		.sd_buff_dout( sd_buff_dout ),
+		.sd_buff_din( cd_sd_buff_din ),
+		.sd_buff_wr( sd_buff_wr & cd_io_ack ),
+
+		// No Toolbox host on the Pocket: transport permanently idle.
+		.tb_mounted ( 1'b0 ),
+		.tb_lba     ( ),
+		.tb_rd      ( ),
+		.tb_wr      ( ),
+		.tb_ack     ( 1'b0 ),
+		.tb_buff_din( ),
+
+		.dbg_cda1( dbg_cd ),
+		.dbg_mounted( ),
+		.dbg_phase( ),
+		.dbg_hs( ),
+		.dbg_hs2( ),
+		.dbg_cmd( ),
+		.dbg_dma_word( dma_word_latched ),
+		.dbg_dma_long( dma_longword_latched ),
+		.dbg_dma_lowbyte( dma_write_low_byte ),
+		.dbg_wrsnap( ),
+		.dbg_selsnap( ),
+		.dbg_wrstall( ),
+		.dbg_wrfb( ),
+		.dbg_ring( )
+	);
 
 	generate
 		genvar i;

@@ -628,12 +628,13 @@ localparam bit SCSI_DISABLE_DIAG = 1'b0;
 localparam [15:0] SLOT_PRAM = 16'd220;   // NVRAM save file (256 bytes)
 localparam [15:0] SLOT_HDD0 = 16'd310;
 localparam [15:0] SLOT_HDD1 = 16'd311;
+localparam [15:0] SLOT_CD   = 16'd320;   // CD-ROM ISO (read-only, ID 3)
 
-    wire [1:0]  bd_sd_ack;
+    wire [2:0]  bd_sd_ack;
     wire [7:0]  bd_sd_buff_addr;
     wire [15:0] bd_sd_buff_dout;
     wire        bd_sd_buff_wr;
-    wire [1:0]  bd_img_mounted;
+    wire [2:0]  bd_img_mounted;
     wire [31:0] bd_img_size;
 
 apf_blockdev #(
@@ -663,6 +664,7 @@ apf_blockdev #(
 
     .slot0_id       ( SLOT_HDD0 ),
     .slot1_id       ( SLOT_HDD1 ),
+    .slot_cd_id     ( SLOT_CD ),
     .slot_flp_id    ( SLOT_FLOPPY ),
 
     .dio_download   ( bd_dio_download ),
@@ -676,8 +678,9 @@ apf_blockdev #(
     .clk_sys        ( clk_sys ),
     .sd_lba0        ( sd_lba_u[0] ),
     .sd_lba1        ( sd_lba_u[1] ),
-    .sd_rd          ( sd_rd_u[1:0] ),
-    .sd_wr          ( sd_wr_u[1:0] ),
+    .sd_lba2        ( sd_lba_u[2] ),
+    .sd_rd          ( sd_rd_u ),
+    .sd_wr          ( sd_wr_u ),
     .sd_ack         ( bd_sd_ack ),
     .sd_buff_addr   ( bd_sd_buff_addr ),
     .sd_buff_dout   ( bd_sd_buff_dout ),
@@ -701,11 +704,15 @@ apf_blockdev #(
     .dbg_cstate     ( bd_dbg_cstate ),
     .dbg_bdst       ( bd_dbg_bdst ),
     .dbg_bdw0       ( bd_dbg_bdw0 ),
-    .dbg_bdlb       ( bd_dbg_bdlb )
+    .dbg_bdlb       ( bd_dbg_bdlb ),
+    .dbg_bdwr       ( bd_dbg_bdwr ),
+    .dbg_bdww       ( bd_dbg_bdww )
 );
     wire [31:0] bd_dbg_bdst;
     wire [31:0] bd_dbg_bdw0;
     wire [31:0] bd_dbg_bdlb;
+    wire [31:0] bd_dbg_bdwr;
+    wire [31:0] bd_dbg_bdww;
 
 // PRAM persistence nets. The load path must complete before the machine's
 // pram_ready rises -- see the ordering note in apf_blockdev.v.
@@ -906,6 +913,16 @@ apf_bridge_loader #(
         .instance_id ("BDLB"), .probe_width (32), .source_width (1),
         .sld_auto_instance_index ("YES")
     ) cp_bdlb (.probe(bd_dbg_bdlb),          .source(), .source_clk(clk_sys), .source_ena(1'b1));
+
+    altsource_probe #(
+        .instance_id ("BDWR"), .probe_width (32), .source_width (1),
+        .sld_auto_instance_index ("YES")
+    ) cp_bdwr (.probe(bd_dbg_bdwr),          .source(), .source_clk(clk_sys), .source_ena(1'b1));
+
+    altsource_probe #(
+        .instance_id ("BDWW"), .probe_width (32), .source_width (1),
+        .sld_auto_instance_index ("YES")
+    ) cp_bdww (.probe(bd_dbg_bdww),          .source(), .source_clk(clk_sys), .source_ena(1'b1));
 `endif
 
 
@@ -1202,18 +1219,17 @@ mac_lc_pocket machine (
     .ioctl_index    ( dio_index ),
     .ioctl_wait     ( dio_ack_n ),
 
-    // Block devices: apf_blockdev is NOT WRITTEN YET, so these are held
-    // inactive. The machine sees no mounted SCSI disks and boots from floppy.
+    // Block devices: slots 0/1 = HDDs, slot 2 = the CD-ROM (ISO, read-only).
     .sd_lba         ( sd_lba_u ),
     .sd_rd          ( sd_rd_u ),
     .sd_wr          ( sd_wr_u ),
-    .sd_ack         ( {1'b0, bd_sd_ack} ),
+    .sd_ack         ( bd_sd_ack ),
     .sd_buff_addr   ( bd_sd_buff_addr ),
     .sd_buff_dout   ( bd_sd_buff_dout ),
     .sd_buff_din    ( sd_buff_din_u ),
     .sd_buff_wr     ( bd_sd_buff_wr ),
     // SCSI_DISABLE_DIAG hides all media from the machine — see the localparam.
-    .img_mounted    ( SCSI_DISABLE_DIAG ? 3'b000 : {1'b0, bd_img_mounted} ),
+    .img_mounted    ( SCSI_DISABLE_DIAG ? 3'b000 : bd_img_mounted ),
     // hps_io semantics: valid on the img_mounted pulse. mac_lc_pocket slices
     // img_size[40:9] to get 512-byte block count.
     .img_size       ( {32'd0, bd_img_size} ),

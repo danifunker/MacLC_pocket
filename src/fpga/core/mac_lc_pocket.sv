@@ -1115,21 +1115,26 @@ module mac_lc_pocket
 `endif
 
 	// SCSI slot fan-out: disks drive array slots 0,1; the CD-ROM target
-	// drives slot 2 (read-only — sd_wr[2] tied off). Mirrors the MacLC.sv
-	// stitching so the shared dataController sees identical port shapes.
+	// drives slot 2 (read-only — sd_wr[2] tied off; scsi.v's CDROM mode
+	// rejects WRITE commands so cd_wr_w can never fire anyway). Mirrors the
+	// MacLC.sv stitching so the shared dataController sees identical shapes.
 	wire [31:0] scsi_lba[2];
 	wire [1:0]  scsi_rd, scsi_wr;
 	wire [15:0] scsi_buff_din[2];
+	wire [31:0] cd_lba_w;
+	wire        cd_rd_w, cd_wr_w;
+	wire [15:0] cd_buff_din_w;
+	wire [31:0] dbg_cd_w;
 	assign sd_lba[0] = scsi_lba[0];
 	assign sd_lba[1] = scsi_lba[1];
-	assign sd_lba[2] = 32'd0;
+	assign sd_lba[2] = cd_lba_w;
 	assign sd_rd[1:0] = scsi_rd;
-	assign sd_rd[2]   = 1'b0;
+	assign sd_rd[2]   = cd_rd_w;
 	assign sd_wr[1:0] = scsi_wr;
 	assign sd_wr[2]   = 1'b0;
 	assign sd_buff_din[0] = scsi_buff_din[0];
 	assign sd_buff_din[1] = scsi_buff_din[1];
-	assign sd_buff_din[2] = 16'd0;
+	assign sd_buff_din[2] = cd_buff_din_w;
 
 	// SCSI debug buses (wired to the SCS1/SCS2 probes; see the ISSP deck)
 	wire [15:0] dbg_scsi_w, dbg_scsi2_w, dbg_scsi4_w, dbg_scsi5_w;
@@ -1241,11 +1246,20 @@ module mac_lc_pocket
 		.sd_buff_din(scsi_buff_din),
 		.sd_buff_wr(sd_buff_wr),
 
-		// POCKET CUT: the CD-ROM target (SCSI ID 3) and its slot-2 block
-		// interface are gone. The old sim boot regression deliberately
-		// exercised the disc-less CD target during the ROM's SCSI scan; with
-		// no CD target the scan simply finds nothing at ID 3, which is what
-		// a real LC without a CD-ROM drive does.
+		// ★ 2026-08-13: the CD-ROM target (SCSI ID 3) is BACK, ISO-only, on
+		// blockdev slot 2. cd_enable is hardwired: the drive is always on
+		// the bus, like a real LC with a CD-ROM attached — disc-less
+		// selection answers the AppleCD no-disc sense, which is how the
+		// driver's insertion poll works. The A/B lever if ID-3 presence
+		// ever destabilizes the bus: rebuild with 1'b0 (one variable).
+		.cd_enable(1'b1),
+		.cd_img_mounted(img_mounted[2]),
+		.cd_io_lba(cd_lba_w),
+		.cd_io_rd(cd_rd_w),
+		.cd_io_wr(cd_wr_w),
+		.cd_io_ack(sd_ack[2]),
+		.cd_sd_buff_din(cd_buff_din_w),
+		.dbg_cd(dbg_cd_w),
 
 		// PRAM: save-back still needs apf_blockdev, but the LOAD side is now
 		// driven by the pram_zero FSM below so "Reset PRAM" is real.
@@ -2170,6 +2184,14 @@ module mac_lc_pocket
 		.instance_id ("SCS2"), .probe_width (32), .source_width (1),
 		.sld_auto_instance_index ("YES")
 	) cp_scs2 (.probe({dbg_scsi5_w, dbg_scsi4_w}), .source(), .source_clk(clk_sys), .source_ena(1'b1));
+
+	// ★ 2026-08-13: the CD target's own testimony (scsi.v dbg_cda1) — did
+	// the guest ever talk to ID 3 and what did it last ask?
+	// {toc_rdy, no_media, mounted, last_ok, sense_asc, sense_key, cmd_cnt, last_op}
+	altsource_probe #(
+		.instance_id ("CDA1"), .probe_width (32), .source_width (1),
+		.sld_auto_instance_index ("YES")
+	) cp_cda1 (.probe(dbg_cd_w), .source(), .source_clk(clk_sys), .source_ena(1'b1));
 `endif
 
 endmodule

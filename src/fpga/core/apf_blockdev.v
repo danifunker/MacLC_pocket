@@ -64,9 +64,11 @@ module apf_blockdev #(
 	output reg  [31:0] target_dataslot_bridgeaddr,
 	output reg  [31:0] target_dataslot_length,
 
-	// Data-slot ids from data.json: the two SCSI disks, and the floppy.
+	// Data-slot ids from data.json: the two SCSI disks, the CD-ROM (ISO,
+	// read-only, blockdev slot 2), and the floppy.
 	input  wire [15:0] slot0_id,
 	input  wire [15:0] slot1_id,
+	input  wire [15:0] slot_cd_id,
 	input  wire [15:0] slot_flp_id,
 
 	// ---- floppy bulk load -> the machine's download port (clk_sys) -------
@@ -94,18 +96,22 @@ module apf_blockdev #(
 	input  wire        flp_allow,
 
 	// ---- core side (clk_sys), MiSTer hps_io shape ------------------------
+	// Slot 2 = the CD-ROM (ISO). Read-only: sd_wr[2] is accepted in the port
+	// shape for symmetry but never serviced — the machine ties it 0 and the
+	// CDROM scsi.v target rejects WRITE commands before io_wr could fire.
 	input  wire        clk_sys,
 	input  wire [31:0] sd_lba0,
 	input  wire [31:0] sd_lba1,
-	input  wire [1:0]  sd_rd,
-	input  wire [1:0]  sd_wr,
-	output reg  [1:0]  sd_ack,
+	input  wire [31:0] sd_lba2,
+	input  wire [2:0]  sd_rd,
+	input  wire [2:0]  sd_wr,
+	output reg  [2:0]  sd_ack,
 	output reg  [7:0]  sd_buff_addr,
 	output reg  [15:0] sd_buff_dout,
 	output reg         sd_buff_wr,
 	input  wire [15:0] sd_buff_din0,
 	input  wire [15:0] sd_buff_din1,
-	output reg  [1:0]  img_mounted,
+	output reg  [2:0]  img_mounted,
 	// hps_io semantics: img_size is valid ON the img_mounted pulse for the
 	// slot that just changed. The core latches it per slot itself.
 	output reg  [31:0] img_size,
@@ -161,7 +167,17 @@ module apf_blockdev #(
 	// Apple disk must read 4552 0200 = "ER",512). BDLB = {deliveries[7:0],
 	// last requested LBA[23:0]}.
 	output wire [31:0] dbg_bdw0,
-	output wire [31:0] dbg_bdlb
+	output wire [31:0] dbg_bdlb,
+	// ★ 2026-08-13: the write witness (RESUME instrument #4). Answers "does
+	// the guest WRITE during the crash round, where, and did the OS take it"
+	// without any behavioral change.
+	//   BDWR = { saw_wr_err, wr_cnt[6:0], last_wr_lba[23:0] } — saw_wr_err
+	//   sticky = a SCSI write transfer resolved with xfer_err (OS rejected /
+	//   timed out); wr_cnt counts write transfers issued to the OS.
+	//   BDWW = first two 16-bit words of the LAST written sector as staged
+	//   into wrbuf (file byte order) — the write-side mirror of BDW0.
+	output wire [31:0] dbg_bdwr,
+	output wire [31:0] dbg_bdww
 );
 
 	localparam integer SECTOR_BYTES = 512;
@@ -212,8 +228,8 @@ end
 	// ======================================================================
 	// Media present / size  (clk_74a -> clk_sys)
 	// ======================================================================
-	reg  [31:0] size0_74 = 32'd0, size1_74 = 32'd0, sizeF_74 = 32'd0;
-	reg         mount_tgl0 = 1'b0, mount_tgl1 = 1'b0, mount_tglF = 1'b0;
+	reg  [31:0] size0_74 = 32'd0, size1_74 = 32'd0, size2_74 = 32'd0, sizeF_74 = 32'd0;
+	reg         mount_tgl0 = 1'b0, mount_tgl1 = 1'b0, mount_tgl2 = 1'b0, mount_tglF = 1'b0;
 
 	// dataslot_update is a multi-cycle LEVEL, not a pulse: core_bridge_cmd
 	// raises it in the 0x008A handler and only clears it when its FSM returns
@@ -253,24 +269,31 @@ always @(posedge clk_74a) begin
 			size1_74   <= dataslot_update_size;
 			mount_tgl1 <= ~mount_tgl1;
 		end
+		if (dataslot_update_id == slot_cd_id) begin
+			size2_74   <= dataslot_update_size;
+			mount_tgl2 <= ~mount_tgl2;
+		end
 	end
 end
 
-	reg [2:0] m0_s, m1_s, mF_s;
+	reg [2:0] m0_s, m1_s, m2_s, mF_s;
 	reg [31:0] flp_size_sys;
 	wire mnt0 = m0_s[2] ^ m0_s[1];
 	wire mnt1 = m1_s[2] ^ m1_s[1];
+	wire mnt2 = m2_s[2] ^ m2_s[1];
 	wire mntF = mF_s[2] ^ mF_s[1];
 always @(posedge clk_sys) begin
 	mF_s <= {mF_s[1:0], mount_tglF};
 	flp_size_sys <= sizeF_74;
 	m0_s <= {m0_s[1:0], mount_tgl0};
 	m1_s <= {m1_s[1:0], mount_tgl1};
-	img_mounted <= {mnt1, mnt0};
+	m2_s <= {m2_s[1:0], mount_tgl2};
+	img_mounted <= {mnt2, mnt1, mnt0};
 	// The size register settles many clocks before its toggle is observed
 	// here, so presenting it alongside the pulse is safe.
 	if      (mnt0) img_size <= size0_74;
 	else if (mnt1) img_size <= size1_74;
+	else if (mnt2) img_size <= size2_74;
 end
 
 	// ======================================================================
@@ -278,12 +301,19 @@ end
 	// ======================================================================
 	reg        req_tgl   = 1'b0;    // clk_sys: a request is posted
 	reg        req_is_wr = 1'b0;
-	reg        req_slot  = 1'b0;
+	reg [1:0]  req_slot  = 2'd0;    // 0/1 = HDD slots, 2 = CD-ROM
 	reg [31:0] req_lba   = 32'd0;
 	reg        done_seen = 1'b0;
 
 	reg [2:0]  done_s;
 	reg        done_tgl  = 1'b0;    // clk_74a: the transfer finished
+	// Per-transfer failure flag (clk_74a; declared here because the clk_sys
+	// sequencer samples it in C_WAIT, before the bridge FSM's own section).
+	// Settled before done_tgl toggles, so the core side may read it alongside
+	// the done handshake. Needed because a FAILED PRAM read leaves rdbuf
+	// holding garbage, and copying that into the Egret would destroy the
+	// known-good built-in PRAM image -- far worse than having no save file.
+	reg        xfer_err  = 1'b0;
 
 	// ---- core-side sequencer ----
 	// Each buffer word takes a couple of cycles (address out, RAM latency,
@@ -293,6 +323,7 @@ end
 	localparam [4:0] C_IDLE   = 5'd0,
 	                 C_FILL_A = 5'd1,   // writes: present sd_buff_addr
 	                 C_FILL_B = 5'd2,   // writes: sample sd_buff_din
+	                 C_FILL_W = 5'd19,  // writes: buffer RAM read latency
 	                 C_REQ    = 5'd3,
 	                 C_WAIT   = 5'd4,
 	                 C_DRN_A  = 5'd5,   // reads: present buffer address
@@ -316,7 +347,9 @@ end
 	assign dbg_cstate = cstate;
 	reg [8:0]  cidx;
 	reg [15:0] fill_hi;
-	wire [15:0] dinw = req_slot ? sd_buff_din1 : sd_buff_din0;
+	// Writes only ever come from the HDD slots (the CD is read-only), so the
+	// fill mux stays two-way on req_slot[0].
+	wire [15:0] dinw = req_slot[0] ? sd_buff_din1 : sd_buff_din0;
 	// ★★ 2026-08-12 (buildAA): sd_buff words are LITTLE-endian — byte0 in the
 	// LOW half. That is the real-HPS convention scsi.v is built for
 	// (scsi.v:181-183; its VERILATOR branch is byte0-high, which is what
@@ -430,7 +463,7 @@ always @(posedge clk_sys) begin
 
 	case (cstate)
 	C_IDLE: begin
-		sd_ack <= 2'b00;
+		sd_ack <= 3'b000;
 		cidx   <= 9'd0;
 		// PRAM load runs FIRST and before anything else can start, because the
 		// 68020 is held in reset until it finishes and every other client here
@@ -450,31 +483,67 @@ always @(posedge clk_sys) begin
 			cstate       <= C_REQ;
 		// SCSI requests take priority; a floppy bulk load is not time-critical
 		// and simply resumes between them.
-		end else if (!(sd_rd[0] | sd_rd[1] | sd_wr[0] | sd_wr[1]) && flp_busy && flp_allow) begin
+		end else if (!(sd_rd[0] | sd_rd[1] | sd_rd[2] | sd_wr[0] | sd_wr[1]) && flp_busy && flp_allow) begin
 			req_is_pram <= 1'b0;
 			req_is_flp <= 1'b1;
 			req_is_wr  <= 1'b0;
 			req_lba    <= {9'd0, flp_sector};
 			cstate     <= C_REQ;
-		end else if (sd_rd[0] | sd_rd[1] | sd_wr[0] | sd_wr[1]) begin
+		end else if (sd_rd[0] | sd_rd[1] | sd_rd[2] | sd_wr[0] | sd_wr[1]) begin
 			req_is_pram <= 1'b0;
 			req_is_flp <= 1'b0;
-			req_is_wr <= (sd_wr[0] | sd_wr[1]);
-			req_slot  <= (sd_rd[1] | sd_wr[1]);
-			req_lba   <= (sd_rd[1] | sd_wr[1]) ? sd_lba1 : sd_lba0;
-			sd_ack    <= { (sd_rd[1] | sd_wr[1]), (sd_rd[0] | sd_wr[0]) };
-			// A write must have the core's data in the buffer BEFORE the OS
-			// is asked to store it.
-			cstate    <= (sd_wr[0] | sd_wr[1]) ? C_FILL_A : C_REQ;
 			sd_buff_addr <= 8'd0;
+			// Priority: HDD slot 1, HDD slot 0, then the CD — the disks are
+			// the boot path. Ack ONLY the winner (★ 2026-08-13: the old
+			// two-slot code acked BOTH slots on simultaneous requests, so the
+			// loser's scsi.v saw a completed ack envelope for a sector that
+			// was never transferred — its ring fill pointer advanced past a
+			// slot of stale data. Unobservable with one disk mounted; real
+			// with two, and structural once the CD made it three.)
+			// A write must have the core's data in the buffer BEFORE the OS
+			// is asked to store it (C_FILL_*).
+			if (sd_rd[1] | sd_wr[1]) begin
+				req_is_wr <= sd_wr[1];
+				req_slot  <= 2'd1;
+				req_lba   <= sd_lba1;
+				sd_ack    <= 3'b010;
+				cstate    <= sd_wr[1] ? C_FILL_A : C_REQ;
+			end else if (sd_rd[0] | sd_wr[0]) begin
+				req_is_wr <= sd_wr[0];
+				req_slot  <= 2'd0;
+				req_lba   <= sd_lba0;
+				sd_ack    <= 3'b001;
+				cstate    <= sd_wr[0] ? C_FILL_A : C_REQ;
+			end else begin
+				req_is_wr <= 1'b0;
+				req_slot  <= 2'd2;
+				req_lba   <= sd_lba2;
+				sd_ack    <= 3'b100;
+				cstate    <= C_REQ;
+			end
 		end
 	end
 
 	// ---- write direction: core data -> wrbuf, a 16-bit half at a time ----
+	// ★ 2026-08-13: C_FILL_W added. scsi.v's sector buffer (scsi_dpram) is a
+	// REGISTERED read — q_a updates one clock after address_a — exactly like
+	// this module's own rdbuf, whose readers all carry a wait state (C_DRN_W /
+	// C_FLP_W / C_PV_W / C_PR_W; the PRAM save walker documents the same
+	// latency). The first cut of this fill loop had no wait state, so it
+	// sampled sd_buff_din one cycle early: every staged word except word 0
+	// (whose address C_IDLE had preset for a full cycle) was the PREVIOUS
+	// word. Every SCSI write shipped shifted one 16-bit word — word 0
+	// duplicated, word 255 lost — silently corrupting the image on card the
+	// first time the guest wrote (e.g. the MDB volume-dirty flush at System
+	// startup). Reads were never affected. MiSTer never saw this class: its
+	// HPS read sd_buff_din over SPI with many idle clocks between address and
+	// sample, so the one-cycle latency was invisible there.
 	C_FILL_A: begin
 		sd_buff_addr <= cidx[7:0];
-		cstate       <= C_FILL_B;
+		cstate       <= C_FILL_W;
 	end
+
+	C_FILL_W: cstate <= C_FILL_B;    // sd_buff_din is registered in scsi.v
 
 	C_FILL_B: begin
 		if (cidx[0]) begin
@@ -650,10 +719,10 @@ always @(posedge clk_sys) begin
 	end
 
 	C_FIN: begin
-		sd_ack <= 2'b00;
+		sd_ack <= 3'b000;
 		// Hold off until the core drops its request, or we would immediately
 		// re-trigger on the same sd_rd/sd_wr level.
-		if (!(sd_rd[0] | sd_rd[1] | sd_wr[0] | sd_wr[1])) cstate <= C_IDLE;
+		if (!(sd_rd[0] | sd_rd[1] | sd_rd[2] | sd_wr[0] | sd_wr[1])) cstate <= C_IDLE;
 	end
 
 	default: cstate <= C_IDLE;
@@ -671,12 +740,8 @@ end
 	reg        done_d  = 1'b0;
 	reg [23:0] tmo     = 24'd0;   // ~226 ms at 74.25 MHz
 	reg        saw_tmo = 1'b0;    // sticky: the OS failed to respond at least once
-	// Per-transfer failure flag. Settled before done_tgl toggles, so the core
-	// side may sample it in C_WAIT alongside the done handshake. Needed because
-	// a FAILED PRAM read leaves rdbuf holding garbage, and copying that into the
-	// Egret would destroy the known-good built-in PRAM image -- far worse than
-	// simply not having a save file.
-	reg        xfer_err = 1'b0;
+	// (xfer_err is declared up with the request-handshake state — the clk_sys
+	// sequencer samples it in C_WAIT.)
 
 	// PROTOCOL (openfpga-PCXT src/fpga/core/softcpu_fdd_bridge.sv:233-249):
 	//   * target_dataslot_read/_write is a LEVEL. Raise it and HOLD it; the
@@ -708,9 +773,11 @@ always @(posedge clk_74a) begin
 				// req_is_pram/req_is_flp/req_slot/req_lba are all clk_sys regs
 				// that are settled well before the req toggle crosses, which is
 				// the same convention the SCSI path already relies on.
-				target_dataslot_id         <= req_is_pram ? slot_pram_id
-				                            : req_is_flp  ? slot_flp_id
-				                                          : (req_slot ? slot1_id : slot0_id);
+				target_dataslot_id         <= req_is_pram          ? slot_pram_id
+				                            : req_is_flp           ? slot_flp_id
+				                            : (req_slot == 2'd2)   ? slot_cd_id
+				                            : (req_slot == 2'd1)   ? slot1_id
+				                                                   : slot0_id;
 				// req_lba is a 512-byte sector index; the OS wants a BYTE
 				// offset into the file.
 				target_dataslot_slotoffset <= req_is_pram ? 32'd0 : (req_lba << 9);
@@ -798,7 +865,7 @@ end
 
 	reg saw_mount_sys = 1'b0, saw_deliver_sys = 1'b0;
 always @(posedge clk_sys) begin
-	if (img_mounted != 2'b00)                    saw_mount_sys   <= 1'b1;
+	if (img_mounted != 3'b000)                   saw_mount_sys   <= 1'b1;
 	if (cstate == C_FIN && !req_is_wr && !req_is_flp) saw_deliver_sys <= 1'b1;
 end
 
@@ -846,6 +913,38 @@ assign dbg_stage = dlv_s[1]    ? 3'd5 :
 	end
 	assign dbg_bdw0 = { dbg_w0, dbg_w1 };
 	assign dbg_bdlb = { dbg_dlv_cnt, dbg_last_lba };
+
+	// Write witness (clk_sys side): count SCSI write transfers + last write
+	// LBA + the first staged pair. C_FILL_B at cidx==1 completes the first
+	// 32-bit wrbuf word = file bytes 0..3 of the outgoing sector.
+	reg [6:0]  dbg_wr_cnt   = 7'd0;
+	reg [23:0] dbg_wr_lba   = 24'd0;
+	reg [15:0] dbg_ww0 = 16'd0, dbg_ww1 = 16'd0;
+	always @(posedge clk_sys) begin
+		if (cstate == C_REQ && req_is_wr && !req_is_pram && !req_is_flp) begin
+			dbg_wr_cnt <= dbg_wr_cnt + 7'd1;
+			dbg_wr_lba <= req_lba[23:0];
+		end
+		if (cstate == C_FILL_B && cidx == 9'd1)
+			{dbg_ww0, dbg_ww1} <= {fill_hi, dinw_le};
+	end
+
+	// Sticky write-error (clk_74a): a write transfer resolved with xfer_err —
+	// the OS rejected it, errored it, or never answered. done_tgl toggles in
+	// the same cycle xfer_err reaches its final value, so watching the toggle
+	// one cycle late samples it settled. req_is_pram/req_is_wr are clk_sys
+	// regs but quasi-static for the whole transfer (same convention T_IDLE
+	// already relies on). 0->1 only, so the JTAG read needs no handshake.
+	reg done_tgl_d    = 1'b0;
+	reg saw_wr_err_74 = 1'b0;
+	always @(posedge clk_74a) begin
+		done_tgl_d <= done_tgl;
+		if ((done_tgl ^ done_tgl_d) && xfer_err && req_is_wr && !req_is_pram)
+			saw_wr_err_74 <= 1'b1;
+	end
+
+	assign dbg_bdwr = { saw_wr_err_74, dbg_wr_cnt, dbg_wr_lba };
+	assign dbg_bdww = { dbg_ww0, dbg_ww1 };
 
 endmodule
 

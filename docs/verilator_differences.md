@@ -121,6 +121,17 @@ saturating); `sim.v` leaves them unconnected (PINMISSING is waived) — sim CD
 mounts also read garbage from the TOC-blob window (the sim blockdevice has no
 HPS windows), so the engine takes its synthesized single-track fallback there.
 
+## CD-ROM target re-add, ISO-only (2026-08-13)
+
+`dataController_top` regained the CD target's block-device slot: `cd_enable`,
+`cd_img_mounted`, `cd_io_lba/rd/wr/ack`, `cd_sd_buff_din`, `dbg_cd`.
+`mac_lc_pocket.sv` wires them to blockdev slot 2 with `cd_enable=1'b1`;
+**`sim.v` ties the slot off DISC-LESS with the drive PRESENT** (`cd_enable=1`,
+`cd_img_mounted=0`, `cd_io_ack=0`, outputs open) — the ROM's SCSI scan
+exercises the no-disc sense path, same coverage the old sim boot regression
+had. There is no sim CD block-device model; TOC comes from `cd_toc_stub`
+(no cd_audio, no TOC-blob window — the old blob-garbage caveat above is moot).
+
 ## Maintenance checklist (when editing the core)
 
 1. Touching CPU/bus glue (BERR/VPA/DTACK/overlay/IPL)? Edit **both** `sim.v` and

@@ -33,6 +33,18 @@ if {[info exists idx(BDLB)]} {
     set l [expr {$l & 0xFFFFFFFF}]
     puts [format "  deliveries=%d  last LBA=%d" [expr {($l >> 24) & 0xFF}] [expr {$l & 0xFFFFFF}]]
 }
+if {[info exists idx(BDWR)]} {
+    scan [read_probe_data -instance_index $idx(BDWR) -value_in_hex] %x wr
+    set wr [expr {$wr & 0xFFFFFFFF}]
+    puts [format "  WRITES: err=%d count=%d last write LBA=%d" \
+        [expr {($wr >> 31) & 1}] [expr {($wr >> 24) & 0x7F}] [expr {$wr & 0xFFFFFF}]]
+}
+if {[info exists idx(BDWW)]} {
+    scan [read_probe_data -instance_index $idx(BDWW) -value_in_hex] %x ww
+    set ww [expr {$ww & 0xFFFFFFFF}]
+    puts [format "  last WRITTEN sector words 0,1   : %04X %04X (staged, file order)" \
+        [expr {($ww >> 16) & 0xFFFF}] [expr {$ww & 0xFFFF}]]
+}
 if {[info exists idx(SDW0)]} {
     scan [read_probe_data -instance_index $idx(SDW0) -value_in_hex] %x sw
     set sw [expr {$sw & 0xFFFFFFFF}]
@@ -58,6 +70,14 @@ if {[info exists idx(SCS1)]} {
         [expr {($s1 >> 12) & 1}] [expr {($s1 >> 11) & 1}] \
         [expr {($s1 >> 10) & 1}] [expr {($s1 >> 9) & 1}] \
         [expr {($s1 >> 8) & 1}] [expr {$s1 & 0xFF}]]
+}
+if {[info exists idx(CDA1)]} {
+    scan [read_probe_data -instance_index $idx(CDA1) -value_in_hex] %x c1
+    set c1 [expr {$c1 & 0xFFFFFFFF}]
+    puts [format "  CD: toc_rdy=%d no_media=%d mounted=%d ok=%d sense_asc=%02X sense_key=%X cmds=%d last_op=%02X" \
+        [expr {($c1 >> 31) & 1}] [expr {($c1 >> 30) & 1}] [expr {($c1 >> 29) & 1}] \
+        [expr {($c1 >> 28) & 1}] [expr {($c1 >> 20) & 0xFF}] [expr {($c1 >> 16) & 0xF}] \
+        [expr {($c1 >> 8) & 0xFF}] [expr {$c1 & 0xFF}]]
 }
 if {[info exists idx(SCS2)]} {
     scan [read_probe_data -instance_index $idx(SCS2) -value_in_hex] %x s2

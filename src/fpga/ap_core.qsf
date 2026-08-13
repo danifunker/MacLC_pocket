@@ -774,6 +774,7 @@ set_global_assignment -name VERILOG_FILE core/apf_blockdev.v
 set_global_assignment -name QIP_FILE ../../rtl/tg68k/TG68K.qip
 set_global_assignment -name VERILOG_FILE ../../rtl/scsi.v
 set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/ncr5380.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/cd_toc_stub.sv
 set_global_assignment -name VERILOG_FILE ../../rtl/floppy_track_encoder.v
 set_global_assignment -name VERILOG_FILE ../../rtl/mfm_track_encoder.v
 set_global_assignment -name VERILOG_FILE ../../rtl/floppy.v
