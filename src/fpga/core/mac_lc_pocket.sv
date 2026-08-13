@@ -2226,6 +2226,52 @@ module mac_lc_pocket
 		.sld_auto_instance_index ("YES")
 	) cp_sdcp (.probe(sdcap_q), .source(sdcap_rd_idx), .source_clk(clk_sys), .source_ena(1'b1));
 
+	// ★ buildAF PCRB: the DYING INSTRUCTION STREAM. A 64-deep ring of the
+	// last distinct fetch PCs, frozen at the first n_reset FALL after being
+	// armed — arm AFTER the boot is underway (jboot also drops n_reset), and
+	// the ring freezes exactly at the crash reset holding the 64 PCs that
+	// led to death. Every data face is verified byte-perfect (card, blockdev,
+	// target, CPU receipt — SDCP 512/512 on the driver re-read) and the last
+	// SCSI command completes with GOOD status + correct bytes; the machine
+	// dies IN CODE right after. This names the code.
+	//   PCRB source: [7]=arm (rising edge re-opens a frozen ring), [5:0]=
+	//   read index. PCRB probe = ring[idx] (32-bit). PCRS probe =
+	//   {frozen, write ptr} for status + where "newest" is.
+	// Decoder: scripts/pcrb.tcl; read PCs against docs/MacLC_ROM_disasm.txt
+	// (ROM = 00A0xxxx) or RAM addresses (driver/System code).
+	(* ramstyle = "M10K" *) reg [31:0] pcrb [0:63];
+	reg  [5:0] pcrb_w = 6'd0;
+	reg        pcrb_frozen = 1'b0;
+	reg [31:0] pcrb_last = 32'hFFFFFFFF;
+	reg        pcrb_nrst_d = 1'b1;
+	reg        pcrb_arm_d  = 1'b0;
+	wire [7:0] pcrb_src;
+	reg [31:0] pcrb_q;
+	always @(posedge clk_sys) begin
+		pcrb_nrst_d <= n_reset;
+		pcrb_arm_d  <= pcrb_src[7];
+		if (pcrb_src[7] && !pcrb_arm_d)
+			pcrb_frozen <= 1'b0;                       // re-arm: capture again
+		else if (pcrb_nrst_d && !n_reset)
+			pcrb_frozen <= 1'b1;                       // machine died: hold
+		if (!pcrb_frozen && fetch_valid && last_fetch_pc != pcrb_last) begin
+			pcrb[pcrb_w] <= last_fetch_pc;
+			pcrb_w      <= pcrb_w + 6'd1;
+			pcrb_last   <= last_fetch_pc;
+		end
+		pcrb_q <= pcrb[pcrb_src[5:0]];
+	end
+
+	altsource_probe #(
+		.instance_id ("PCRB"), .probe_width (32), .source_width (8),
+		.sld_auto_instance_index ("YES")
+	) cp_pcrb (.probe(pcrb_q), .source(pcrb_src), .source_clk(clk_sys), .source_ena(1'b1));
+
+	altsource_probe #(
+		.instance_id ("PCRS"), .probe_width (7), .source_width (1),
+		.sld_auto_instance_index ("YES")
+	) cp_pcrs (.probe({pcrb_frozen, pcrb_w}), .source(), .source_clk(clk_sys), .source_ena(1'b1));
+
 	// ★ buildY: the SCSI target's own testimony — why does the ROM read a
 	// perfect block 0 and never command the driver read? SCS1 = {dbg_scsi2
 	// (target phases + io handshake), dbg_scsi (selection/arbitration)};
