@@ -674,13 +674,21 @@ module mac_lc_pocket
 	//
 	// A real Mac's bus timeout is MICROSECONDS, not milliseconds, so 250 us is
 	// the more hardware-faithful number as well as the usable one. It is still
-	// far longer than any legitimate DREQ latency: apf_blockdev fetches a whole
-	// 512-byte sector into the target's buffer BEFORE the data phase begins, so
-	// per-byte DREQ is served from that buffer and never waits on the OS.
-	//
-	// This does NOT fix the root cause (scsiDREQ never asserting); it stops an
-	// unanswered access from costing 250 ms. Keep hunting the DREQ.
-	localparam SDMA_TIMEOUT = 23'd8125;     // ~250 us @ 32.5 MHz (was ~250 ms)
+	// ★★ 2026-08-12 (buildZ): BACK TO ~250 ms — the 250 us cut was calibrated
+	// against a LIE. Its comment claimed "apf_blockdev fetches the sector
+	// BEFORE the data phase begins, so DREQ never waits on the OS" — false
+	// for the FIRST byte of every sector: the ROM issues READ(6) and starts
+	// its pseudo-DMA access immediately, while the blockdev's OS round-trip
+	// (bridge command -> SD card -> buffer, MILLISECONDS) is still in
+	// flight. At 250 us the access died via sdma_berr long before data
+	// existed; the ROM abandoned the disk, and the sector arrived to an
+	// empty room. Captured on hardware (SCS1/SCS2, buildY): target frozen
+	// in DATA-IN, BSY held, byte 0 (0x45 'E' of "ER") still offered, last
+	// opcode = READ6, zero bytes taken. MiSTer never saw this because HPS
+	// served sectors in tens of us.
+	// 250 ms only ever costs time when DREQ genuinely never comes (dead
+	// target), which selection timeouts already bound at boot scan.
+	localparam SDMA_TIMEOUT = 23'd8125000;  // ~250 ms @ 32.5 MHz (MiSTer parity)
 	reg [22:0] sdma_stall_ctr = 23'd0;
 	reg        sdma_berr      = 1'b0;
 	always @(posedge clk_sys) begin
