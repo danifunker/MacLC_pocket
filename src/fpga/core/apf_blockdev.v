@@ -317,6 +317,18 @@ end
 	reg [8:0]  cidx;
 	reg [15:0] fill_hi;
 	wire [15:0] dinw = req_slot ? sd_buff_din1 : sd_buff_din0;
+	// ★★ 2026-08-12 (buildAA): sd_buff words are LITTLE-endian — byte0 in the
+	// LOW half. That is the real-HPS convention scsi.v is built for
+	// (scsi.v:181-183; its VERILATOR branch is byte0-high, which is what
+	// misled every code read here). This module's first cut packed the
+	// sd_buff face big-endian like its bridge/dio faces, so every byte pair
+	// reached the Mac swapped: captured on hardware as the CPU receiving
+	// 52 45 ("RE") for block 0's 45 52 ("ER") — DDM parse survived word reads
+	// only by luck of what the ROM checks, and the Driver43 image failed its
+	// checksum every round. dinw_le/the drain swap below convert both
+	// directions at this face ONLY — the bridge/dio/PRAM faces stay
+	// big-endian (file order) as before.
+	wire [15:0] dinw_le = { dinw[7:0], dinw[15:8] };
 
 	// ---- PRAM sequencing ---------------------------------------------------
 	// 256 bytes = 64 x 32-bit buffer words. Bridge byte order is big-endian
@@ -468,10 +480,10 @@ always @(posedge clk_sys) begin
 		if (cidx[0]) begin
 			// odd index completes a 32-bit pair
 			buf_addr_sys  <= cidx[7:1];
-			buf_wdata_sys <= {fill_hi, dinw};
+			buf_wdata_sys <= {fill_hi, dinw_le};
 			buf_we_sys    <= 1'b1;
 		end else begin
-			fill_hi <= dinw;
+			fill_hi <= dinw_le;
 		end
 		if (cidx == SECTOR_WORDS-1) cstate <= C_REQ;
 		else begin
@@ -624,9 +636,11 @@ always @(posedge clk_sys) begin
 
 	C_DRN_B: begin
 		sd_buff_addr <= cidx[7:0];
-		// Big-endian: the MS half of the 32-bit bridge word is the LOWER
-		// 16-bit word offset.
-		sd_buff_dout <= cidx[0] ? rdbuf_rd_sys[15:0] : rdbuf_rd_sys[31:16];
+		// The 32-bit bridge word is big-endian (MS half = lower word offset),
+		// but the sd_buff face wants LITTLE-endian 16-bit words (byte0 low) --
+		// swap byte lanes within the chosen half. See the dinw_le note.
+		sd_buff_dout <= cidx[0] ? {rdbuf_rd_sys[7:0],  rdbuf_rd_sys[15:8]}
+		                        : {rdbuf_rd_sys[23:16], rdbuf_rd_sys[31:24]};
 		sd_buff_wr   <= 1'b1;
 		if (cidx == SECTOR_WORDS-1) cstate <= C_FIN;
 		else begin
