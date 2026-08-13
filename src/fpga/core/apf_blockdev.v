@@ -308,13 +308,27 @@ end
 	localparam integer PRAM_BYTES = 256;
 	localparam integer PRAM_WORDS = PRAM_BYTES/4;   // 64
 	reg        req_is_pram  = 1'b0;
-	reg        pram_rd_todo = 1'b1;   // load once, at power-up
+	// ★ 2026-08-12 (buildW): PRAM power-up read DISARMED. Slot 220 no longer
+	// exists in data.json (removed with the PRAM slot after it corrupted the
+	// ROM), but this request still fired at config time — so early that the
+	// clk_74a host FSM was still in reset (pll_core_locked_s not yet high):
+	// the req toggle was consumed while tstate was held in T_IDLE, no
+	// transfer and no timeout ever ran (the 226 ms bailouts only tick in
+	// T_ACK/T_DONE), and the sequencer sat in C_WAIT forever. Every SCSI
+	// sector read then starved behind it: media mounted, "?" cleared, zero
+	// sectors ever served, machine parked at the ROM's grey screen + cursor.
+	// pram_loaded initializes to 1 so the boot proceeds on the built-in
+	// egret.pram defaults immediately (same no-writes-then-ready contract the
+	// ~1 s backstop exercised while the load never resolved).
+	// If PRAM persistence ever returns: re-arm this AND make the request
+	// re-issuable/level-based so a pre-lock issue cannot be eaten.
+	reg        pram_rd_todo = 1'b0;   // was 1'b1: load once, at power-up
 	reg        pram_sv_todo = 1'b0;
 	reg [1:0]  pram_bsel;             // which byte of the current 32-bit word
 	reg [31:0] pram_word;
 	reg        pram_sv_busy = 1'b0;
 	initial begin
-		pram_loaded    = 1'b0;   // 68020 stays in reset until the load resolves
+		pram_loaded    = 1'b1;   // resolved: built-in defaults, no slot to read
 		pram_load_wr   = 1'b0;
 		pram_load_addr = 8'd0;
 		pram_load_data = 8'd0;
