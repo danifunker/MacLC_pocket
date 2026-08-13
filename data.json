@@ -32,6 +32,7 @@
                 "required": false,
                 "deferload": true,
                 "parameters": 1,
+                "filename": "maclc.hda",
                 "extensions": [
                     "hda",
                     "img",
@@ -44,6 +45,7 @@
                 "required": false,
                 "deferload": true,
                 "parameters": 1,
+                "filename": "maclc2.hda",
                 "extensions": [
                     "hda",
                     "img",
