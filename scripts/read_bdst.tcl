@@ -79,6 +79,12 @@ if {[info exists idx(CDA1)]} {
         [expr {($c1 >> 28) & 1}] [expr {($c1 >> 20) & 0xFF}] [expr {($c1 >> 16) & 0xF}] \
         [expr {($c1 >> 8) & 0xFF}] [expr {$c1 & 0xFF}]]
 }
+if {[info exists idx(CDPH)]} {
+    scan [read_probe_data -instance_index $idx(CDPH) -value_in_hex] %x cp
+    set cp [expr {$cp & 0xFFFF}]
+    puts [format "  CD LIVE: bsy=%d phase=%d hs=%02X hs2=%X   (bsy=1 with phase!=0 parked = the disk-deafening wedge)" \
+        [expr {($cp >> 15) & 1}] [expr {($cp >> 12) & 7}] [expr {($cp >> 4) & 0xFF}] [expr {$cp & 0xF}]]
+}
 if {[info exists idx(PSN1)]} {
     scan [read_probe_data -instance_index $idx(PSN1) -value_in_hex] %x p1
     set p1 [expr {$p1 & 0xFFFFFFFF}]

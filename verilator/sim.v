@@ -868,6 +868,7 @@ module emu
 		.cd_io_ack(1'b0),
 		.cd_sd_buff_din(),
 		.dbg_cd(),
+		.dbg_cd_state(),
 
 		// PRAM persistence — tied off (step 1); FSM wired in step 2
 		.pram_load_wr(1'b0),

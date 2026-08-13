@@ -1142,6 +1142,7 @@ module mac_lc_pocket
 	wire        cd_rd_w, cd_wr_w;
 	wire [15:0] cd_buff_din_w;
 	wire [31:0] dbg_cd_w;
+	wire [15:0] dbg_cd_state_w;
 	assign sd_lba[0] = scsi_lba[0];
 	assign sd_lba[1] = scsi_lba[1];
 	assign sd_lba[2] = cd_lba_w;
@@ -1277,6 +1278,7 @@ module mac_lc_pocket
 		.cd_io_ack(sd_ack[2]),
 		.cd_sd_buff_din(cd_buff_din_w),
 		.dbg_cd(dbg_cd_w),
+		.dbg_cd_state(dbg_cd_state_w),
 
 		// PRAM: save-back still needs apf_blockdev, but the LOAD side is now
 		// driven by the pram_zero FSM below so "Reset PRAM" is real.
@@ -2348,6 +2350,14 @@ module mac_lc_pocket
 		.instance_id ("CDA1"), .probe_width (32), .source_width (1),
 		.sld_auto_instance_index ("YES")
 	) cp_cda1 (.probe(dbg_cd_w), .source(), .source_clk(clk_sys), .source_ena(1'b1));
+
+	// ★ buildAJ: the CD target's LIVE bus machine — {cd_bsy, phase[2:0],
+	// hs[7:0], hs2[3:0]}. cd_bsy stuck high = the disks' bus_busy gate
+	// refuses every disk selection while the CD itself still answers.
+	altsource_probe #(
+		.instance_id ("CDPH"), .probe_width (16), .source_width (1),
+		.sld_auto_instance_index ("YES")
+	) cp_cdph (.probe(dbg_cd_state_w), .source(), .source_clk(clk_sys), .source_ena(1'b1));
 `endif
 
 endmodule

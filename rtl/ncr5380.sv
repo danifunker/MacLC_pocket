@@ -143,7 +143,12 @@ module ncr5380
 	// stay removed with cd_audio. dbg_cd below is scsi.v's dbg_cda1 — the
 	// CD TARGET's own command/sense visibility, alive without the engine:
 	//   {toc_rdy, no_media, mounted, ok, sense_asc, sense_key, cmd_cnt, last_op}
-	output      [31:0] dbg_cd
+	output      [31:0] dbg_cd,
+	// ★ buildAJ: the CD target's live bus-machine state — {cd_bsy is the
+	// wedge suspect: disks refuse selection while it's high (bus_busy gate)
+	// but the CD itself keeps answering (its gate excludes cd_bsy)}.
+	//   {cd_bsy, phase[2:0], hs[7:0], hs2[3:0]}
+	output      [15:0] dbg_cd_state
 );
 	parameter DEVS = 2;
 	// Read-prefetch ring depth for the CD target. 3 => 8 sectors / 4KB.
@@ -695,6 +700,10 @@ module ncr5380
 	wire [7:0]  cd_dout;
 	wire [15:0] cd_dout_pair;
 	wire [15:0] cd_dout_pair_next;
+	wire [2:0]  dbg_cd_phase;
+	wire [7:0]  dbg_cd_hs;
+	wire [3:0]  dbg_cd_hs2;
+	assign dbg_cd_state = { cd_bsy, dbg_cd_phase, dbg_cd_hs, dbg_cd_hs2 };
 
 	scsi #(.ID(3'd3), .CDROM(1), .CDCHANGER_ENABLE(0), .TOOLBOX_ENABLE(0),
 	       .TB_ADDRW(8), .RING_LOG(CD_RING_LOG)) cdrom_target
@@ -755,9 +764,9 @@ module ncr5380
 
 		.dbg_cda1( dbg_cd ),
 		.dbg_mounted( ),
-		.dbg_phase( ),
-		.dbg_hs( ),
-		.dbg_hs2( ),
+		.dbg_phase( dbg_cd_phase ),
+		.dbg_hs( dbg_cd_hs ),
+		.dbg_hs2( dbg_cd_hs2 ),
 		.dbg_cmd( ),
 		.dbg_dma_word( dma_word_latched ),
 		.dbg_dma_long( dma_longword_latched ),

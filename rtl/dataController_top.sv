@@ -129,6 +129,7 @@ module dataController_top(
 	input                   cd_io_ack,
 	output           [15:0] cd_sd_buff_din,
 	output           [31:0] dbg_cd,     // CD target command/sense visibility (CDA1)
+	output           [15:0] dbg_cd_state, // ★ buildAJ: {cd_bsy, phase, hs, hs2}
 
 	// ---- PRAM persistence pass-through (to the Egret's pram[]) ----
 	input             [7:0] pram_load_addr,
@@ -429,6 +430,7 @@ module dataController_top(
 		.cd_io_ack( cd_io_ack ),
 		.cd_sd_buff_din( cd_sd_buff_din ),
 		.dbg_cd( dbg_cd ),
+		.dbg_cd_state( dbg_cd_state ),
 
 		// JTAG probe feeds (consumed by dbg_probes.sv in the FPGA top)
 		.dbg_scsi(dbg_scsi),
