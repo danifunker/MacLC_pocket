@@ -422,6 +422,69 @@ inert BIST/cold_rst leftovers. The 10 MB lock decision is now UNBLOCKED
 (the cold march passes; 10 MB runs the full 8 MB SIMM march — verify once
 SCSI is back).
 
+### ★★★ 2026-08-12 late — THE SCSI ARC: four more root causes, happy Mac
+### reached, one deterministic frontier left
+
+With cold boot solved, SCSI_DISABLE_DIAG went back to 0 (buildV) and the
+first honest disk test since golden began. Four stacked defects, each only
+visible after the previous fix, all measured then fixed:
+
+1. **buildW — the ghost PRAM request.** The blockdev's power-up read of
+   slot 220 (removed from data.json long ago) fired before
+   pll_core_locked_s released the clk_74a host FSM; the reset ate the
+   request toggle, no timeout ran (bailouts only tick in T_ACK/T_DONE),
+   and the shared sequencer parked in C_WAIT forever — every SCSI read
+   starved behind it. pram_rd_todo now initializes 0, pram_loaded 1.
+2. **buildY — eaten mount announcements.** Analogue OS announces named
+   deferload slots (data.json "filename") at core launch, inside the same
+   settling window; the update latch's reset_n arm discarded them. That is
+   why auto-mount (maclc.hda/maclc2.hda, added to data.json this session)
+   never fired while manual OSD mounts always worked. Latch un-gated.
+   [Ops fact: the OS does NOT replay announcements after a JTAG fabric
+   push — only the ROM slot re-pushes. Manual mount per push; auto-mount
+   works on SD launches.]
+3. **buildZ — SDMA_TIMEOUT 250us vs a millisecond OS.** The ROM's first
+   pseudo-DMA access races the blockdev's OS round-trip; at 250us it died
+   via sdma_berr before data existed, every time. Captured: target frozen
+   in DATA-IN, BSY held, byte 0 (0x45 'E' of "ER") still offered, last
+   opcode READ6, zero bytes taken. Restored to ~250 ms (MiSTer parity).
+4. **buildAA — sd_buff face endianness.** scsi.v's real-HPS convention is
+   byte0-in-LOW-half (scsi.v:181, and its own comment records MiSTer's
+   IDENTICAL saga: "JTAG probe PSC8 showed 0x5245 'RE' where 0x4552 'ER'
+   was expected"). The blockdev packed the face big-endian, so every byte
+   pair reached the Mac swapped; the Driver43 partition loaded and failed
+   its checksum every round. Both directions now converted at the sd_buff
+   face only (bridge/dio/PRAM faces stay file-order). CPU-side capture
+   confirms correct order post-fix ("PM" arrives 50 4D).
+
+RESULT: **happy Mac** — driver loads, validates, executes, mounts, reads
+boot blocks and ~26 sectors of System 6.0.8, then a crash resets the
+machine back to the search loop.
+
+**THE FRONTIER (deterministic, well-instrumented):**
+* The round is EXACTLY +59 delivered sectors every time (2 samples:
+  83->142, 142->201): DDM+driver (33) + map/boot-blocks/System (~26),
+  last requested LBA at death = partition-map block 3.
+* The dying System POISONS PRAM (it writes the startup-device entry
+  before the crash point): after a crash, boots stop even scanning the
+  disk until the OSD "Reset PRAM" action — then the next round runs and
+  crashes identically. Reset-PRAM is the reproduction lever.
+* The System-load reads go through the driver's POLLED NCR path (not
+  pseudo-DMA — CPU-side burst capture saw only the ROM's byte-mode
+  reads), so the polled register path at ms serving latencies is prime
+  suspect, with scsi.v's ring-boundary REQ gating (the 07-29 MiSTer
+  fix class) second.
+
+Instruments standing for the hunt: BDST/BDW0/BDLB (blockdev truth),
+SDW0/SDCT (pseudo-DMA capture), SCS1/SCS2 (target phases/opcodes),
+watch_lba.tcl (live stream). Next-session candidates, in rough order:
+1. **ROMV v4** — generalize the oracle's base address beyond the ROM
+   region and scan the RAM where the System lands after a crash, diffing
+   against the file offline. The exact technique that cracked the ROM
+   tears; the crash's determinism makes it airtight.
+2. Wire scsi.v's dbg_ring0/1 (the MiSTer marginality anchor) to probes.
+3. A polled-path data capture at the NCR register read, mirroring SDW0.
+
 ### Instrument honesty note (ROMV v3 characterization)
 
 Misreads are per-TRIGGER (scan startup), ~1% of triggers, not per-word —
