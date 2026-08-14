@@ -15,13 +15,28 @@ the machine they observe (hub + hot levers + placement pressure).
 Re-enable instruments ONE at a time via USE_ISSP_<X> qsf macros
 (per-instrument guards shipped in buildAZ; see ap_core.qsf).
 
-Open items (user list 08-14d): floppy not working (Pocket floppy path
-likely never HW-exercised — symptom TBD); PRAM color seeding or full
-persistence (+ landmine #2: pram_save_req to nonexistent slot 220 stalls
-SCSI ~450 ms per guest PRAM write — fix with whatever PRAM route);
-patched boot0.rom (forced-warm POST skip) to card; remove Video Test
-Pattern + Debug Disk Stage from interact/RTL; per-key input remapping;
-video.json display_modes to match other cores.
+Open items (user list 08-14d), status end-of-day:
+- ~~floppy~~ FIXED buildBB (02fb297): apf_blockdev now presents the
+  ONE-PAST end address at download fall (MiSTer hps_io.sv:677 contract);
+  the size classifier matched nothing before, so picks silently no-oped.
+  Bench-proven (full copy through the real bridge protocol); HW pending.
+- ~~PRAM color~~ SEEDED buildBC: rtl/egret/egret.pram baked from a REAL
+  MiSTer guest session (scripts/nvr_to_pram.py, source .nvr SHA
+  d6209b2a…, copy in scratch/). ★ DOCUMENTED: the LC's saved video mode
+  ID lives at XPRAM 0x58 ($82=4bpp -> $83=8bpp), monitor-match bytes at
+  0x59/0x5A, slot-PRAM record at 0x81. Full persistence + the slot-220
+  save-req stall (landmine #2) remain FUTURE work.
+- ~~debug menu~~ REMOVED buildBA (interact 104/105 + RTL).
+- ~~display modes~~ ADDED buildBA (video.json 0x10/0x20/0x30/0x40).
+- ROM patch (forced-warm POST skip): RECOMMENDED AGAINST (breaks true
+  cold boots — see mac_lc_pocket.sv:1944 retirement note); safe
+  POST-shortening variant = future research if wanted.
+- per-key input remapping: future feature build (interact-driven
+  keycode table into pocket_input).
+dist = buildBC (floppy fix + UI cleanup + display modes + color PRAM);
+card carries buildAZ until the next trip. Attribution on the next card
+boot: color at desktop = seed; floppy mount = envelope fix; menu/display
+modes = UI batch; games regressing = suspect the batch, bisect via git.
 
 (2026-08-14b header below: mystery B narrowed to ONE HASH; 256K VRAM SIMM shipped)
 
