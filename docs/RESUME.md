@@ -1,9 +1,16 @@
-# RESUME — MacLC Pocket (2026-08-14: autonomy unblocked, mystery B traced to a wild QuickDraw blit)
+# RESUME — MacLC Pocket (2026-08-14: mystery B = wild QuickDraw blit; next up = the VRAM/geometry seam)
 
-Paste into a fresh session: **"Resume docs/RESUME.md — continue the boot
-hunt."** boot_problems.md ★★★ sections carry deep history; this file is
-current state. The 08-13 RESUME body below (§2 down) is retained as the
-ops crib; §0–§1 are rewritten for 08-14.
+Paste into a fresh session: **"Resume docs/RESUME.md — pick up §1.5: is the
+games-disk QuickDraw crash caused by the Pocket's changed VRAM/screen
+geometry?"** boot_problems.md ★★★ sections carry deep history; this file
+is current state. The 08-13 RESUME body below (§2 down) is the ops crib;
+§0–§1.5 are 08-14.
+
+★ USER DIRECTIVE for next session: focus on the QuickDraw pieces. We
+changed the VRAM for this core (16bpp@512 → 8bpp@512, and the V8 now
+hardwires ONE screen geometry). Strong hypothesis: the games disk's
+drawing derives a blit destination from the screen/PixMap geometry, and
+the changed geometry makes it overrun into the A5 world. §1.5 is the plan.
 
 ---
 
@@ -59,6 +66,90 @@ it to 310 (pick it in the OSD, or a FRESH CARD BOOT auto-mounts the
 data.json default filename maclc.hda) — then push+jmnt+jboot runs it
 autonomously. jmnt with the right byte size (41992192) still needed so
 the fabric knows the geometry.
+
+## 1.5 ★ NEXT SESSION — THE VRAM / SCREEN-GEOMETRY SEAM (QuickDraw)
+
+Working theory (user's, and it fits the evidence): the games disk's
+drawing derives a destination from the SCREEN/PixMap geometry, and the
+Pocket's changed VRAM+geometry makes a blit overrun into the A5 world
+(jump table at $400E6C) → the deterministic II. The blit dest $400E60 is
+MAIN RAM near A5=$400BFC (an OFFSCREEN buffer in the app heap, most
+likely) — so suspect a rowBytes/height/bounds mismatch overrunning that
+buffer, OR a screen-PixMap field the game reads that the Pocket sets
+differently. ScrnBase=$50F40000 is correct (low 24b = $F40000 = the CPU
+VRAM window); the desktop draws fine, so BASIC geometry works — the game
+does something more geometry-sensitive.
+
+### WHAT ACTUALLY CHANGED (Pocket vs MiSTer 5a75f9b) — diff these first
+- **rtl/vram_bram.sv**: framebuffer DEPTH 196,608 words (384 KB, 16bpp
+  @512x384) → **106,496 words** (192 KB @8bpp + 8K headroom); AW 18→17.
+  The on-chip BRAM mirror is now half-size, 8bpp only.
+- **rtl/maclc_v8_video.sv** (the big one): the `monid_v` monitor-mode
+  CASE (ID 1 = 512x384 on 640-wide timing; ID 2 = 512x384 "alternate",
+  512-wide; ID 6 = VGA 640x480) is REPLACED by a SINGLE HARDWIRED
+  geometry = the old **ID 2**: h_total=640 h_active=**512**, v_total=407
+  v_active=**384**. 16bpp dropped (bits_per_pixel default now 8).
+  words_per_line max 640→256, packed_row_start/fetch_packed_base 18→17b,
+  linebuf 1024→512. So the V8 ALWAYS presents 512x384x≤8.
+- **rtl/addrController_top.v**: VRAM write path packs `packed =
+  line*words_per_line + col` into the smaller BRAM; vram_waddr [17:0]→
+  [16:0]. (Same packing idea both cores; the Pocket's is bounded at 256
+  words_per_line.)
+- **rtl/ariel_ramdac.sv** differs too (256-entry palette = exactly 8bpp)
+  — diff it for the pixel-depth/CLUT path.
+- CLAUDE.md "★ FRAME NUMBER IS RESOLUTION-DEPENDENT": MiSTer ran
+  **monitor ID 6** (640x480); Pocket runs **monitor ID 2** (512x384).
+  THE MONITOR ID THE GUEST SEES CHANGED. That drives what the Sony/QD
+  screen-init writes as ScrnRow (rowBytes), screen bounds, and the
+  GDevice — the most likely origin of a wrong blit geometry.
+
+### THE INVESTIGATION PLAN (in order)
+1. **Read the guest's screen state from a frozen corpse** (frze on at the
+   SysError-wait loop, ramv_dump single-word majority; guest→SDRAM word =
+   $100000 + guestbyte/2 at 10 MB — SIMM base). Characterize what
+   QuickDraw actually built and compare to a correct 512x384x8 screen
+   (rowBytes should be 512; bounds 0,0,384,512; pixelSize 8):
+   - ScrnBase $0824 = $50F40000 (done, correct).
+   - **ScrnRow / screen rowBytes** — low-mem global, and the main
+     GDevice's PixMap.rowBytes. Follow MainDevice ($08A2 is `MainDevice`
+     handle on some ROMs; verify the LC's global) → GDevice → gdPMap
+     (handle) → deref to PixMap: baseAddr(+0), rowBytes(+4, top 2 bits =
+     flags), bounds(+6: top,left,bottom,right), pixelSize(+31... use the
+     Inside-Mac PixMap layout). Handle deref = read handle → master ptr →
+     +offset. Tedious but mechanical over ramv_dump.
+   - The monitor **sense/monid** the guest latched (what mode it thinks
+     it has). If the game or its saved 'scrn'/depth expects a different
+     mode, drawing math goes wrong.
+2. **Find the blit's live destination geometry.** New instrument (one
+   build): freeze the CAPTURE (works) at a PC-match on the blit
+   dispatcher $A2CC32 (or the blit loop head), and snapshot the CPU
+   registers feeding it — the dest baseAddr (A-reg used as `(a5)+` in the
+   loop is the CPU A5 register loaded by QD, NOT the framework A5) and
+   rowBytes/width/height. TG68K registers aren't probe-exposed, so
+   capture the effective addresses instead: the FIRST and LAST write
+   addresses of the blit run (WW40 already shows it lands in $400E6x) plus
+   last_data_addr at setup. Compare the run's span/stride to the
+   offscreen buffer's real size.
+   ⚠ MACHINE-FREEZE IS BROKEN (§4.0) — use capture-freeze + the
+   SysError-wait `frze on` for corpses; do NOT rely on iiop mfreeze/JMEM.
+3. **MiSTer A/B (user has the working core).** Does
+   Mac68KColorGames_v1.hda boot on MiSTer? If YES → Pocket regression,
+   and the delta is the geometry above; read the SAME screen globals on
+   MiSTer (via its HPS/MAME tap, docs/mame_compare.md) and diff. If it
+   also fails on MiSTer/real LC → image incompat, pivot to mystery A.
+4. **If it's geometry:** the fix is making the V8's reported monitor
+   ID / screen bounds / rowBytes match what a real LC at the games disk's
+   expected depth presents — or honoring the depth the game sets. Do the
+   video-budget arithmetic in docs/PORT_STATUS.md before touching bpp.
+
+### FAST START for next session
+- `git -C ../MacLC_MiSTer show 5a75f9b:rtl/maclc_v8_video.sv | diff` (and
+  vram_bram.sv, ariel_ramdac.sv, addrController_top.v) — read the deltas.
+- Reproduce: push buildAV (or a fresh build) → romc_poll → romv →
+  `jmnt.tcl 310 786473472` → `jboot` → within ~20 s it faults; the ROM
+  SysError bomb parks in a WaitMouseButton loop at ROM A02A3x, so
+  `frze.tcl on` there = a stable fault-time corpse to read.
+- Then walk the screen PixMap (plan step 1).
 
 Full detail: scratch/2026-08-14-autonomous-session.md.
 
