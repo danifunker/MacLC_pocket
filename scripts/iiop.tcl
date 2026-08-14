@@ -62,4 +62,18 @@ foreach {nm lo} {any0 160 any1 202} {
     set bs   [bits $raw [expr {$lo+40}] [expr {$lo+41}]]
     puts [format "  %s: busstate=%d addr=%06X data=%04X   (upper=newer; bs 0=fetch 2=read 3=write)" $nm $bs $addr $data]
 }
+if {[info exists idx(IIO2)]} {
+    set raw2 [read_probe_data -instance_index $idx(IIO2) -value_in_hex]
+    regsub {^0x} $raw2 {} raw2
+    while {[string length $raw2] < 26} { set raw2 "0$raw2" }
+    # LSB first: fe_last[23:0], fe_prev[23:0], fe_cnt[7:0], ah0, ah1, fh0..fh3
+    set lastD [bits $raw2 0 15];  set lastA [bits $raw2 16 23]
+    set prevD [bits $raw2 24 39]; set prevA [bits $raw2 40 47]
+    set cnt   [bits $raw2 48 55]
+    set ah0   [bits $raw2 56 63]; set ah1 [bits $raw2 64 71]
+    puts [format "  PDS probe: %d slot-space cycles; prev a\[8:1\]=%02X data=%04X, last a\[8:1\]=%02X data=%04X (kernel view; expect FFFF)" \
+        $cnt $prevA $prevD $lastA $lastD]
+    puts [format "  addr TOP BYTES: any0_hi=%02X any1_hi=%02X  fetch_hi(slot0..3)=%02X %02X %02X %02X" \
+        $ah0 $ah1 [bits $raw2 72 79] [bits $raw2 80 87] [bits $raw2 88 95] [bits $raw2 96 103]]
+}
 end_insystem_source_probe

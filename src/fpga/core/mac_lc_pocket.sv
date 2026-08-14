@@ -884,6 +884,11 @@ module mac_lc_pocket
 	//   [247]     frozen
 	reg [39:0] iiop_f [0:3];
 	reg [41:0] iiop_a [0:1];
+	// ★ buildAT side-car: the TOP address byte (tg68_a[31:24]) of each ring
+	// slot, exposed via IIO2 — a phantom-card fault jumps/fetches in
+	// $FExxxxxx space, whose low 24 bits alias low RAM in the main rings.
+	reg  [7:0] iiop_fh [0:3];
+	reg  [7:0] iiop_ah [0:1];
 	reg  [1:0] iiop_fw = 2'd0;
 	reg        iiop_az = 1'b0;
 	reg        iiop_frozen = 1'b0;
@@ -898,24 +903,56 @@ module mac_lc_pocket
 		end else if (!iiop_frozen) begin
 			// completed FETCH cycle (same qualification as the PCRB tap)
 			if (!prev_as_n && tg68_as_n && prev_busstate == 2'b00) begin
-				iiop_f[iiop_fw] <= {fetch_addr_latch[23:0], dataControllerDataOut};
+				iiop_f[iiop_fw]  <= {fetch_addr_latch[23:0], cpu_din_muxed};
+				iiop_fh[iiop_fw] <= fetch_addr_latch[31:24];
 				iiop_fw <= iiop_fw + 2'd1;
 			end
 			// completed cycle of ANY busstate (fetch or data)
 			if (!prev_as_n && tg68_as_n) begin
-				iiop_a[iiop_az] <= {prev_busstate, tg68_a[23:0], dataControllerDataOut};
+				iiop_a[iiop_az]  <= {prev_busstate, tg68_a[23:0], cpu_din_muxed};
+				iiop_ah[iiop_az] <= tg68_a[31:24];
 				iiop_az <= ~iiop_az;
-				// the vector-4 dispatch: a completing DATA READ at $10 (or $12,
-				// the low word of the vector on the 16-bit bus)
-				if (prev_busstate == 2'b10 && tg68_a[23:2] == 22'd4)
+				// the vector-4 dispatch: a completing DATA READ at $00000010/$12.
+				// ★ buildAT: qualify the FULL 32-bit address — the buildAS
+				// [23:2] match also fired on the PDS probe's $FE000010 read
+				// (24-bit alias of $10), freezing the capture pre-fault.
+				if (prev_busstate == 2'b10 && tg68_a[31:2] == 30'd4)
 					iiop_frozen <= 1'b1;
 			end
 		end
 	end
 	// NOTE tg68_a during AS-rise still holds the cycle's address; busstate is
-	// registered (prev_busstate) to match. dataControllerDataOut is the read
-	// mux the CPU consumed (cpu_din_muxed differs only on VPA reads, which
-	// never target RAM $10).
+	// registered (prev_busstate) to match. cpu_din_muxed is what the KERNEL
+	// consumed (slot_space reads = $FFFF, VPA reads = the registered value) —
+	// buildAS stored dataControllerDataOut and read the leaked 24-bit-aliased
+	// mux value on slot-space cycles instead.
+
+	// ★ buildAT IIO2: PDS-probe witness. Counts completed slot_space cycles
+	// and keeps the last two {addr[7:0], kernel data[15:0]} — proves what the
+	// ROM's $FE-space card probe ($A4BEB0 family) actually read. Cleared on
+	// the same IIOP re-arm edge.
+	reg  [7:0] fe_cnt = 8'd0;
+	reg [23:0] fe_last = 24'd0, fe_prev = 24'd0;
+	always @(posedge clk_sys) begin
+		if (iiop_rearm != iiop_rearm_d) begin
+			fe_cnt  <= 8'd0;
+			fe_last <= 24'd0;
+			fe_prev <= 24'd0;
+		end else if (!prev_as_n && tg68_as_n && slot_space) begin
+			fe_cnt  <= fe_cnt + 8'd1;
+			fe_prev <= fe_last;
+			fe_last <= {tg68_a[8:1], cpu_din_muxed};
+		end
+	end
+	// Layout (LSB first): fe_last[23:0], fe_prev[23:0], fe_cnt[7:0],
+	// ah0, ah1, fh0..fh3 (top address bytes of the IIOP ring slots).
+	altsource_probe #(
+		.instance_id ("IIO2"), .probe_width (104), .source_width (1),
+		.sld_auto_instance_index ("YES")
+	) cp_iio2 (.probe({iiop_fh[3], iiop_fh[2], iiop_fh[1], iiop_fh[0],
+	                   iiop_ah[1], iiop_ah[0],
+	                   fe_cnt, fe_prev, fe_last}),
+	           .source(), .source_clk(clk_sys), .source_ena(1'b1));
 	altsource_probe #(
 		.instance_id ("IIOP"), .probe_width (248), .source_width (1),
 		.sld_auto_instance_index ("YES")
