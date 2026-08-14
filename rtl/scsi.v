@@ -3168,6 +3168,30 @@ always @(posedge clock) begin
 				pf_c_addr <= pf_c_tgt;
 				pf_d_addr <= pf_d_tgt;
 				pf_valid  <= 1'b1;
+			end else begin
+				/* ★ 2026-08-14: a discarded fetch MUST invalidate explicitly.
+				 * Simply not publishing pf_c_addr/pf_d_addr is only a discard
+				 * when pf_valid was already 0.  If an EARLIER fetch had already
+				 * published these same addresses, pf_valid is still 1 and the
+				 * addresses still compare equal, so pf_stale stays false and no
+				 * refetch is ever launched — the stale q_c/q_d just captured
+				 * above are published as valid FOREVER.
+				 *
+				 * Reachable on every sequential HPS fill: the fill writes
+				 * address N (snoop -> refetch of the SAME addresses), and while
+				 * that refetch is in PF_RDC the fill writes N+1 == pf_d_tgt.
+				 * The port-B read issued that cycle collides with the port-A
+				 * write and no_rw_check M10K returns OLD data, so q_d captures
+				 * the pre-write byte and is then blessed as valid.
+				 *
+				 * Symptom: one 16-bit word of a sector serves as its pre-fill
+				 * content (0 on a virgin ring slot) ONLY on the odd-byte-offset
+				 * pseudo-DMA path, which is the only consumer of q_d
+				 * (din_pair_next = {buffer1_dout_next, buffer0_dout_next2}).
+				 * That silently corrupted one word of a code resource and killed
+				 * the System 7.1 boot — see docs/mystery_b_root_cause.md.
+				 */
+				pf_valid <= 1'b0;
 			end
 			// A hit before/at this edge forced the discard above; the refetch
 			// it triggers will read post-write data, so the flag is consumed.
