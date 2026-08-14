@@ -1,121 +1,125 @@
-# RESUME — MacLC Pocket (2026-08-13 evening: data path EXONERATED, the crash is IN CODE; PCRB names it)
+# RESUME — MacLC Pocket (2026-08-13 end-of-day: two ships fixed, one deception unmasked, two mysteries armed)
 
-Paste into a fresh session: **"Resume docs/RESUME.md — continue the SCSI boot
-crash hunt."** boot_problems.md ★★★ sections carry the history; this file is
-current state.
+Paste into a fresh session: **"Resume docs/RESUME.md — continue the boot
+hunt."** boot_problems.md ★★★ sections carry deep history; this file is
+current state. Yesterday's RESUME (git `8cc9782`) keeps the ops crib.
 
 ---
 
-## 0. WHERE THE HUNT STANDS — THE CRASH IS AN EGRET STALL, NOT SCSI
+## 0. ★ READ FIRST — THE MEMORY-REGISTER DECEPTION (found at day's end)
 
-**The +59 "SCSI crash" is the System's first PRAM write (startup-device
-entry) STALLING mid-Egret-transaction.** The "+59" is merely how much disk
-I/O precedes it. The "PRAM poisoning" of the last two days was never a
-side effect — the half-completed write IS the crash. Chain of proof:
+`opt_mem_size` (core_top.sv:381, RTL default 0 = **2 MB**) is written by
+the OS only at core launch or when the menu VALUE CHANGES. **A JTAG fabric
+push resets it to 2 MB and the OS never rewrites it** — the menu keeps
+showing the persisted "10 MB" while the machine boots 2 MB. Every crash
+round measured on 08-12/08-13 (all JTAG-push sessions) ran at effective
+2 MB with the menu claiming otherwise.
 
-- Every SCSI data face measured byte-perfect (card, blockdev face, target
-  face, CPU receipt via SDCP full-burst: LBA 64, 512/512).
-- K=384 PC window (PCRB): the masked-interrupt ioResult wait at ROM
-  A14872, hand-pumping VIA1's SR (A148D8 cluster writes VIA1+$1400 = SR)
-  — an Egret transaction being fed byte by byte.
-- K=511 window: post-give-up wander ADB machinery — the abandonment is
-  inside the ~2000 instructions between.
-- **buildAL2 EGS1 snapshot at the death window: SR=$01 loaded, shift-OUT
-  active, bit counter parked at 7 (ZERO bits shifted), CB1 idle high, no
-  edge pending, HC05 running.** The Mac waits; the Egret never clocks the
-  byte out. Mid-packet (earlier bytes pumped fine).
-- Why MiSTer never saw it: its us-scale serving completed the async I/O
-  before the wait loop ever needed the completion path; Pocket ms-scale
-  serving makes the wait real and the Egret transaction runs under
-  masked-interrupt hand-pumped pacing for the first time.
+**After EVERY JTAG push:** Core Settings → Memory → flip to 2 MB → back
+to 10 MB (a re-select of the same value does NOT write) → Reset & Apply.
+(Or fix it properly: see LANDMINES #1.)
 
-**State of the conviction (three refinements deep):** buildAM's windowed
-counters killed the frozen-handshake theory — 12-27 CB1 falls in the
-death-window samples, every edge consumed. buildAN's HC05-PC tap caught
-the firmware MID-BIT in its unrolled byte-receive loop ($1503, healthy)
-~0.5 ms after the last delivery. The transaction is ALIVE at every
-delivery-anchored window depth; the give-up comes SECONDS later — a
-LIVELOCK or late failure, not a stall. buildAO added a PC-match trigger
-(source[23:0]); buildAP chains it two-stage (the +59 delivery trigger
-STAGES the match, so the first fetch of A14882 — the generic async-wait
-exit — after the final delivery is the PRAM wait's OWN exit). Capture at
-that exit = the last 64 PCs before the give-up + EGS1/EGS3 (Egret SR +
-HC05 PC) + PSN (SCSI bus) at that instant. That names the terminal
-mechanism: retry-livelock vs late handshake failure vs outer timeout.
+## 1. THE TWO OPEN MYSTERIES
 
-Also measured today (all in boot_problems/CLAUDE-adjacent comments):
-write-path double-shift fixed & proven; ISO CD at ID 3 shipped (its
-transient-wedge theory is UNCONVICTED — CDPH exists to check);
-BootMask explains the wander (no PRAM); repeat mounts invisible;
-seed-7 had a clk_sys hold violation at buildAL — seed 2 now.
+**A. Does maclc.hda boot to the Finder at TRUE 10 MB?** — THE highest-value
+single observation, still UNTESTED at session end (the games disk got the
+first true-10MB round). If YES: the deterministic "+59 crash" closes as
+"System 6.0.8 + heavy extensions failing CLEANLY in 2 MB" (fits every
+measurement: all I/O byte-perfect, boot code gives up on purpose via
+BadDisk→BootMe, deterministic, latency-independent, MiSTer-passing).
+If NO: the buildAQ trail capture (§3) decides — with memory eliminated.
 
-## 1. NEXT ACTION — run buildAM's fork-decider, then fix
+**B. The games disk (Mac68KColorGames_v1.hda) dies "Illegal instruction"
+after "Welcome to Macintosh" AT TRUE 10 MB** (user-confirmed at day's
+end). This is PAST where maclc.hda ever got. Suspects: a TG68K 68020 gap
+(docs/tg68kmissing.md is the repo's own list — bitfields etc. exercised
+by that image's System/INITs), or a genuine extension fault. Trace plan
+in §3 — the toolkit does this in one capture.
 
-1. buildAM (window-scoped EGS2) was compiling at session end — verify STA
-   CLEAN (the seed lesson), archive, push, mount.
-2. Canonical capture: `frze off` -> `frze trig +59` -> `pcrb arm 384` ->
-   `jboot` -> poll frozen -> `read_bdst` (EGS1/EGS2 lines).
-3. Fork: cb1_falls==0 -> instrument/inspect egret_wrapper + HC05 firmware
-   state at the stall (is the HC05 stuck in ADB autopoll? did it miss the
-   Mac's TIP/BYTEACK transition?). cb1_falls>0 -> via6522 SR shift-out
-   edge path (ext_fall_edge_pending) — fix per CLAUDE.md guidance
-   (rate-limit CB1 in egret_wrapper preferred over touching the SR).
-4. After the fix build: full boot expected — System 6.0.8 to Finder. Then
-   the write round-trip acceptance (card diff vs zip), the CD smoke test
-   (image already carries the Apple CD-ROM extension), and buildAB-class
-   release packaging.
+## 2. WHAT SHIPPED TODAY (all committed; dist = buildAB)
 
-## 2. THE INSTRUMENT SUITE (buildAF carries everything)
+- **Write path FIXED, two root causes, on-card proof**: C_FILL off-by-one
+  (apf_blockdev sampled sd_buff_din a cycle early) + bridge readback lag
+  (OS pairs bulk-read responses with the PREVIOUS transaction; serve
+  wrbuf[widx-1] compensates). Proof: 3,846 corrupt sectors diffed on the
+  card, MDB fingerprint matched the composed transform; maclc.hda
+  RESTORED from the user's zip and re-verified. boot_problems ★★★.
+- **ISO CD-ROM at SCSI ID 3** (buildAB, in dist): scsi.v CDROM target +
+  rtl/cd_toc_stub.sv (single-data-track TOC, cd_audio's no-blob fallback
+  byte-for-byte). Slot 320, maclc.iso auto-mounts; the 6.0.8 image
+  already carries the Apple CD-ROM extension. CDA1/CDPH probes.
+  HW status: answers the ROM scan politely every round; disc mount
+  untested (needs a maclc.iso on card).
+- **16 KB read-ahead confirmed** already present (RING_LOG=5 per disk).
+- **Red herrings buried with measurements**: every SCSI data face
+  byte-perfect (incl. SDCP full-burst 512/512); the Egret PRAM-write
+  transaction healthy mid-flight (EGS1/EGS3: HC05 caught mid-bit in its
+  receive loop); "PRAM-poisoning" was BootMask/eject semantics — the ROM
+  boot-search giving up on purpose; scsi_irq tie-off CORRECT per MAME;
+  repeat OSD mounts are invisible to the guest (only 0→1 registers).
+- **Seed 2** (seed-7 buildAL had a -33 ps clk_sys fast-hold; qsf tail
+  also repaired — a newline-less stray SEED 7 line was eating appends).
+
+## 3. THE INSTRUMENT SUITE (buildAQ = pushed fabric; scratch/builds has all)
 
 | lever/probe | what | script |
 |---|---|---|
-| FRZE | manual freeze + auto-freeze at ABSOLUTE delivery count (8-bit, wraps — mind thresholds; drain quantizes to command boundaries) | `scripts/frze.tcl` on/off/arm N/arm +K/cycle |
-| PCRB/PCRS | last-64-PCs ring, freezes on machine reset | `scripts/pcrb.tcl` [arm] |
-| SDCP | full last pseudo-DMA burst (512 beats) | `scripts/sdcp.tcl`; identify with `scratch/evidence/burst_id.py` |
-| ROMV v4 | arbitrary-SDRAM-range sums/peeks (machine resets per scan unless FRZE holds it) | `scripts/ramv_sum.tcl`, `ramv_dump.tcl`, `ramv_sweep.tcl`, `romv.tcl` (refs still valid) |
-| BDST/BDW0/BDLB/BDWR/BDWW/CDA1/SDW0/SDCT/SCS1/SCS2 | serving/write/CD/burst deck | `scripts/read_bdst.tcl` |
+| FRZE | manual freeze / auto at ABSOLUTE dlv count / `trig` = fire-only (stages PCRB) | `frze.tcl` on/off/arm/trig/cycle |
+| PCRB/PCRS | 64-PC ring; triggers: delivery (via trig) or **PC-match** (source[23:0], two-stage: the delivery trigger stages it); K countdown ×16 writes; **spin-filtered** (A07840-7F, A14870-83 suppressed → the ring spans the whole death corridor as a call trail) | `pcrb.tcl arm <K> [matchPC]` / dump |
+| EGS1/EGS2/EGS3 | Egret SR+handshake snapshot at freeze / windowed CB1-BYTEACK-TIP counters / HC05 PC at freeze | `read_bdst.tcl` |
+| PSN1/PSN2 | SCSI bus + per-target snapshot at freeze | same |
+| SDCP | full last pseudo-DMA burst (512 beats) | `sdcp.tcl` + `scratch/evidence/burst_id.py` |
+| ROMV v4 | arbitrary-SDRAM sums/peeks/dumps (machine resets per scan unless FRZE holds) | `ramv_sum/ramv_dump/ramv_sweep/romv.tcl` |
+| BDST/BDW0/BDLB/BDWR/BDWW/CDA1/CDPH/SDW0/SDCT/SCS1/SCS2 | serving/write/CD/burst deck | `read_bdst.tcl` |
 
-★ ROMV scans RELEASE the machine after each trigger — RAM dumps of a dead
-machine REQUIRE `frze.tcl on` first or the reboot marches over the corpse
-(measured: DB6D:B6DB pattern mid-dump).
-★ The offline side lives in `scratch/evidence/` (gitignored, regenerable):
-master image + HFS map (System rsrc fork abs LBA 2075+, catalog 749+,
-Driver43 64..95), `system_ref.txt`, `burst_id.py`.
+**Canonical capture** (buildAP+ semantics): `frze off` → `frze trig +59`
+→ `pcrb arm <K> [matchPC]` → `jboot` → poll `pcrb` frozen → `read_bdst`
++ `pcrb` dump. The delivery trigger STAGES the PC-match when both armed
+(the first match fetch after the round's last delivery fires). Byte-mode
+PDMA duplicates each byte on both bus halves (5050 4D4D for 'PM' is
+CORRECT, not corruption). ROM PC → disasm line = 40800000 + (pc & 7FFFF)
+in docs/MacLC_ROM_disasm.txt; HC05 PCs → rtl/egret/egret_rom_disasm.md.
 
-## 3. BUILD/RELEASE STATE
+**Illegal-instruction trace plan (mystery B), zero new builds:**
+1. Boot the games disk at true 10 MB, let the dialog appear, `frze on`
+   (manual freeze — RAM and vectors intact).
+2. `ramv_dump 8 2` → RAM words 8-9 = the LONG at byte address $10 = the
+   Illegal Instruction vector target (a RAM address once the System owns
+   vectors).
+3. `frze off`; re-run the round with `pcrb arm 0 <that PC>` staged
+   (`frze trig +N`, N picked from BDLB near the round's end — games-disk
+   rounds deliver far more than 59) → the ring freezes ON the handler
+   entry holding the 64 spin-filtered PCs BEFORE the fault = the faulting
+   code and its callers. Cross-check against docs/tg68kmissing.md before
+   suspecting the image.
 
-- dist/ (SD card release) = **buildAB** (write fixes + BDWR/BDWW + ISO
-  CD-ROM at ID 3 + 16KB-read-ahead-confirmed). The card carries it + the
-  restored maclc.hda + data.json with CD slot 320 (`maclc.iso`
-  auto-mounts; the image's System Folder already has the Apple CD-ROM
-  extension).
-- JTAG-only instrument builds: AC (ROMV v4) → AD (FRZE) → AE (SDCP) →
-  AF (PCRB). All archived in scratch/builds/, all STA-clean, ~83% ALMs.
-- Ops crib (push/mount/jboot/JTAG traps): unchanged, boot_problems §8 +
-  the 08-12 RESUME at git 8cc9782.
+## 4. LANDMINES / CLEANUPS (each small; none block the mysteries)
 
-## 4. APPENDIX — the MiSTer comparison (settled 2026-08-13)
+1. **opt_mem_size JTAG-push reset** (§0). Honest fix: RTL default → 1
+   (10 MB); 2 MB stays selectable for diagnostics.
+2. **pram_save_req fires at a NONEXISTENT slot 220** on every guest PRAM
+   write (dirty-tracking → apf_blockdev save → OS error/timeout wedges
+   the shared sequencer ~450 ms, stalling SCSI serving exactly when the
+   System writes PRAM). Disarm the save-req until PRAM persistence
+   returns, or re-add slot 220 to data.json and re-arm the path.
+3. FRZE/BDLB delivery counters are 8-bit and wrap — mind thresholds
+   (frze.tcl's +K handles it; absolute arms near 255 do not).
+4. tb_blockdev.v needs a write-path test + the post-buildAA endian
+   expectation fix (bench stale on both).
+5. CD transient-wedge theory: UNCONVICTED (CDPH read idle at every
+   sample). Keep CDPH in view during any flaky-round session.
+6. verilator/sim.v remains broken (pre-existing); dataController port
+   additions were kept in sync (cd_* tied off, dbg outputs omitted).
 
-The user's hint "compare the SCSI from the mister maclc core" is DONE:
-- `rtl/scsi.v` / `rtl/ncr5380.sv` / `rtl/dataController_top.sv` are
-  byte-identical to `../MacLC_MiSTer` @ 5a75f9b except the documented cuts
-  (CD/Toolbox/2nd-floppy) — now partially restored (CD, ISO-only).
-- The ONLY divergence surface is `src/fpga/core/apf_blockdev.v` (Pocket-only;
-  replaces the HPS). Audit of it against scsi.v's HPS-face contract found:
-  1. the C_FILL off-by-one (FIXED — see §0);
-  2. the C_IDLE arbiter acked BOTH slots on simultaneous requests (FIXED —
-     one-hot ack; was unobservable with one disk, structural with three);
-  3. the read path, ack envelope, ring-refill handshake are CORRECT — the
-     serving contract (io_rd cleared on ack rise, rd_hps_blk on ack fall,
-     one fetch per envelope) is satisfied; same clk domain, no races found.
-- The read ring: RING_LOG=5 → 16KB/disk target, MiSTer-identical. CD ring
-  RING_LOG=3 → 4KB (M10K budget; CD is never the boot device).
+## 5. WORKING AGREEMENTS (unchanged, plus today's lesson)
 
-## 5. WORKING AGREEMENTS
-
-Unchanged (one variable per shipped build — buildAB is a documented
-exception; archive every .sof; controls before conclusions; the screen is
-the final oracle; MiSTer @ 5a75f9b is ground truth). The user (Dani
-Sarfati, they/them, danifunker) wants: System 6.0.8 to the Finder from
-maclc.hda, CD-ROM mounting from maclc.iso, then floppy validation, Egret
-later.
+One behavioral variable per SHIPPED build (instrument builds may stack
+passive probes); archive every .sof (scratch/builds/ has the full A→AQ
+chain); controls before conclusions — this session's four exonerations
+(SCSI data, Egret handshake, PRAM-poisoning, IRQ tie-off) each died to a
+measurement, not an argument; the screen is the final oracle and the
+user narrates it. MiSTer @ 5a75f9b remains ground truth for Mac
+behavior — but the Pocket's ms-scale serving and JTAG-push workflow
+create conditions MiSTer never sees: async windows that become real,
+and fabric registers that silently reset behind a menu that says
+otherwise. When a setting matters, verify it AT THE FABRIC.

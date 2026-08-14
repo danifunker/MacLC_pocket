@@ -860,3 +860,53 @@ byte-identical (2026-08-13). Every pre-fix build corrupts it again at the
 first System boot attempt, so do not boot old .sofs against a card image
 you care about. `Mac68KColorGames_v1.hda` was not checked (no master here)
 — if it was ever attached during a crash round, re-image it too.
+
+---
+
+## ★★★ 2026-08-13 (day 2) — THE INSTRUMENTED SIEGE: four exonerations,
+## the memory-register deception, and the toolkit that outlived them all
+
+Continuation of the +59 hunt with a fabric-instrument arc (builds AC→AQ,
+all JTAG-only, all archived). Full detail in the day's commits; the
+load-bearing results:
+
+**Exonerated by measurement (do not re-suspect):**
+1. SCSI data: byte-perfect at all four faces — card (BDW0 vs master),
+   target face, CPU receipt (SDCP full-burst 512/512 on the re-read
+   driver sector). The System-phase reads/writes were never corrupt
+   post-buildAB.
+2. The Egret PRAM-write transaction: caught ALIVE mid-bit (EGS1 SR
+   snapshots + EGS3 HC05 PC $1501/1503 = inside the firmware's unrolled
+   byte-receive loop) at every sampled depth. The "PRAM poisoning" story
+   was BootMask/eject semantics: the boot-fail path DISABLES the device
+   and the search loop never re-tries it (the wander); any machine reset
+   revives it. No PRAM involvement — the user called it.
+3. scsi_irq→pseudovia: the tie-off matches MAME LC ground truth; System
+   6 immune per MiSTer's own reversal history (MacLC.sv:1184-1205).
+4. The CD target at ID 3: polite through every observed round (CDA1
+   sense counters; CDPH live-idle at every sample).
+
+**The deception:** every 08-12/08-13 crash round ran at EFFECTIVE 2 MB.
+opt_mem_size defaults to 0 (2 MB) and JTAG fabric pushes reset it; the
+OS only writes it at launch or on a menu CHANGE, so the menu displayed
+the persisted "10 MB" over a 2 MB fabric all along. Discovered when the
+games disk (first true-10MB round after a manual toggle-dance) sailed
+past the +59 point to "Welcome to Macintosh" (then died Illegal
+instruction — its own §RESUME mystery B). Whether true-10MB cures
+maclc.hda's +59 is THE open test (RESUME mystery A).
+
+**The toolkit built (permanent, buildAQ carries all):** ROMV v4
+(arbitrary-SDRAM oracle), FRZE (freeze/trigger at delivery counts),
+PCRB (64-PC ring: delivery + PC-match two-stage triggers, K-steerable
+window, spin-loop filtered = death-corridor call trails), SDCP (full
+PDMA burst capture), EGS1/2/3 (Egret SR/handshake/HC05-PC forensics),
+PSN1/2 (bus snapshots at freeze), CDPH, BDWR/BDWW (write witness).
+Plus the capture discipline learned the hard way: arm order vs jboot
+resets, 8-bit counter wrap, byte-mode PDMA duplication reads as
+"doubled bytes", ROMV scans reboot the machine unless FRZE holds it,
+and a probe deck is only as honest as its STA (seed-7's -33 ps clk_sys
+hold caught before it could contaminate a capture).
+
+**Also fixed en route:** the SCSI write path (two root causes, on-card
+proof — see the 08-13 day-1 ★★★ above), the ISO CD-ROM ship (buildAB in
+dist), the C_IDLE one-hot ack, the qsf SEED-line mangling.
