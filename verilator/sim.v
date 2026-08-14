@@ -548,6 +548,7 @@ module emu
 		.words_per_line(v8_words_per_line),
 		.vram_waddr(vram_bram_waddr),
 		.vram_we(vram_bram_we),
+		.vram_force_512k(1'b0),   // sim models the shipping 256K SIMM
 		.memoryOverlayOn(memoryOverlayOn),
 		.overlay_trigger_addr(),  // debug output, unused in sim
 

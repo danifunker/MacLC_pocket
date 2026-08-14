@@ -63,6 +63,7 @@ module addrController_top(
 	input  [10:0] words_per_line, // active words/line (from v8_video) for packing
 	output [16:0] vram_waddr,     // packed BRAM word address for a CPU VRAM write
 	output        vram_we,        // 1-cyc strobe: commit the CPU VRAM write to BRAM
+	input         vram_force_512k, // V256 JTAG lever: restore the 512K-SIMM VRAM (A/B)
 
 	// misc
 	output memoryOverlayOn,
@@ -188,17 +189,40 @@ module addrController_top(
 
 	// VRAM CPU access: CPU $F40000-$FBFFFF → SDRAM word $580000+
 	// Offset from VRAM start = cpuAddr[19:0] - $40000
-	wire [19:0] vram_cpu_offset = cpuAddr[19:0] - 20'h40000;
+	//
+	// POCKET 2026-08-14 (buildAW): the machine now presents a 256K VRAM SIMM,
+	// not 512K. The LC ROM sizes VRAM with a wrap test (ROM $A04BC38): write
+	// '512K' to +$7FFFC, '256K' to +$3FFFC, read +$7FFFC back. A 256K SIMM has
+	// no A18, so the second write clobbers the first and the readback answers
+	// '256K'; the driver sets bit 3 of its config byte and builds the 256K
+	// screen world. WHY: a 512K LC legitimately offers 16bpp@512x384 (it fits),
+	// but this fork cut 16bpp for the M10K budget — a games disk whose 'scrn'
+	// resource asked for it died deterministically at INIT time (boot_problems
+	// 08-14). A 256K LC's own ROM refuses >8bpp, which is exactly the truth of
+	// this hardware. vram_force_512k (JTAG lever V256 in core_top) restores the
+	// old presentation for A/B rounds without a rebuild.
+	wire        vram_256k   = ~vram_force_512k;
+	wire [19:0] vram_off_raw = cpuAddr[19:0] - 20'h40000;
+	// A 256K SIMM leaves A18 unconnected: the upper 256K aliases the lower.
+	wire [19:0] vram_cpu_offset = vram_256k
+	                              ? {vram_off_raw[19], 1'b0, vram_off_raw[17:0]}
+	                              : vram_off_raw;
 	wire [22:0] vram_sdram_word = 23'h580000 + {5'b0, vram_cpu_offset[18:1]};
 
 	// ---- On-chip framebuffer (BRAM) write mirror (Phase 1) ----
-	// The V8 scans 1-8bpp at a fixed 1024-byte (512-word) stride, but only the
-	// first words_per_line words of each line are visible. Pack out the stride gap
-	// (packed = line*words_per_line + col) so the framebuffer holds only visible
-	// pixels. POCKET: words_per_line maxes at 256 (8bpp@512) and the packed space
-	// is 98,304 words, so the address is 17 bits (was 18 for the 16bpp build).
-	wire [9:0]  vram_line = vram_cpu_offset[19:10];   // scanline (stride 1024B)
-	wire [8:0]  vram_colw = vram_cpu_offset[9:1];     // word within the line (0..511)
+	// The V8 is a fixed-stride engine: with a 512K SIMM it scans 1-8bpp at a
+	// 1024-byte (512-word) stride (guest-visible: ScreenRow=1024 at every
+	// depth). 384 lines x 1024 B = 384K can never fit a 256K SIMM, so the 256K
+	// machine's layout is the fixed 512-byte stride — the driver programs
+	// ScreenRow=512 once the wrap test above answers '256K'. Only the first
+	// words_per_line words of each line are visible; pack out the stride gap
+	// (packed = line*words_per_line + col) so the framebuffer holds only
+	// visible pixels. POCKET: words_per_line maxes at 256 (8bpp@512) and the
+	// packed space is 98,304 words, so the address is 17 bits.
+	wire [9:0]  vram_line = vram_256k ? {1'b0, vram_cpu_offset[17:9]}  // 512-B stride
+	                                  : vram_cpu_offset[19:10];        // 1024-B stride
+	wire [8:0]  vram_colw = vram_256k ? {1'b0, vram_cpu_offset[8:1]}
+	                                  : vram_cpu_offset[9:1];
 	wire [18:0] vram_packed = vram_line * words_per_line + {10'd0, vram_colw};
 	wire        vram_col_visible = ({2'b0, vram_colw} < words_per_line);
 	assign vram_waddr = vram_packed[16:0];

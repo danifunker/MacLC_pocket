@@ -677,6 +677,18 @@ localparam [15:0] SLOT_CD   = 16'd320;   // CD-ROM ISO (read-only, ID 3)
         .sld_auto_instance_index ("YES")
     ) cp_jmnt (.probe(jmnt_src[48]), .source(jmnt_src), .source_clk(clk_74a), .source_ena(1'b1));
 
+// ---- V256: VRAM-SIMM-size lever (buildAW) ---------------------------------
+// source[0] = 1 restores the pre-AW 512K VRAM SIMM presentation for A/B
+// rounds; 0 (the post-push default) = 256K SIMM, the shipping behavior.
+// See the wrap-test note in rtl/addrController_top.v. source_clk is clk_sys
+// like FRZE (the consumer's domain) — the clk_74a-sourced 2-bit levers are
+// the ones that failed (RESUME landmine #0).
+    wire [0:0] v256_src;
+    altsource_probe #(
+        .instance_id ("V256"), .probe_width (1), .source_width (1),
+        .sld_auto_instance_index ("YES")
+    ) cp_v256 (.probe(v256_src), .source(v256_src), .source_clk(clk_sys), .source_ena(1'b1));
+
 // ---- JMEM: JTAG memory-size override (buildAS) ----------------------------
 // source[1] = override enable, source[0] = value (0 = 2 MB, 1 = 10 MB).
 // Muxed into cfg_memSize below; sampled by the machine at reset, so pair a
@@ -1322,6 +1334,7 @@ mac_lc_pocket machine (
     // img_size[40:9] to get 512-byte block count.
     .img_size       ( {32'd0, bd_img_size} ),
     .ext_freeze     ( mac_freeze ),
+    .vram_force_512k( v256_src[0] ),
     .ext_trig       ( mac_trig ),
 
     // Simulation observability — unconnected; Quartus strips them.

@@ -119,6 +119,7 @@ module mac_lc_pocket
 	// core_top — manual bit or auto-trigger at a blockdev delivery count).
 	// RAM freezes for the ROMV v4 oracle; SDRAM refresh unaffected.
 	input         ext_freeze,
+	input         vram_force_512k, // V256 lever: restore 512K VRAM SIMM (see addrController_top)
 	// ★ buildAH: trigger-only variant — fires at the delivery count WITHOUT
 	// holding the machine; starts PCRB's post-trigger countdown so the ring
 	// freezes K distinct PCs later, inside the boot code's check-and-decide
@@ -1052,6 +1053,7 @@ module mac_lc_pocket
 		.words_per_line(v8_words_per_line),
 		.vram_waddr(vram_bram_waddr),
 		.vram_we(vram_bram_we),
+		.vram_force_512k(vram_force_512k),
 		.memoryOverlayOn(memoryOverlayOn),
 		.overlay_trigger_addr(),  // debug output, unused in sim
 
