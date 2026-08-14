@@ -919,6 +919,24 @@ module mac_lc_pocket
 	reg [18:0] ww40 [0:3];   // {addr[3:1], data[15:0]}
 	reg  [1:0] ww40_w = 2'd0;
 	reg  [7:0] ww40_cnt = 8'd0;
+	// ★ buildAX WWSP: last 8 completed WRITES to the two pages the 7.1 fault
+	// lives in — $3FF7xx (the live boot-stack band; the Gestalt patch's frame
+	// and the return slot the fatal RTS pops) and $400Exx (BootGlobals + the
+	// boot-blocks image control lands in). Each slot latches the WRITER's PC
+	// (last completed fetch) alongside {page, offset, data} — this is the
+	// instrument that NAMES the agent that overwrites the patch's return slot
+	// (IIOP caught AAAA -> $3FF76E as the machine's last write before the
+	// fatal fetches; MAME 0.264 boots the same image+ROM clean, so the writer
+	// is a Pocket-side divergence). 8 slots because the II's own exception-
+	// frame pushes land in $3FF7xx between the fatal RTS and the vector-4
+	// freeze: they consume 3-4 slots (and pinpoint A7-at-fault); the culprit
+	// writes survive in the older slots. Frozen/re-armed with the IIOP deck.
+	// Slot = {page(1: 0=$3FF7xx 1=$400Exx), off[7:1](7), data[15:0], wpc[23:0]}
+	reg [47:0] wwsp [0:7];
+	reg  [2:0] wwsp_w = 3'd0;
+	reg  [7:0] wwsp_cnt = 8'd0;
+	wire wwsp_hit_stk = (tg68_a[23:8] == 16'h3FF7);
+	wire wwsp_hit_bg  = (tg68_a[23:8] == 16'h400E);
 	always @(posedge clk_sys) begin
 		iiop_rearm_d <= iiop_rearm;
 		// registered machine-freeze (buildAV)
@@ -929,6 +947,8 @@ module mac_lc_pocket
 			iiop_az     <= 1'b0;
 			ww40_w      <= 2'd0;
 			ww40_cnt    <= 8'd0;
+			wwsp_w      <= 3'd0;
+			wwsp_cnt    <= 8'd0;
 		end else if (!iiop_frozen) begin
 			// WW40: completed WRITE cycle (busstate 11) to $400E6x
 			if (!prev_as_n && tg68_as_n && prev_busstate == 2'b11 &&
@@ -936,6 +956,14 @@ module mac_lc_pocket
 				ww40[ww40_w] <= {tg68_a[3:1], cpu_din_muxed};
 				ww40_w   <= ww40_w + 2'd1;
 				ww40_cnt <= ww40_cnt + 8'd1;
+			end
+			// WWSP: completed WRITE cycle to either hot page, with writer PC
+			if (!prev_as_n && tg68_as_n && prev_busstate == 2'b11 &&
+			    (wwsp_hit_stk || wwsp_hit_bg)) begin
+				wwsp[wwsp_w] <= {wwsp_hit_bg, tg68_a[7:1], cpu_din_muxed,
+				                 last_fetch_pc[23:0]};
+				wwsp_w   <= wwsp_w + 3'd1;
+				wwsp_cnt <= wwsp_cnt + 8'd1;
 			end
 			// completed FETCH cycle (same qualification as the PCRB tap)
 			if (!prev_as_n && tg68_as_n && prev_busstate == 2'b00) begin
@@ -997,6 +1025,17 @@ module mac_lc_pocket
 		        iiop_a[~iiop_az], iiop_a[iiop_az],
 		        iiop_f[3], iiop_f[2], iiop_f[1], iiop_f[0]}),
 		.source(iiop_src), .source_clk(clk_sys), .source_ena(1'b1));
+	// ★ buildAX WWSP probe: {wwsp_w[2:0], wwsp_cnt[7:0], wwsp[7]..wwsp[0]}.
+	// Slot = {page(1), off[7:1](7), data[15:0], wpc[23:0]}; page 0 = $3FF7xx,
+	// page 1 = $400Exx. Newest = slot (wwsp_w-1) mod 8; wwsp_cnt = total hits
+	// this arm (wraps). Decoder: scripts/wwsp.tcl.
+	altsource_probe #(
+		.instance_id ("WWSP"), .probe_width (395), .source_width (1),
+		.sld_auto_instance_index ("YES")
+	) cp_wwsp (.probe({wwsp_w, wwsp_cnt, wwsp[7], wwsp[6], wwsp[5], wwsp[4],
+	                   wwsp[3], wwsp[2], wwsp[1], wwsp[0]}),
+	           .source(), .source_clk(clk_sys), .source_ena(1'b1));
+
 	// ★ buildAV WW40 probe: {ww40_w[1:0], ww40_cnt[7:0], ww40[3..0]}.
 	// Each ww40 slot = {addr[3:1] (3b), data[15:0]}. Newest write = slot
 	// (ww40_w-1) mod 4. ww40_cnt = total $400E6x writes seen this arm.
