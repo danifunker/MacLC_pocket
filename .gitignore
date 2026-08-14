@@ -52,3 +52,8 @@ dist/assets/maclc/
 # would be wrong on any other machine. Portable guidance lives in CLAUDE.md
 # and docs/PORT_STATUS.md.
 BUILDING.local.md
+
+# MAME run artifacts (run_mame.sh / patch_scan.lua execute from the repo root)
+cfg/
+nvram/
+snap/

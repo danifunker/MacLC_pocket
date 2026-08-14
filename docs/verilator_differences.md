@@ -12,7 +12,48 @@ CPU-glue or top-level wiring fix must be made in **both** files or sim and FPGA
 silently diverge. (This has bitten us before — e.g. sim once hardwired
 `.berr(1'b0)`, masking the MOVES bus-error fix.)
 
-Last audited: 2026-08-02 (sim MFM floppy detection wired — see below).
+Last audited: 2026-08-14 (harness revived on macOS/Verilator 5.050 and aligned to
+`mac_lc_pocket.sv` — see the next section).
+
+**2026-08-14 — harness revived + aligned to `mac_lc_pocket.sv`.** The port-sync
+breakage listed in `docs/PORT_STATUS.md` (cd_snd_*, dbg_cda*, cdtb_*, cd_io_*,
+tb_lba, dskReadAddrExt) was already gone; what actually blocked the harness was
+three unrelated things, all now fixed:
+
+1. **★ V8 video timing constants were silently zeroed by Verilator 5.x.** The
+   Pocket cut collapsed `maclc_v8_video.sv` to one fixed 512x384 mode, which
+   left `always @(*) begin h_total = 11'd640; ... end` reading NO variables.
+   Verilator 5.x refuses to schedule such a block (`ALWNEVER: 'always @*' will
+   never execute as expression list is empty`) so every timing term stayed 0 —
+   `vsync = (v_count >= 0 && v_count < 0)` is never true, VGA_VS never rose, and
+   the frame counter sat at 0 FOREVER while the guest booted perfectly normally.
+   `--screenshot N` / `--stop-at-frame N` could therefore never fire; the run
+   looked like a hang. Now `localparam`s (Quartus folded both forms to the same
+   constants, so this is sim-only — no FPGA behaviour change), and `-Wno-ALWNEVER`
+   is deliberately NOT in the Makefile so the class fails the build.
+2. **macOS/Apple-Silicon build**: `-I/opt/homebrew/include` + `-llz4` (Verilator
+   5's FST writer needs lz4; the Makefile only knew `/usr/local` and `/opt/local`).
+   Note the `-CFLAGS $(CFLAGS)` on the verilate line is UNQUOTED, so only its
+   first token is ever passed — put new include paths in the quoted `V_DEFINE`
+   `-CFLAGS "..."` string instead. Generated model now builds `OPT_FAST=-O2`.
+3. **`selectUnmapped` was MISSING from sim's `dc0`** (restored in
+   `mac_lc_pocket.sv` on 2026-08-11 but never mirrored here). The port defaulted
+   to constant 0, so `dataController_top.sv:330`'s open-bus case
+   (`selectUnmapped ? 16'hFFFF :`) could never fire and unmapped reads fell
+   through to stale `memoryDataIn`. The boot ROM's RAM-probe XOR test reads that
+   fall-through as "RAM present" — i.e. the sim could size memory DIFFERENTLY
+   from the FPGA. Now connected in both tops.
+
+Sim config now matches the shipping Pocket by default: **10 MB** RAM
+(`configRAMSize = 8'hE4`, `+mem2` for the 2 MB A/B), monitor ID 2, 256K VRAM
+SIMM (`vram_force_512k = 1'b0`), real HC05 Egret. New harness options:
+`--screenshot-every N` (filmstrip), `--screenshot-prefix P` (concurrent runs),
+`--heartbeat N` (progress). Screenshot buffer is 512x384, not the old 640x480.
+`sim.v` also gained the mystery-B traps (VECFETCH / BBEXEC / `+wwsp`).
+
+Verified after the fixes: 2 MB no-disk boot reaches the documented frame-730
+oracle (dither-grey desktop + arrow cursor), and the first `VRAM->BRAM` write
+lands at **F148 with wpl=32**, exactly as CLAUDE.md records.
 
 **2026-08-02 — sim floppy MFM/HD detection un-hardwired (both tops now
 equivalent):** `sim.v` used to pass `.diskMFM(2'b00)/.diskHD(2'b00)` ("MFM path
