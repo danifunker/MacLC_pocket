@@ -357,10 +357,8 @@ always @(*) begin
     // variable to populate the menu, and returning opt_mem_size for every
     // address in the window (as this did) gives the wrong value for all but one.
     32'hF0000000: bridge_rd_data <= {31'd0, opt_mem_size};
-    32'hF0000010: bridge_rd_data <= {29'd0, opt_test_pattern};
-    // Bring-up readout: how far the block device has ever got. Read off the
-    // Core Settings menu -- see apf_blockdev.v dbg_stage.
-    32'hF0000014: bridge_rd_data <= {29'd0, bd_dbg_stage};
+    // (0xF0000010 Video Test Pattern and 0xF0000014 Debug Disk Stage were
+    // bring-up UI, removed 2026-08-14 with the working release.)
     32'hF0xxxxxx: bridge_rd_data <= 32'd0;   // actions read back as 0
     32'hF8xxxxxx: begin
         bridge_rd_data <= cmd_bridge_rd_data;
@@ -390,11 +388,6 @@ reg         opt_mem_size    = 1'b1;   // 0 = 2 MB, 1 = 10 MB
 reg         opt_reset_apply = 1'b0;   // action pulses (clk_74a)
 reg         opt_reset_pram  = 1'b0;
 reg         opt_nmi         = 1'b0;
-// Bring-up witness: [2] = show the video engine's built-in synthetic pattern
-// instead of VRAM, [1:0] = which pattern. Visible whether or not the Mac runs,
-// so it distinguishes "interact writes never arrive" from "they arrive but the
-// machine is stalled and every action looks identical".
-reg  [2:0]  opt_test_pattern = 3'd0;
 
 always @(posedge clk_74a) begin
     // Actions are one-shot: they self-clear once the core side has seen them.
@@ -408,7 +401,6 @@ always @(posedge clk_74a) begin
         32'hF0000004: opt_reset_apply <= bridge_wr_data[0];
         32'hF0000008: opt_reset_pram  <= bridge_wr_data[0];
         32'hF000000C: opt_nmi         <= bridge_wr_data[0];
-        32'hF0000010: opt_test_pattern <= bridge_wr_data[2:0];
         default: ;
         endcase
     end
@@ -1424,16 +1416,6 @@ end
     wire opt_reset_pram_sys  = |pram_hold;
     wire opt_nmi_sys         = |nmi_hold;
 
-// opt_test_pattern is a level, not a pulse, so a plain 2FF synchroniser is
-// right here. A multi-bit crossing can show a transient mixed value for one
-// clk_sys cycle while the user changes the setting; for a test pattern that is
-// cosmetically irrelevant. v8_video re-syncs both fields into clk_pix itself.
-    reg [2:0] tp_s1, tp_s2;
-always @(posedge clk_sys) begin
-    tp_s1 <= opt_test_pattern;
-    tp_s2 <= tp_s1;
-end
-
 // ---------------------------------------------------------------------------
 // APF host reset
 // ---------------------------------------------------------------------------
@@ -1593,7 +1575,9 @@ mac_lc_pocket machine (
     // Same pulse also stays in .reset above: the zeroing takes ~8 us and the
     // reset stretch is ~2 ms, so the Egret is held off until PRAM is clear.
     .pram_reset     ( opt_reset_pram_sys ),
-    .test_pattern   ( tp_s2 )
+    // Bring-up test-pattern UI removed 2026-08-14; the generator in
+    // maclc_v8_video folds away against the constant.
+    .test_pattern   ( 3'd0 )
 );
 
 assign mac_audio = mac_audio_l;        // ASC is mono
