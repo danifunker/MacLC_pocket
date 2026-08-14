@@ -51,8 +51,14 @@ core?** If yes → Pocket-side; diff the video/QuickDraw globals. Next
 on-Pocket instrument: catch the blit's live baseAddr (the GrafPort/BitMap
 the blit loop reads) — one build, freeze at the blit-dispatcher PC-match.
 
-**A (maclc.hda +59) is now testable autonomously** (jmnt 310 41992192 at
-true 10 MB) — not run this session; the games disk took the rounds.
+**A (maclc.hda +59):** NOT run this session. ★ JMNT replays the mount
+EVENT + SIZE only — the SECTORS come from whatever FILE the OS bound to
+slot 310, which is the user's last OSD pick (currently the games disk,
+vol "MacAtrium_Sys"). To test maclc.hda at true 10 MB the user must bind
+it to 310 (pick it in the OSD, or a FRESH CARD BOOT auto-mounts the
+data.json default filename maclc.hda) — then push+jmnt+jboot runs it
+autonomously. jmnt with the right byte size (41992192) still needed so
+the fabric knows the geometry.
 
 Full detail: scratch/2026-08-14-autonomous-session.md.
 
