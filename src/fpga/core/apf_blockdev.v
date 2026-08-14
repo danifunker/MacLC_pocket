@@ -701,6 +701,18 @@ always @(posedge clk_sys) begin
 			if (cidx == SECTOR_WORDS-1) begin
 				// Sector done — advance, or finish the image.
 				if (((flp_sector + 23'd1) << 9) >= flp_total) begin
+					// ★ 2026-08-14: present the ONE-PAST end address as the
+					// download drops. MiSTer's hps_io does exactly this
+					// (`ioctl_addr <= ioctl_addr + 2` in the same cycle it
+					// clears ioctl_download, hps_io.sv:677), and the machine's
+					// media classifier samples dio_addr at the download-end
+					// edge against exact file sizes (dio_addr==409600 etc.,
+					// mac_lc_pocket ~1648). Without the bump the last
+					// presented address is size-2: every image classified as
+					// nothing, dsk_int_ins never rose, and an OSD floppy pick
+					// silently did nothing. The ROM path never exposed this —
+					// rom_loaded doesn't compare the end address.
+					dio_addr     <= flp_byte + 25'd2;
 					flp_busy     <= 1'b0;
 					dio_download <= 1'b0;
 					cstate       <= C_IDLE;
