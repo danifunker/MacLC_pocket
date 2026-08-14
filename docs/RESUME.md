@@ -26,6 +26,42 @@ are SILENT NO-OPS (cost this session two phantom rounds).
 
 Card launches were never affected. The old toggle-dance is obsolete.
 
+## 0.5 ★ 08-14c: AUTO-MOUNT FIXED (buildAY); MYSTERY B IS NOW A BUS ERROR
+
+- **Launch auto-mount SHIPPED + HW-VALIDATED** (buildAY = 69f48c9, on card
+  AND the card-loaded fabric): core_top scans the framework data slot
+  table once after dataslot_allcomplete and synthesizes mounts for slots
+  310/311/320/210 with nonzero size (openFPGA docs: 0x008A is sent only
+  for user re-loads; a deferload slot's launch assignment is table-only).
+  Cold card boot auto-boots maclc.hda with ZERO OSD touches (user-
+  confirmed). AMNT probe in read_bdst.tcl is the witness (HW read:
+  fired=1 armed=1 state=7). JTAG pushes still need JMNT — reconfig wipes
+  the table. Bench: scratch/amnt_bench (ModelSim; the block extracted
+  verbatim, driven through the real core_bridge_cmd + mf_datatable +
+  apf_blockdev; 15 checks incl. one-shot + OSD-pick regression).
+- **Mystery B changed class**: with b389e16 (scsi_dpram prefetch fix) the
+  games-disk death is now a BUS ERROR "after the first extension loads" —
+  at the SAME dlv=+217 as the old II. IIOP did NOT fire at the death
+  (vector 2 dispatches via $8, not $10): the bomb text and the silent
+  IIOP independently confirm the class change. User: the Verilator run
+  (other machine) did not show this — consistent with §1-NEXT's
+  "sim boots clean => suspect Pocket-only glue/serving timing".
+- **★ The machine SELF-RESTARTS after the bomb** (SysError re-fire
+  escalation) — corpses are PERISHABLE. The restart's POST RAM test
+  sweeps RAM with ascending AAAA fills (writer PC A4686E; read/XOR loop
+  at A468D2-D8, fetches 241A/B592), so WWSP/WW40 "AAAA" evidence in any
+  post-restart corpse is POST, not the killer — and IIOP fires
+  SPURIOUSLY on POST's data read of $10. Old frozen-at-II captures stay
+  valid (IIOP freezes on first trigger, which was the true death).
+- Bus-error capture protocol: freeze BEFORE the restart. FRZE's compare
+  is a raw 8-bit >= (landmine #3) — from a high count: release, poll
+  until the counter wraps, then arm ABSOLUTE (scratch/buserr/roundA.sh
+  automates this). Round A freezes late-boot to read the System's
+  vector-2 handler from RAM ($8); Round B stages `frze trig +217` +
+  `pcrb arm 0 <handler>` so the ring freezes at handler entry = the 64
+  pre-fault PCs, then manual `frze on` preserves the format-$A/B bus
+  fault frame (fault address at frame+$10).
+
 ## 1-NEXT ★ USER DIRECTIVE: REPRODUCE MYSTERY B IN VERILATOR
 
 Goal: make the games-disk System 7.1 crash happen inside the Verilator
@@ -140,8 +176,8 @@ serving, SDRAM controller behavior under the 7.1 boot's access pattern)
 — or a shared-RTL bug both FPGA tops exercise but MAME's model doesn't.
 
 **A (maclc.hda +59):** still NOT re-run at true 10 MB. Bind maclc.hda to
-slot 310 (OSD pick — auto-mount does NOT work; fix task spawned), then
-push+jmnt(41992192)+jboot.
+slot 310 (card boot auto-mounts since buildAY; after a JTAG push use
+jmnt), then push+jmnt(41992192)+jboot.
 
 ### Parallel hardware thread (PAUSED mid-compile — resume any time)
 buildAX (WWSP writer-PC watcher, committed 83472dd) was COMPILING at
@@ -178,9 +214,8 @@ touched $400E00-53), unresolved-jump-table (same), 16bpp/'scrn' geometry
 MAME's $D4|config bit).
 
 **A (maclc.hda +59):** still NOT re-run at true 10 MB. Bind maclc.hda to
-slot 310 (OSD pick or fresh card boot — NOTE auto-mount does NOT work,
-the core only mounts on a real OSD dataslot_update; fix task spawned),
-then push+jmnt(41992192)+jboot.
+slot 310 (fresh card boot auto-mounts since buildAY — fixed 08-14c;
+after a JTAG push use jmnt), then push+jmnt(41992192)+jboot.
 
 ## 1.5 SHIPPED THIS SESSION (buildAW, committed; dist/card = buildAV)
 

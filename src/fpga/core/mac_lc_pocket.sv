@@ -907,6 +907,27 @@ module mac_lc_pocket
 	// freeze-the-machine-on-trigger enable (level). With [1] set, the
 	// vector-4 dispatch read freezes the MACHINE (reset-hold, RAM intact),
 	// not just the capture rings.
+	// ---- Instrument switches (buildAZ, 2026-08-14) -------------------------
+	// USE_BOOT_ISSP turns on the FULL probe deck (the historical debug fit).
+	// IIOP/IIO2, WWSP and WW40 predated per-instrument gating and were
+	// unconditional; each now has its own switch so a probe-less build can
+	// re-enable ONE instrument with a single qsf line, e.g.
+	//     set_global_assignment -name VERILOG_MACRO "USE_ISSP_IIOP=1"
+	// while USE_BOOT_ISSP stays off. Lever LOGIC is never guarded — only the
+	// altsource_probe instances — so an absent probe's source ties to 0 and
+	// the machinery constant-folds away.
+`ifdef USE_BOOT_ISSP
+ `ifndef USE_ISSP_IIOP
+  `define USE_ISSP_IIOP
+ `endif
+ `ifndef USE_ISSP_WWSP
+  `define USE_ISSP_WWSP
+ `endif
+ `ifndef USE_ISSP_WW40
+  `define USE_ISSP_WW40
+ `endif
+`endif
+
 	wire [1:0] iiop_src;
 	wire       iiop_rearm = iiop_src[0];
 	reg        iiop_rearm_d = 1'b0;
@@ -1010,6 +1031,7 @@ module mac_lc_pocket
 	end
 	// Layout (LSB first): fe_last[23:0], fe_prev[23:0], fe_cnt[7:0],
 	// ah0, ah1, fh0..fh3 (top address bytes of the IIOP ring slots).
+`ifdef USE_ISSP_IIOP
 	altsource_probe #(
 		.instance_id ("IIO2"), .probe_width (104), .source_width (1),
 		.sld_auto_instance_index ("YES")
@@ -1025,25 +1047,32 @@ module mac_lc_pocket
 		        iiop_a[~iiop_az], iiop_a[iiop_az],
 		        iiop_f[3], iiop_f[2], iiop_f[1], iiop_f[0]}),
 		.source(iiop_src), .source_clk(clk_sys), .source_ena(1'b1));
+`else
+	assign iiop_src = 2'd0;   // probe absent: rearm/mfreeze levers released
+`endif
 	// ★ buildAX WWSP probe: {wwsp_w[2:0], wwsp_cnt[7:0], wwsp[7]..wwsp[0]}.
 	// Slot = {page(1), off[7:1](7), data[15:0], wpc[23:0]}; page 0 = $3FF7xx,
 	// page 1 = $400Exx. Newest = slot (wwsp_w-1) mod 8; wwsp_cnt = total hits
 	// this arm (wraps). Decoder: scripts/wwsp.tcl.
+`ifdef USE_ISSP_WWSP
 	altsource_probe #(
 		.instance_id ("WWSP"), .probe_width (395), .source_width (1),
 		.sld_auto_instance_index ("YES")
 	) cp_wwsp (.probe({wwsp_w, wwsp_cnt, wwsp[7], wwsp[6], wwsp[5], wwsp[4],
 	                   wwsp[3], wwsp[2], wwsp[1], wwsp[0]}),
 	           .source(), .source_clk(clk_sys), .source_ena(1'b1));
+`endif
 
 	// ★ buildAV WW40 probe: {ww40_w[1:0], ww40_cnt[7:0], ww40[3..0]}.
 	// Each ww40 slot = {addr[3:1] (3b), data[15:0]}. Newest write = slot
 	// (ww40_w-1) mod 4. ww40_cnt = total $400E6x writes seen this arm.
+`ifdef USE_ISSP_WW40
 	altsource_probe #(
 		.instance_id ("WW40"), .probe_width (86), .source_width (1),
 		.sld_auto_instance_index ("YES")
 	) cp_ww40 (.probe({ww40_w, ww40_cnt, ww40[3], ww40[2], ww40[1], ww40[0]}),
 	           .source(), .source_clk(clk_sys), .source_ena(1'b1));
+`endif
 
 
 	assign debug_pc = last_fetch_pc;
@@ -2221,6 +2250,44 @@ module mac_lc_pocket
 		cpuAddr[23:0]      // [23:0]
 	};
 
+	// ---- JTAG BOOT STROBE (2026-08-12; hoisted out of the deck buildAZ) ----
+	// Toggling the JBOOT source arms one full machine reset AND forces the
+	// rom_loaded latch — the ROM persists in SDRAM across fabric pushes, so
+	// this boots the machine entirely from the PC, no OSD interaction needed.
+	// The machinery lives OUTSIDE the deck guard because jboot_rst and
+	// jboot_loaded feed the always-on reset/rom_loaded logic (lines ~214/367);
+	// keeping the declarations inside made a probe-less fit fail to
+	// elaborate — never noticed before buildAZ because no probe-less build
+	// had ever been attempted. With the probes absent the sources tie to 0
+	// and all of this constant-folds away.
+	wire       jboot_src;
+	reg        jboot_d      = 1'b0;
+	reg        jboot_loaded = 1'b0;   // ORed into the rom_loaded latch above
+	reg [4:0]  jboot_hold   = 5'd0;   // ≥16 clk8 ticks: reset block samples clk8_en_p
+	wire       jboot_rst    = (jboot_hold != 5'd0);
+	always @(posedge clk_sys) begin
+		jboot_d <= jboot_src;
+		if (jboot_d != jboot_src) begin
+			jboot_loaded <= 1'b1;
+			jboot_hold   <= 5'd31;
+		end else if (clk8_en_p && jboot_hold != 5'd0) begin
+			jboot_hold <= jboot_hold - 5'd1;
+		end
+	end
+	// DIAG source: level (not toggle) — 1 grounds VIA1 PA0 so the ROM enters
+	// the STM diagnostic monitor at the next boot. Combine with JBOO for
+	// STM-on-demand: set DIAG=1, strobe JBOO, converse, set DIAG=0.
+	wire diag_src;
+`ifndef USE_BOOT_ISSP
+	// Probe-less fit: levers permanently released. stm_src/romv_src are
+	// declared at their engines above; without cp_stmc/cp_romv driving them
+	// they would float to GND with a warning — tie them explicitly.
+	assign jboot_src = 1'b0;
+	assign diag_src  = 1'b0;
+	assign stm_src   = 9'd0;
+	assign romv_src  = 32'd0;
+`endif
+
 `ifdef USE_BOOT_ISSP
 	altsource_probe #(
 		.instance_id ("BOOT"), .probe_width (32), .source_width (1),
@@ -2284,33 +2351,11 @@ module mac_lc_pocket
 		.sld_auto_instance_index ("YES")
 	) cp_sccs (.probe(dbg_scc_state), .source(), .source_clk(clk_sys), .source_ena(1'b1));
 
-	// ---- JTAG BOOT STROBE (2026-08-12) ------------------------------------
-	// Toggling the JBOOT source arms one full machine reset AND forces the
-	// rom_loaded latch — the ROM persists in SDRAM across fabric pushes, so
-	// this boots the machine entirely from the PC, no OSD interaction needed.
-	wire       jboot_src;
-	reg        jboot_d      = 1'b0;
-	reg        jboot_loaded = 1'b0;   // ORed into the rom_loaded latch below
-	reg [4:0]  jboot_hold   = 5'd0;   // ≥16 clk8 ticks: reset block samples clk8_en_p
-	wire       jboot_rst    = (jboot_hold != 5'd0);
-	always @(posedge clk_sys) begin
-		jboot_d <= jboot_src;
-		if (jboot_d != jboot_src) begin
-			jboot_loaded <= 1'b1;
-			jboot_hold   <= 5'd31;
-		end else if (clk8_en_p && jboot_hold != 5'd0) begin
-			jboot_hold <= jboot_hold - 5'd1;
-		end
-	end
 	altsource_probe #(
 		.instance_id ("JBOO"), .probe_width (1), .source_width (1),
 		.sld_auto_instance_index ("YES")
 	) cp_jboot (.probe(jboot_rst), .source(jboot_src), .source_clk(clk_sys), .source_ena(1'b1));
 
-	// DIAG source: level (not toggle) — 1 grounds VIA1 PA0 so the ROM enters
-	// the STM diagnostic monitor at the next boot. Combine with JBOO for
-	// STM-on-demand: set DIAG=1, strobe JBOO, converse, set DIAG=0.
-	wire diag_src;
 	altsource_probe #(
 		.instance_id ("DIAG"), .probe_width (1), .source_width (1),
 		.sld_auto_instance_index ("YES")

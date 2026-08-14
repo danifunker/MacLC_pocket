@@ -837,7 +837,20 @@ set_global_assignment -name VERILOG_MACRO "USE_ASC_AUDIO=1"
 # Same convention as MiSTer's USE_DBG_HUD / USE_DBG_PROBES: probes change
 # placement, so re-check the SDRAM slack on any fit that carries them
 # (see mf_pllbase_0002.v for how to measure both directions).
-set_global_assignment -name VERILOG_MACRO "USE_BOOT_ISSP=1"
+#
+# ★ buildAZ (2026-08-14): OFF — first true zero-probe release fit, to rule
+# the JTAG hub + hot levers (FRZE/JMNT/JMEM/V256 are live fabric registers
+# writable over a noisy/yanked cable) out of the nondeterministic late-boot
+# faults. Re-enable the FULL deck by uncommenting the master line below.
+# To re-enable a SINGLE instrument on an otherwise probe-less fit, add its
+# own macro instead (guards in core_top.sv / mac_lc_pocket.sv), any of:
+#   set_global_assignment -name VERILOG_MACRO "USE_ISSP_JMNT=1"
+#   set_global_assignment -name VERILOG_MACRO "USE_ISSP_V256=1"
+#   set_global_assignment -name VERILOG_MACRO "USE_ISSP_JMEM=1"
+#   set_global_assignment -name VERILOG_MACRO "USE_ISSP_IIOP=1"
+#   set_global_assignment -name VERILOG_MACRO "USE_ISSP_WWSP=1"
+#   set_global_assignment -name VERILOG_MACRO "USE_ISSP_WW40=1"
+# set_global_assignment -name VERILOG_MACRO "USE_BOOT_ISSP=1"
 
 # ---------------------------------------------------------------------------
 # SDRAM I/O registers (added 2026-08-10)

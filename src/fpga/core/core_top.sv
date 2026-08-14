@@ -660,6 +660,24 @@ localparam [15:0] SLOT_CD   = 16'd320;   // CD-ROM ISO (read-only, ID 3)
 // sees one clean event. A real bridge update wins the mux; overlap cannot
 // happen in practice (injection exists for pushed fabrics where the OS is
 // silent). Driver: scripts/jmnt.tcl.
+// ---- Instrument switches (buildAZ): the three levers below predated
+// per-instrument gating and were unconditional. Each now has its own switch
+// the master also turns on, so a probe-less build can re-enable ONE lever
+// with a single qsf line (e.g. VERILOG_MACRO "USE_ISSP_JMNT=1"). Only the
+// altsource_probe instances are guarded; lever logic stays and folds away
+// against the tied-off sources. Same note in mac_lc_pocket.sv.
+`ifdef USE_BOOT_ISSP
+ `ifndef USE_ISSP_JMNT
+  `define USE_ISSP_JMNT
+ `endif
+ `ifndef USE_ISSP_V256
+  `define USE_ISSP_V256
+ `endif
+ `ifndef USE_ISSP_JMEM
+  `define USE_ISSP_JMEM
+ `endif
+`endif
+
     wire [48:0] jmnt_src;
     reg         jmnt_fire_d = 1'b0;
     reg  [4:0]  jmnt_hold   = 5'd0;
@@ -824,10 +842,14 @@ localparam [15:0] SLOT_CD   = 16'd320;   // CD-ROM ISO (read-only, ID 3)
     wire [31:0] bd_dsu_size  = dataslot_update ? dataslot_update_size
                              : jmnt_active     ? jmnt_src[31:0]
                                                : amnt_size;
+`ifdef USE_ISSP_JMNT
     altsource_probe #(
         .instance_id ("JMNT"), .probe_width (1), .source_width (49),
         .sld_auto_instance_index ("YES")
     ) cp_jmnt (.probe(jmnt_src[48]), .source(jmnt_src), .source_clk(clk_74a), .source_ena(1'b1));
+`else
+    assign jmnt_src = 49'd0;   // lever absent: no injected mounts, ever
+`endif
 
 // ---- V256: VRAM-SIMM-size lever (buildAW) ---------------------------------
 // source[0] = 1 restores the pre-AW 512K VRAM SIMM presentation for A/B
@@ -836,10 +858,14 @@ localparam [15:0] SLOT_CD   = 16'd320;   // CD-ROM ISO (read-only, ID 3)
 // like FRZE (the consumer's domain) — the clk_74a-sourced 2-bit levers are
 // the ones that failed (RESUME landmine #0).
     wire [0:0] v256_src;
+`ifdef USE_ISSP_V256
     altsource_probe #(
         .instance_id ("V256"), .probe_width (1), .source_width (1),
         .sld_auto_instance_index ("YES")
     ) cp_v256 (.probe(v256_src), .source(v256_src), .source_clk(clk_sys), .source_ena(1'b1));
+`else
+    assign v256_src = 1'b0;    // lever absent: 256K SIMM, the shipping default
+`endif
 
 // ---- JMEM: JTAG memory-size override (buildAS) ----------------------------
 // source[1] = override enable, source[0] = value (0 = 2 MB, 1 = 10 MB).
@@ -849,10 +875,14 @@ localparam [15:0] SLOT_CD   = 16'd320;   // CD-ROM ISO (read-only, ID 3)
 // 10 MB (honest), and this lever is the only way to run a 2 MB control round
 // without the user at the menu.
     wire [1:0] jmem_src;
+`ifdef USE_ISSP_JMEM
     altsource_probe #(
         .instance_id ("JMEM"), .probe_width (2), .source_width (2),
         .sld_auto_instance_index ("YES")
     ) cp_jmem (.probe(jmem_src), .source(jmem_src), .source_clk(clk_74a), .source_ena(1'b1));
+`else
+    assign jmem_src = 2'd0;    // lever absent: no memory-size override
+`endif
 
 apf_blockdev #(
     .BUF_BASE ( 32'h4000_0000 )
