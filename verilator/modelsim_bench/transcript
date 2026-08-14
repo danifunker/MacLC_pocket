@@ -1,0 +1,63 @@
+# vsim -c -quiet -L altera_mf_ver tb_amnt -do "run -all; quit -f" 
+# Start time: 16:29:43 on Aug 14,2026
+# ** Warning: (vsim-3017) tb_amnt.v(51): [TFMPC] - Too few port connections. Expected 60, found 48.
+#    Time: 0 ps  Iteration: 0  Instance: /tb_amnt/icb File: core_bridge_cmd_ms.v
+# ** Warning: (vsim-3722) tb_amnt.v(51): [TFMPC] - Missing connection for port 'dataslot_requestread'.
+# ** Warning: (vsim-3722) tb_amnt.v(51): [TFMPC] - Missing connection for port 'dataslot_requestread_id'.
+# ** Warning: (vsim-3722) tb_amnt.v(51): [TFMPC] - Missing connection for port 'dataslot_requestwrite'.
+# ** Warning: (vsim-3722) tb_amnt.v(51): [TFMPC] - Missing connection for port 'dataslot_requestwrite_id'.
+# ** Warning: (vsim-3722) tb_amnt.v(51): [TFMPC] - Missing connection for port 'dataslot_requestwrite_size'.
+# ** Warning: (vsim-3722) tb_amnt.v(51): [TFMPC] - Missing connection for port 'rtc_epoch_seconds'.
+# ** Warning: (vsim-3722) tb_amnt.v(51): [TFMPC] - Missing connection for port 'rtc_date_bcd'.
+# ** Warning: (vsim-3722) tb_amnt.v(51): [TFMPC] - Missing connection for port 'rtc_time_bcd'.
+# ** Warning: (vsim-3722) tb_amnt.v(51): [TFMPC] - Missing connection for port 'rtc_valid'.
+# ** Warning: (vsim-3722) tb_amnt.v(51): [TFMPC] - Missing connection for port 'osnotify_inmenu'.
+# ** Warning: (vsim-3722) tb_amnt.v(51): [TFMPC] - Missing connection for port 'savestate_start'.
+# ** Warning: (vsim-3722) tb_amnt.v(51): [TFMPC] - Missing connection for port 'savestate_load'.
+# ** Warning: (vsim-3017) core_bridge_cmd_ms.v(111): [TFMPC] - Too few port connections. Expected 5, found 3.
+#    Time: 0 ps  Iteration: 0  Instance: /tb_amnt/icb/s01 File: ../../src/fpga/apf/common.v
+# ** Warning: (vsim-3722) core_bridge_cmd_ms.v(111): [TFMPC] - Missing connection for port 'rise'.
+# ** Warning: (vsim-3722) core_bridge_cmd_ms.v(111): [TFMPC] - Missing connection for port 'fall'.
+# ** Warning: (vsim-3015) core_bridge_cmd_ms.v(566): [PCDPC] - Port size (8) does not match connection size (10) for port 'address_a'. The port definition is at: ../../src/fpga/apf/mf_datatable.v(41).
+#    Time: 0 ps  Iteration: 0  Instance: /tb_amnt/icb/idt File: ../../src/fpga/apf/mf_datatable.v
+# ** Warning: (vsim-3015) core_bridge_cmd_ms.v(566): [PCDPC] - Port size (8) does not match connection size (10) for port 'address_b'. The port definition is at: ../../src/fpga/apf/mf_datatable.v(42).
+#    Time: 0 ps  Iteration: 0  Instance: /tb_amnt/icb/idt File: ../../src/fpga/apf/mf_datatable.v
+# run -all
+# pass: no floppy download before allcomplete
+# pass: no mount before allcomplete
+# [14800000] dsu edge: id=210 size=819200
+# [15323000] dsu edge: id=310 size=41992192
+# [15415000] MOUNT slot0 (310)  img_size=41992192
+# [15939000] dsu edge: id=320 size=7112704
+# [16062000] MOUNT slot2 (320)  img_size=7112704
+# --- after launch scan: dbg_amnt=3f1f0000 ---
+# pass: exactly one slot0 mount from scan
+# pass: slot0 mount size = 41992192
+# pass: exactly one slot2 (CD) mount from scan
+# pass: slot2 mount size = 7112704
+# pass: slot1 (311, size 0) never mounted
+# pass: floppy mount latched (download raised)
+# pass: floppy dio_index = 1
+# pass: AMNT armed/ran
+# pass: AMNT parked in A_DONE
+# pass: AMNT fired 3 events (210,310,320)
+# pass: no duplicate mounts after second allcomplete
+# pass: no duplicate CD mount after second allcomplete
+# [217355000] dsu edge: id=310 size=786473472
+# [217463000] MOUNT slot0 (310)  img_size=786473472
+# pass: OSD pick mounts slot0 again
+# pass: OSD mount carries the new size
+# [220745000] dsu edge: id=210 size=2048
+# [464541000] download END: dio_addr=2048 words=1024
+# pass: OS served exactly 4 floppy sectors
+# pass: 1024 dio words delivered (2048 bytes)
+# pass: first dio_addr = 0
+# pass: first dio word = file bytes 0,1
+# pass: END dio_addr = file SIZE (one-past; the fix)
+# pass: download envelope closed
+# pass: EVERY copied word content-exact
+# === TB PASS ===
+# ** Note: $finish    : tb_amnt.v(411)
+#    Time: 467621 ns  Iteration: 1  Instance: /tb_amnt
+# End time: 16:29:44 on Aug 14,2026, Elapsed time: 0:00:01
+# Errors: 0, Warnings: 18
