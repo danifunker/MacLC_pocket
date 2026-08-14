@@ -1,4 +1,29 @@
-# RESUME — MacLC Pocket (2026-08-14b: mystery B narrowed to ONE HASH; 256K VRAM SIMM shipped)
+# RESUME — MacLC Pocket (2026-08-14d: buildAZ VALIDATED — games playable)
+
+## 0.0 ★★★ 08-14d: THE PORT WORKS. PROBES WERE THE POISON.
+
+buildAZ (d04b8a2: ZERO probes — no sld hub in the fabric, all levers tied
+off) + pristine maclc.hda (SHA-restored from zip): user played Prince of
+Persia and "everything" on System 7.1 from a cold card boot, no OSD
+touch (auto-mount buildAY working), no JTAG cable. The nondeterministic
+late-boot faults (bus error @~217 / F-line @~800 / fast-restart deaths,
+all post-scsi_dpram-fix) do NOT occur on the probe-less fit. The A/B vs
+the same morning's buildAY cold boot (probed fit, pristine image, bus
+error at first extension) isolates the instrument deck as the variable.
+Treat ISSP debug fits as SUSPECT INSTRUMENTS from now on: they perturb
+the machine they observe (hub + hot levers + placement pressure).
+Re-enable instruments ONE at a time via USE_ISSP_<X> qsf macros
+(per-instrument guards shipped in buildAZ; see ap_core.qsf).
+
+Open items (user list 08-14d): floppy not working (Pocket floppy path
+likely never HW-exercised — symptom TBD); PRAM color seeding or full
+persistence (+ landmine #2: pram_save_req to nonexistent slot 220 stalls
+SCSI ~450 ms per guest PRAM write — fix with whatever PRAM route);
+patched boot0.rom (forced-warm POST skip) to card; remove Video Test
+Pattern + Debug Disk Stage from interact/RTL; per-key input remapping;
+video.json display_modes to match other cores.
+
+(2026-08-14b header below: mystery B narrowed to ONE HASH; 256K VRAM SIMM shipped)
 
 Paste into a fresh session: **"Resume docs/RESUME.md — §1-NEXT: fix the
 Verilator harness, align it with mac_lc_pocket.sv (10 MB RAM, 256K VRAM,
