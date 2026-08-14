@@ -79,4 +79,20 @@ if {[info exists idx(IIO2)]} {
     puts [format "  addr TOP BYTES: any0_hi=%02X any1_hi=%02X  fetch_hi(slot0..3)=%02X %02X %02X %02X" \
         $ah0 $ah1 [bits $raw2 72 79] [bits $raw2 80 87] [bits $raw2 88 95] [bits $raw2 96 103]]
 }
+if {[info exists idx(WW40)]} {
+    set raw3 [read_probe_data -instance_index $idx(WW40) -value_in_hex]
+    regsub {^0x} $raw3 {} raw3
+    while {[string length $raw3] < 22} { set raw3 "0$raw3" }
+    # LSB first: ww40[0..3] (19b each), ww40_cnt[7:0], ww40_w[1:0]
+    set cnt [bits $raw3 76 83]
+    set wp  [bits $raw3 84 85]
+    puts [format "  WW40: %d writes to \$400E6x this arm; newest = slot %d" $cnt [expr {($wp+3)%4}]]
+    for {set i 0} {$i < 4} {incr i} {
+        set lo [expr {$i*19}]
+        set d  [bits $raw3 $lo [expr {$lo+15}]]
+        set a  [bits $raw3 [expr {$lo+16}] [expr {$lo+18}]]
+        set tag ""; if {$i == (($wp+3)%4)} { set tag "  <- newest" }
+        puts [format "    slot %d: \$400E6%X = %04X%s" $i [expr {$a<<1}] $d $tag]
+    }
+}
 end_insystem_source_probe

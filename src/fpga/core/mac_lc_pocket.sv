@@ -306,7 +306,11 @@ module mac_lc_pocket
 	end
 	assign pram_save_req_o = pram_save_req_r;
 
-	wire iiop_mfreeze;   // buildAU: assigned at the IIOP block below
+	reg  iiop_mfreeze = 1'b0;   // buildAV: REGISTERED in the IIOP block (the
+	                           // buildAU combinational forward-wire did not
+	                           // hold reset on HW despite both inputs = 1;
+	                           // a registered signal in one clk_sys block is
+	                           // what ext_freeze uses and it works).
 
 	// Reset logic
 	// NOTE: Do NOT include _cpuReset_o here! The RESET instruction drives
@@ -905,14 +909,33 @@ module mac_lc_pocket
 	wire [1:0] iiop_src;
 	wire       iiop_rearm = iiop_src[0];
 	reg        iiop_rearm_d = 1'b0;
-	assign     iiop_mfreeze = iiop_frozen && iiop_src[1];
+	// ★ buildAV WW40: last 4 completed WRITES to guest $400E6x, frozen with
+	// the capture (iiop_frozen). This is the discriminator: it shows WHO wrote
+	// the illegal $400E6C=4C4B and WHAT value — if the segment loader wrote
+	// 4C4B, the content is as-authored/relocated (image path); if a different
+	// value was written and RAM now holds 4C4B, that is a Pocket write-path
+	// corruption. Uses the WORKING capture-freeze, not machine-freeze.
+	reg [18:0] ww40 [0:3];   // {addr[3:1], data[15:0]}
+	reg  [1:0] ww40_w = 2'd0;
+	reg  [7:0] ww40_cnt = 8'd0;
 	always @(posedge clk_sys) begin
 		iiop_rearm_d <= iiop_rearm;
+		// registered machine-freeze (buildAV)
+		iiop_mfreeze <= iiop_frozen && iiop_src[1];
 		if (iiop_rearm != iiop_rearm_d) begin
 			iiop_frozen <= 1'b0;
 			iiop_fw     <= 2'd0;
 			iiop_az     <= 1'b0;
+			ww40_w      <= 2'd0;
+			ww40_cnt    <= 8'd0;
 		end else if (!iiop_frozen) begin
+			// WW40: completed WRITE cycle (busstate 11) to $400E6x
+			if (!prev_as_n && tg68_as_n && prev_busstate == 2'b11 &&
+			    tg68_a[23:4] == 20'h400E6) begin
+				ww40[ww40_w] <= {tg68_a[3:1], cpu_din_muxed};
+				ww40_w   <= ww40_w + 2'd1;
+				ww40_cnt <= ww40_cnt + 8'd1;
+			end
 			// completed FETCH cycle (same qualification as the PCRB tap)
 			if (!prev_as_n && tg68_as_n && prev_busstate == 2'b00) begin
 				iiop_f[iiop_fw]  <= {fetch_addr_latch[23:0], cpu_din_muxed};
@@ -973,6 +996,14 @@ module mac_lc_pocket
 		        iiop_a[~iiop_az], iiop_a[iiop_az],
 		        iiop_f[3], iiop_f[2], iiop_f[1], iiop_f[0]}),
 		.source(iiop_src), .source_clk(clk_sys), .source_ena(1'b1));
+	// ★ buildAV WW40 probe: {ww40_w[1:0], ww40_cnt[7:0], ww40[3..0]}.
+	// Each ww40 slot = {addr[3:1] (3b), data[15:0]}. Newest write = slot
+	// (ww40_w-1) mod 4. ww40_cnt = total $400E6x writes seen this arm.
+	altsource_probe #(
+		.instance_id ("WW40"), .probe_width (86), .source_width (1),
+		.sld_auto_instance_index ("YES")
+	) cp_ww40 (.probe({ww40_w, ww40_cnt, ww40[3], ww40[2], ww40[1], ww40[0]}),
+	           .source(), .source_clk(clk_sys), .source_ena(1'b1));
 
 
 	assign debug_pc = last_fetch_pc;
