@@ -245,6 +245,39 @@ module mac_lc_pocket
 		end
 	end
 
+	// ---- Power-up PRAM seed (buildBD, 2026-08-14) -------------------------
+	// egret_wrapper's pram[] is an MLAB, and MLAB power-up initialization is
+	// the one link in the colour-seed chain that could not be verified from
+	// the reports (the readmemh content provably reaches the netlist .mif --
+	// checked byte-for-byte in buildBC's db -- yet the machine boots as if
+	// pram[] were blank). Rather than depend on it, replay the seed at
+	// configuration through the SAME pram_load_* port the MiSTer NVR mount
+	// uses (HW-proven), from an M10K-forced copy of rtl/egret/egret.pram --
+	// M10K init is proven every boot by the Egret ROM itself. pram_ready
+	// holds off (the 68020 stays in reset, ~16 us) until all 256 bytes land;
+	// the 1 s backstop below still force-boots if this ever wedges (the boot
+	// may WAIT for PRAM, never DEPEND on it).
+	(* ramstyle = "M10K" *) reg [7:0] pram_seed_rom [0:255];
+	initial begin
+`ifdef SIMULATION
+		$readmemh("../rtl/egret/egret.pram", pram_seed_rom);
+`else
+		$readmemh("rtl/egret/egret.pram", pram_seed_rom);
+`endif
+	end
+	reg  [8:0] seed_idx    = 9'd0;
+	reg  [7:0] seed_q      = 8'd0;
+	reg  [7:0] seed_addr_d = 8'd0;
+	reg        seed_wr_d   = 1'b0;
+	always @(posedge clk_sys) begin
+		seed_q      <= pram_seed_rom[seed_idx[7:0]];   // M10K sync read
+		seed_addr_d <= seed_idx[7:0];
+		seed_wr_d   <= !seed_idx[8];
+		if (!seed_idx[8]) seed_idx <= seed_idx + 9'd1;
+	end
+	wire pram_seed_busy = (!seed_idx[8]) | seed_wr_d;
+	wire pram_seed_done = ~pram_seed_busy;
+
 	// ---- PRAM (NVRAM) persistence -----------------------------------------
 	// Two writers into the Egret's pram[]: the "Reset PRAM" zeroing above, and
 	// the save-file restore driven by apf_blockdev. They are mutually exclusive
@@ -257,9 +290,14 @@ module mac_lc_pocket
 	// that signal and holds the 68020 in reset until the copy completes.
 	// pram_loaded comes from apf_blockdev and is raised on load success OR
 	// failure, so a missing save file can never wedge the boot.
-	assign pram_load_addr = pram_zero_busy ? pram_zero_addr : pram_load_addr_i;
-	assign pram_load_data = pram_zero_busy ? 8'h00          : pram_load_data_i;
-	assign pram_load_wr   = pram_zero_busy | pram_load_wr_i;
+	// Priority: user zeroing > power-up seed > blockdev restore. The seed runs
+	// only in the first ~16 us after configuration; the others cannot overlap
+	// it in practice, and zeroing winning is always what the user asked for.
+	assign pram_load_addr = pram_zero_busy ? pram_zero_addr :
+	                        pram_seed_busy ? seed_addr_d    : pram_load_addr_i;
+	assign pram_load_data = pram_zero_busy ? 8'h00          :
+	                        pram_seed_busy ? seed_q         : pram_load_data_i;
+	assign pram_load_wr   = pram_zero_busy | (pram_seed_busy & seed_wr_d) | pram_load_wr_i;
 	// ★ READY BACKSTOP — do not remove. 2026-08-11: the first cut of this made
 	// pram_ready depend ONLY on pram_loaded_i, and the PRAM load never
 	// resolved on hardware, so pram_ready never rose, egret_wrapper never set
@@ -276,11 +314,11 @@ module mac_lc_pocket
 	reg [25:0] pram_rdy_cnt = 26'd0;
 	reg        pram_rdy_to  = 1'b0;
 	always @(posedge clk_sys) begin
-		if (pram_loaded_i || pram_rdy_to) pram_rdy_cnt <= 26'd0;
+		if ((pram_loaded_i && pram_seed_done) || pram_rdy_to) pram_rdy_cnt <= 26'd0;
 		else if (pram_rdy_cnt == 26'd32_500_000) pram_rdy_to <= 1'b1;
 		else pram_rdy_cnt <= pram_rdy_cnt + 26'd1;
 	end
-	wire   pram_ready_r   = (pram_loaded_i | pram_rdy_to) & ~pram_zero_busy;
+	wire   pram_ready_r   = ((pram_loaded_i & pram_seed_done) | pram_rdy_to) & ~pram_zero_busy;
 
 	// Dirty tracking: the Egret firmware strobes pram_wr_stb on every PRAM byte
 	// it writes. Flush on a quiet period rather than per byte -- the guest

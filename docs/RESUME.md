@@ -32,7 +32,37 @@ Open items (user list 08-14d), status end-of-day:
   cold boots — see mac_lc_pocket.sv:1944 retirement note); safe
   POST-shortening variant = future research if wanted.
 - per-key input remapping: future feature build (interact-driven
-  keycode table into pocket_input).
+  keycode table into pocket_input). NOTE the Pocket OS has a built-in
+  remap layer (Settings/<core>/Input/input_persist.json id→remap pairs)
+  — part of the wish may be an input.json richness job, not RTL.
+- ★ 08-14e PRAM colour: buildBC seed verified byte-perfect into the
+  netlist .mif (0x58=$83 mode + monitor-2 bytes — layout documented in
+  a16cea3) yet HW still boots B&W → suspect = MLAB power-up init.
+  buildBD adds a config-time SEED LOADER (mac_lc_pocket ~line 248):
+  M10K-forced copy of egret.pram streamed through the MiSTer-proven
+  pram_load_* port, pram_ready holds ~16 us, 1 s backstop unchanged.
+  If STILL B&W after buildBD: the fault is downstream (Egret XPRAM
+  serving or System override) — next discriminator is the user's
+  warm-restart test (256 colours → Special→Restart: survives?).
+- ★ 08-14e GCR floppy (open, HW): 800K GCR use → nondeterministic
+  F-line bomb OR hard hang; eject attempts crash the Finder. MFM 1.44M
+  fully working (envelope fix validated). Offline sweep so far: byte
+  demux == MiSTer ✓, bulk-copy content-exact in bench (22/22) ✓.
+  Remaining suspects need the FULL-MACHINE sim (copy-under-live-SDRAM
+  contention; GCR chain configs MiSTer never tested). NO MORE JTAG —
+  user directive; sim/bench only. Also: the Pocket has NO OSD-unload
+  announcement path (an OSD unassign tells the guest nothing) — design
+  gap, fix with the GCR package.
+- ★ 08-14e video glitch (open, HW): intermittent glitching seen on
+  Pocket for the first time — user says same occasional glitch exists
+  on MiSTer MacLC. MiSTer FB=SDRAM vs Pocket FB=BRAM ⇒ common cause is
+  UPSTREAM shared RTL (V8 engine / CPU-write-vs-scanout arbitration),
+  not the framebuffer memory. Need characterization (appearance,
+  duration, workload).
+- RELEASE: HELD by user (no push/publish). Tooling ready: case fixes
+  committed (1f26e32), scripts/release.sh builds a case-asserted
+  updater-safe zip (v0.9.0 built locally), gh authenticated. Publish =
+  `bash scripts/release.sh --publish` when the user says go.
 dist = buildBC (floppy fix + UI cleanup + display modes + color PRAM);
 card carries buildAZ until the next trip. Attribution on the next card
 boot: color at desktop = seed; floppy mount = envelope fix; menu/display
