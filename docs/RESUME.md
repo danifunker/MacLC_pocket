@@ -1,11 +1,11 @@
 # RESUME — MacLC Pocket (2026-08-14b: mystery B narrowed to ONE HASH; 256K VRAM SIMM shipped)
 
-Paste into a fresh session: **"Resume docs/RESUME.md — §1: hash the card's
-games disk against dcd02c6c…; if it differs, restore from the zip and
-re-test; if it matches, build the buildAX stack-band write-watcher."**
-boot_problems.md ★★★ sections carry deep history; this file is current
-state. §2 down is the 08-13 ops crib (still accurate). The 08-14 daytime
-QuickDraw/blit theory is DISPROVEN — history in
+Paste into a fresh session: **"Resume docs/RESUME.md — §1-NEXT: fix the
+Verilator harness, align it with mac_lc_pocket.sv (10 MB RAM, 256K VRAM,
+real Egret), and reproduce the games-disk System 7.1 crash in
+simulation."** boot_problems.md ★★★ sections carry deep history; this
+file is current state. §2 down is the 08-13 ops crib (still accurate).
+The 08-14 daytime QuickDraw/blit theory is DISPROVEN — history in
 scratch/2026-08-14-autonomous-session.md and the session transcript.
 
 ---
@@ -26,32 +26,133 @@ are SILENT NO-OPS (cost this session two phantom rounds).
 
 Card launches were never affected. The old toggle-dance is obsolete.
 
-## 1. MYSTERY B (games-disk Illegal Instruction) — down to ONE HASH
+## 1-NEXT ★ USER DIRECTIVE: REPRODUCE MYSTERY B IN VERILATOR
 
-**Status 08-14 evening: a real LC boots this disk.** MAME 0.264 maclc
-(verified romset; our boot0.rom SHA1 6bef5853ae736f3f06c2b4e79772f65910c3b7d4
-= byte-identical to MAME's 350eacf0.rom) boots the BUILDER-OUTPUT copy of
-Mac68KColorGames_v1.hda (System 7.1, vol "MacAtrium_Sys") to a working
-desktop at 10 MB, in BOTH the 512K and 256K VRAM worlds. So the crash is
-NOT an LC-vs-image incompatibility, NOT the ROM, NOT VRAM size, NOT
-memory size (2 MB and 10 MB both crash on Pocket, user-confirmed on a
-cold CARD boot — JTAG path exonerated too).
+Goal: make the games-disk System 7.1 crash happen inside the Verilator
+harness, where visibility is unlimited (per-instruction cpu_trace.log,
+$display probes on anything, FST waves, MAME PC-stream diffing). The
+next agent figures out the alignment details; this section is everything
+known that they need.
 
-**THE FORK (next session starts here):**
-- **Hash the CARD's Mac68KColorGames_v1.hda** (card trip; certutil/sha1sum)
-  against the builder output **dcd02c6c31335b87397af2c1944ebbea70cf4e26**
-  (786,473,472 bytes; the card also carries Mac68KColorGames_v1.zip with
-  the same file).
-- **DIFFERS** → the card copy took corrupt sector writes during the
-  pre-08-13 write-path-bug era (maclc.hda was restored from zip 08-13;
-  the games disk NEVER was). Fix = restore from the zip, cold boot,
-  expect it to just work. Mystery B closed as collateral of the fixed
-  write bug.
-- **MATCHES** → residual Pocket-vs-real difference on the System 7.1 late
-  boot path. Next instrument = **buildAX**: a WW40-style write-watcher on
-  the stack band $3FF7xx that ALSO latches the writer's PC (latch
-  last-fetch-PC alongside {addr,data}; last-4 + count). It names whatever
-  writes AAAA-pattern data over the live stack during the fatal call.
+### Why this is feasible
+- The crash lands ~15-20 GUEST-seconds in ≈ 900-1200 video frames at the
+  Pocket's 512x384 timing — same order as the routine 730-frame
+  screenshot runs. Reasonable wall-clock.
+- It is deterministic and invariant across cold/warm boot, card/JTAG,
+  2/10 MB, 512K/256K VRAM — a software-visible divergence a full-trace
+  sim should catch red-handed.
+- MAME 0.264 boots the same image+ROM clean → docs/mame_compare.md's
+  PC-stream divergence diff (sim trace vs MAME maincpu trace, same disk,
+  same ROM) can mechanically find the FIRST divergent instruction.
+
+### Harness status (verilator/) — BROKEN since 2026-08-09, fix first
+- sim.v still references dataController ports deleted by the CD/Toolbox
+  + second-floppy cuts: cd_snd_*, dbg_cda*, cdtb_*, cd_io_*, tb_lba,
+  dskReadAddrExt (~11 refs). Delete/tie exactly as mac_lc_pocket.sv does
+  (it is the reference consumer of dataController_top).
+- Some later port syncs WERE kept: cd_* tie-offs (08-13) and buildAW's
+  addrController `vram_force_512k` is already tied 0 (= 256K SIMM) in
+  sim.v. The 256K alias + 512-B stride live in SHARED RTL — nothing to
+  port there.
+- ★ sim.v is its OWN top (`module emu`) with its OWN CPU instantiation
+  and bus glue (VPA/DTACK/BERR/overlay) — NOT mac_lc_pocket.sv.
+  docs/verilator_differences.md is the tracked-differences checklist:
+  read it BEFORE editing, update it after. CPU-glue divergence between
+  the two tops is exactly the class of bug that could make the sim NOT
+  reproduce — aligning them IS the job (user: "make sure it matches
+  what we have on the main maclc top, including the 10 MB RAM and
+  such").
+- Verilator tolerates multiple always-drivers; Quartus does not — any
+  fix flowing BACK to FPGA must stay single-driver (CLAUDE.md).
+
+### Config the sim must present (match the crashing hardware)
+- **10 MB RAM**: the machine samples the memory config at reset;
+  mac_lc_pocket gets cfg from core_top (opt_mem_size default 1 = 10 MB).
+  Find sim.v's hardwired config and set 10 MB (SIMM 8 MB + motherboard
+  2 MB). Fallback: the crash also fires at 2 MB — matching EITHER
+  crashing config exactly is acceptable, but match one.
+- **256K VRAM**: already default (vram_force_512k=0). Fast sanity: once
+  booted, guest word $106 (ScreenRow) must read $0200 = 512.
+- **Real HC05 Egret** (unconditional since 08-09). Do NOT enable
+  EGRET_BEHAVIORAL for this hunt — VIA/Egret timing is part of the
+  environment under test.
+- **ROM**: releases/boot0.rom (SHA1 6bef5853ae736f3f06c2b4e79772f65910c3b7d4
+  = MAME's verified 350eacf0.rom).
+- **Disk**: a copy of Mac68KColorGames_v1.hda with SHA1
+  dcd02c6c31335b87397af2c1944ebbea70cf4e26 (786,473,472 bytes).
+  ★ NOT ON THIS PC — get it from the SD card (Assets/maclc/common/,
+  card currently in the Pocket; the zip beside it holds the same file)
+  or from the MAME box (its copy was restored from that zip). VERIFY the
+  SHA1 before burning hours of simulation. (C:/repos/MacAtrium-7.1.hda
+  is a DIFFERENT, older 256 MB image — not the reproducer; also
+  Apple-partitioned, which scripts/hfs_check.py cannot walk yet.)
+- How sim.v mounts a SCSI HD: it has its own dio/download plumbing
+  (sim_main.cpp, `--help`). Watch image-size plumbing at 750 MB.
+
+### Instrumentation once it boots (the whole point)
+- $display on completed writes to $3FF700-$3FF7BF and $400E00-$400EFF
+  with the current fetch PC = buildAX's WWSP with unlimited depth, one
+  line of sim code.
+- Trap the death directly: on fetch at $400E6C (or the vector-4 read of
+  $10), dump A7, the $C000-$C17B patch frame, the BootGlobals band, and
+  stop with a trace window around it.
+- cpu_trace.log across the fatal window vs MAME maincpu trace of the
+  same boot → first-divergence diff (docs/mame_compare.md; MAME PCs are
+  8-digit 00Axxxxx; MAME's debugger defaults to the Egret HC05 — switch
+  to the 68020).
+- ★ If the sim boots the games disk CLEAN, that is ALSO decisive: the
+  divergence then lives in Pocket-only glue (core_top/mac_lc_pocket/
+  pocket_sdram/apf_blockdev serving timing), not shared RTL — diff
+  sim.v's glue vs mac_lc_pocket.sv and suspect the ms-scale APF serving
+  latencies the sim doesn't model.
+
+### The fault signature to hunt (three identical HW captures + cold-card)
+- ~15-20 s in: System 7.1 late boot (post-"Welcome", pre-Finder; GrayRgn
+  unbuilt, CurApName unset), DSErrCode ($AF0) = 3.
+- The Gestalt-family RAM patch $C000-$C17B (8-byte {selector,proc}
+  records off ExpandMem+$5C; 'mach' selector visible in the fatal stack
+  band) exits via its clean LINK/UNLK epilogue; the RTS at $C17A pops
+  **$400E6C = the boot-blocks image base** ('LK' $4C4B, then BRA $6000
+  0086, bbVersion $4418, bbSysName "\x06System") → executes the
+  signature → II vector 4.
+- The machine's last write before the fatal fetches: **AAAA → $3FF76E**
+  (live stack). BootGlobals fields $400E60-66 churn AAAA/3400 values.
+- CurStackBase = $3FF7BE; BootGlobals ptr table $3FF7AE-B9 =
+  {$400BFC, $400E6C, $3FFBBE}; boot-handoff CODE executes at $3FF7BE+
+  (move.l a3,-(sp); _ReleaseResource; movea.l ROMBase,a0; ...).
+- The fault RE-FIRES periodically during the SysError wait (parked at
+  ROM A02A38-3E polling $172) — in sim, the FIRST occurrence is the one
+  with the clean trace.
+
+## 1B. MYSTERY B DOSSIER — what is eliminated (all measured)
+
+MAME 0.264 maclc (verified romset; our boot0.rom byte-identical) boots
+the SAME image (SHA1-verified both ends) to desktop at 10 MB in BOTH
+VRAM worlds. The card's copy hashes dcd02c6c… exactly, mtime untouched
+since build — disk exonerated. Eliminated by direct measurement: the
+image, the ROM, memory size (2/10 MB), VRAM size (512K/256K), the JTAG
+boot path (cold card boot crashes identically), machine-identity bits
+(VIA1 PA $D5 = MAME's $D4|config), analog RAM marginality
+(deterministic, same PC 5+ rounds), TG68K decode ('LK' is genuinely
+illegal; kernel byte-identical to MiSTer). Remaining suspects: Pocket
+glue / timing-scale effects the shared RTL never sees (APF ms-scale
+serving, SDRAM controller behavior under the 7.1 boot's access pattern)
+— or a shared-RTL bug both FPGA tops exercise but MAME's model doesn't.
+
+**A (maclc.hda +59):** still NOT re-run at true 10 MB. Bind maclc.hda to
+slot 310 (OSD pick — auto-mount does NOT work; fix task spawned), then
+push+jmnt(41992192)+jboot.
+
+### Parallel hardware thread (PAUSED mid-compile — resume any time)
+buildAX (WWSP writer-PC watcher, committed 83472dd) was COMPILING at
+pivot time — check src/fpga/output_files, STA-gate all corners, archive
+as scratch/builds/2026-08-14-buildAX-wwsp.sof. Round: push → romc_poll →
+romv → jmnt 310 786473472 → jboot (EDGE-fired! alternate `jboot.tcl` /
+`jboot.tcl 0`) → await II (~90 s, dlv +217) → scripts/wwsp.tcl +
+iiop.tcl. Newest WWSP slots = the II exception-frame pushes (pinpoints
+A7-at-fault); behind them, the AAAA writer WITH ITS PC. The Pocket sits
+FROZEN on a buildAW card-boot corpse (`frze off` before any new round;
+card now carries buildAW).
 
 **The fault, fully decoded** (three identical captures incl. a cold card
 boot): System 7.1's late boot handoff (code executing in the BootGlobals
