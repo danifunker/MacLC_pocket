@@ -677,6 +677,19 @@ localparam [15:0] SLOT_CD   = 16'd320;   // CD-ROM ISO (read-only, ID 3)
         .sld_auto_instance_index ("YES")
     ) cp_jmnt (.probe(jmnt_src[48]), .source(jmnt_src), .source_clk(clk_74a), .source_ena(1'b1));
 
+// ---- JMEM: JTAG memory-size override (buildAS) ----------------------------
+// source[1] = override enable, source[0] = value (0 = 2 MB, 1 = 10 MB).
+// Muxed into cfg_memSize below; sampled by the machine at reset, so pair a
+// change with jboot. Exists for A/B rounds on pushed fabrics, where the OS
+// never rewrites opt_mem_size (the RESUME §0 deception) — the RTL default is
+// 10 MB (honest), and this lever is the only way to run a 2 MB control round
+// without the user at the menu.
+    wire [1:0] jmem_src;
+    altsource_probe #(
+        .instance_id ("JMEM"), .probe_width (2), .source_width (2),
+        .sld_auto_instance_index ("YES")
+    ) cp_jmem (.probe(jmem_src), .source(jmem_src), .source_clk(clk_74a), .source_ena(1'b1));
+
 apf_blockdev #(
     .BUF_BASE ( 32'h4000_0000 )
 ) blockdev (
@@ -1373,7 +1386,7 @@ mac_lc_pocket machine (
     // chime, and reached "Welcome to Macintosh" -- 10 MB POSTs fine now.
     // The death chimes were measured on the 08-10 netlist and do not carry
     // forward.
-    .cfg_memSize    ( opt_mem_size ),
+    .cfg_memSize    ( jmem_src[1] ? jmem_src[0] : opt_mem_size ),  // JMEM lever wins when enabled
     .nmi_pulse      ( opt_nmi_sys ),
     // Same pulse also stays in .reset above: the zeroing takes ~8 us and the
     // reset stretch is ~2 ms, so the Egret is held off until PRAM is clear.

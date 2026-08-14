@@ -867,6 +867,64 @@ module mac_lc_pocket
 			last_data_addr <= tg68_a;
 	end
 
+	// ★ buildAS IIOP: the FAULTING FETCH, data included. The games-disk death
+	// is an Illegal Instruction whose PCRB trail ends at `jmp (a1)` in the QD
+	// blit dispatcher (A2CC32) with no visible fetch at the jump target; the
+	// MiSTer-identical kernel executes the same ROM fine, so the question is
+	// what the CPU actually FETCHED there. This ring holds the last 4
+	// completed FETCH cycles {pc[23:0], data[15:0]} plus the last 2 completed
+	// bus cycles of ANY kind {busstate[1:0], addr[23:0], data[15:0]} (in case
+	// jump-target fetches carry a different busstate), frozen the moment a
+	// DATA READ of $000010 completes = the vector-4 (Illegal Instruction)
+	// dispatch read. Nothing else reads $10. Source bit = re-arm toggle.
+	// Probe layout (LSB first):
+	//   [159:0]   4 x {pc[23:0], data[15:0]} ring; newest slot = wptr-1 mod 4
+	//   [243:160] 2 x {busstate[1:0], addr[23:0], data[15:0]}, upper = newer
+	//   [245:244] fetch-ring wptr
+	//   [247]     frozen
+	reg [39:0] iiop_f [0:3];
+	reg [41:0] iiop_a [0:1];
+	reg  [1:0] iiop_fw = 2'd0;
+	reg        iiop_az = 1'b0;
+	reg        iiop_frozen = 1'b0;
+	wire       iiop_rearm;
+	reg        iiop_rearm_d = 1'b0;
+	always @(posedge clk_sys) begin
+		iiop_rearm_d <= iiop_rearm;
+		if (iiop_rearm != iiop_rearm_d) begin
+			iiop_frozen <= 1'b0;
+			iiop_fw     <= 2'd0;
+			iiop_az     <= 1'b0;
+		end else if (!iiop_frozen) begin
+			// completed FETCH cycle (same qualification as the PCRB tap)
+			if (!prev_as_n && tg68_as_n && prev_busstate == 2'b00) begin
+				iiop_f[iiop_fw] <= {fetch_addr_latch[23:0], dataControllerDataOut};
+				iiop_fw <= iiop_fw + 2'd1;
+			end
+			// completed cycle of ANY busstate (fetch or data)
+			if (!prev_as_n && tg68_as_n) begin
+				iiop_a[iiop_az] <= {prev_busstate, tg68_a[23:0], dataControllerDataOut};
+				iiop_az <= ~iiop_az;
+				// the vector-4 dispatch: a completing DATA READ at $10 (or $12,
+				// the low word of the vector on the 16-bit bus)
+				if (prev_busstate == 2'b10 && tg68_a[23:2] == 22'd4)
+					iiop_frozen <= 1'b1;
+			end
+		end
+	end
+	// NOTE tg68_a during AS-rise still holds the cycle's address; busstate is
+	// registered (prev_busstate) to match. dataControllerDataOut is the read
+	// mux the CPU consumed (cpu_din_muxed differs only on VPA reads, which
+	// never target RAM $10).
+	altsource_probe #(
+		.instance_id ("IIOP"), .probe_width (248), .source_width (1),
+		.sld_auto_instance_index ("YES")
+	) cp_iiop (
+		.probe({iiop_frozen, 1'b0, iiop_fw,
+		        iiop_a[~iiop_az], iiop_a[iiop_az],
+		        iiop_f[3], iiop_f[2], iiop_f[1], iiop_f[0]}),
+		.source(iiop_rearm), .source_clk(clk_sys), .source_ena(1'b1));
+
 
 	assign debug_pc = last_fetch_pc;
 	assign debug_opcode = last_fetch_opcode;
