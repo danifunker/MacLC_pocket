@@ -35,15 +35,38 @@ Open items (user list 08-14d), status end-of-day:
   keycode table into pocket_input). NOTE the Pocket OS has a built-in
   remap layer (Settings/<core>/Input/input_persist.json id→remap pairs)
   — part of the wish may be an input.json richness job, not RTL.
-- ★ 08-14e PRAM colour: buildBC seed verified byte-perfect into the
-  netlist .mif (0x58=$83 mode + monitor-2 bytes — layout documented in
-  a16cea3) yet HW still boots B&W → suspect = MLAB power-up init.
-  buildBD adds a config-time SEED LOADER (mac_lc_pocket ~line 248):
-  M10K-forced copy of egret.pram streamed through the MiSTer-proven
-  pram_load_* port, pram_ready holds ~16 us, 1 s backstop unchanged.
-  If STILL B&W after buildBD: the fault is downstream (Egret XPRAM
-  serving or System override) — next discriminator is the user's
-  warm-restart test (256 colours → Special→Restart: survives?).
+- ★ 08-14f PRAM colour — buildBD DID NOT FIX (user-confirmed B&W).
+  Hypothesis ledger: seed bytes ✓ (a16cea3), netlist .mif ✓ (checked in
+  buildBC db), runtime load path ✓ (buildBD streams via the
+  MiSTer-proven pram_load_* port — still B&W). MLAB power-up init is
+  hereby EXONERATED as the sole cause. Remaining: Egret XPRAM serving
+  on Pocket, ROM record validation against machine state (256K-vs-512K
+  VRAM interplay? the record was written on a 512K MiSTer), or a
+  System-side override. ★ The warm-restart discriminator is UNAVAILABLE:
+  Special→Restart is BROKEN on this core (user 08-14: "we haven't fixed
+  the soft reboot loading") — soft reboot is its own standing bug, see
+  below.
+  NEXT EXPERIMENT (decisive, runs on the machine with the Verilator
+  harness): the sim seeds pram[] natively via $readmemh — boot the
+  games disk to desktop and read the DEPTH from the existing
+  `VRAM->BRAM ... wpl=` stdout probe (1bpp@512 = wpl 32, 8bpp = 256; no
+  screenshot needed). Sim boots 8bpp ⇒ guest chain fine, fault is
+  Pocket-only delivery (then: a JTAG-free VISUAL witness build — e.g.
+  paint a corner marker when the Egret's copied pram byte $158 == $83).
+  Sim boots 1bpp ⇒ the guest/ROM rejects the record — trace the Egret
+  XPRAM serve + the video driver mode-set in the sim with $display.
+- ★ 08-14f SOFT REBOOT BROKEN (standing bug, user-reported): guest
+  Special→Restart does not come back up. Not newly regressed — never
+  worked on the Pocket. Suspects: the machine reset path
+  (user_reset/sdram_reinit interplay, rom_loaded latch semantics on
+  warm resets). Needs its own investigation; blocks all warm-restart
+  PRAM diagnostics meanwhile.
+- 08-14f display modes: user verdict — Trinitron is REALLY good; GB
+  DMG/GBP/GBP-light do nothing visible on this source (they are 160x144
+  handheld colourisation profiles). Catalog fact: 0x10 Trinitron is the
+  ONLY computer-CRT profile Analogue ships. video.json trimmed to
+  0x10/0x20/0x30/0x40 (Trinitron + the three real LCD technologies).
+  User leaning Trinitron-only — one further JSON trim if decided.
 - ★ 08-14e GCR floppy (open, HW): 800K GCR use → nondeterministic
   F-line bomb OR hard hang; eject attempts crash the Finder. MFM 1.44M
   fully working (envelope fix validated). Offline sweep so far: byte
