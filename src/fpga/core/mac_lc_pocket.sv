@@ -306,6 +306,8 @@ module mac_lc_pocket
 	end
 	assign pram_save_req_o = pram_save_req_r;
 
+	wire iiop_mfreeze;   // buildAU: assigned at the IIOP block below
+
 	// Reset logic
 	// NOTE: Do NOT include _cpuReset_o here! The RESET instruction drives
 	// reset_n low to reset peripherals, but should NOT reset the CPU itself.
@@ -353,8 +355,12 @@ module mac_lc_pocket
 			// scan's reset release let the machine reboot and march its RAM
 			// test straight through the evidence (seen live 2026-08-13:
 			// low RAM full of the DB6D:B6DB march pattern mid-dump).
+			// ★ buildAU: iiop_mfreeze = freeze the machine AT the vector-4
+			// dispatch (opt-in via IIOP source[1]) — the fault-time RAM and
+			// stack are frozen before SysError's dialog redraw can scribble
+			// them. Same reset-hold as ext_freeze; release via IIOP rearm.
 			if(~pll_locked || !rom_loaded || reset || jboot_rst || romv_run ||
-			   ext_freeze || (dio_download && dio_index == 8'd0)) begin
+			   ext_freeze || iiop_mfreeze || (dio_download && dio_index == 8'd0)) begin
 				rst_cnt <= '1;
 				n_reset <= 0;
 			end
@@ -892,8 +898,14 @@ module mac_lc_pocket
 	reg  [1:0] iiop_fw = 2'd0;
 	reg        iiop_az = 1'b0;
 	reg        iiop_frozen = 1'b0;
-	wire       iiop_rearm;
+	// buildAU: source widened to 2 bits — [0] = rearm (any edge), [1] =
+	// freeze-the-machine-on-trigger enable (level). With [1] set, the
+	// vector-4 dispatch read freezes the MACHINE (reset-hold, RAM intact),
+	// not just the capture rings.
+	wire [1:0] iiop_src;
+	wire       iiop_rearm = iiop_src[0];
 	reg        iiop_rearm_d = 1'b0;
+	assign     iiop_mfreeze = iiop_frozen && iiop_src[1];
 	always @(posedge clk_sys) begin
 		iiop_rearm_d <= iiop_rearm;
 		if (iiop_rearm != iiop_rearm_d) begin
@@ -954,13 +966,13 @@ module mac_lc_pocket
 	                   fe_cnt, fe_prev, fe_last}),
 	           .source(), .source_clk(clk_sys), .source_ena(1'b1));
 	altsource_probe #(
-		.instance_id ("IIOP"), .probe_width (248), .source_width (1),
+		.instance_id ("IIOP"), .probe_width (248), .source_width (2),
 		.sld_auto_instance_index ("YES")
 	) cp_iiop (
 		.probe({iiop_frozen, 1'b0, iiop_fw,
 		        iiop_a[~iiop_az], iiop_a[iiop_az],
 		        iiop_f[3], iiop_f[2], iiop_f[1], iiop_f[0]}),
-		.source(iiop_rearm), .source_clk(clk_sys), .source_ena(1'b1));
+		.source(iiop_src), .source_clk(clk_sys), .source_ena(1'b1));
 
 
 	assign debug_pc = last_fetch_pc;

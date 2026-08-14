@@ -16,11 +16,14 @@ start_insystem_source_probe -device_name $dev -hardware_name $hw
 
 set cmd [lindex $quartus(args) 0]
 if {$cmd eq "rearm"} {
-    # source is 1 bit; write alternating values via arg (any edge re-arms).
+    # buildAU: source is 2 bits — [0] rearm (any edge), [1] machine-freeze
+    # enable (level). Pass the full value: alternate 0/1 for capture-only,
+    # 2/3 for freeze-the-machine-at-the-fault mode. Rearm also RELEASES a
+    # machine frozen by a previous trigger (frozen clears on the edge).
     set v [lindex $quartus(args) 1]
     if {$v eq ""} { set v 1 }
     write_source_data -instance_index $idx(IIOP) -value $v
-    puts "IIOP re-armed (source=$v; any edge clears+unfreezes)"
+    puts "IIOP re-armed (source=$v; bit1=machine-freeze-on-trigger)"
     end_insystem_source_probe
     exit 0
 }
