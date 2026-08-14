@@ -2349,7 +2349,18 @@ module mac_lc_pocket
 			eg_ba_cnt      <= 10'd0;                  // the trigger
 			eg_tip_cnt     <= 10'd0;
 		end
-		if (!pcrb_frozen && fetch_valid && last_fetch_pc != pcrb_last) begin
+		// ★ buildAQ: SPIN-LOOP FILTER — the wait-for-BSY loop (A07860-7F)
+		// and the ioResult wait (A14870-83) flood the 64-deep ring in
+		// microseconds; suppressing them makes 64 entries span the whole
+		// seconds-wide death corridor as a call TRAIL (callers, error
+		// paths, the give-up decision), not a spin close-up.
+		// Suppressed windows: [A07840..A0787F] (TimeDBRA delay + wait-for-
+		// BSY) via pc[23:6]==18'h281E1; [A14870..A1487F] via pc[23:4]==
+		// 20'hA1487; [A14880..A14883] (the exit) via pc[23:2]==22'h285220.
+		if (!pcrb_frozen && fetch_valid && last_fetch_pc != pcrb_last &&
+		    !(last_fetch_pc[23:6] == 18'h281E1) &&
+		    !(last_fetch_pc[23:4] == 20'hA1487) &&
+		    !(last_fetch_pc[23:2] == 22'h285220)) begin
 			pcrb[pcrb_w] <= last_fetch_pc;
 			pcrb_w      <= pcrb_w + 6'd1;
 			pcrb_last   <= last_fetch_pc;
