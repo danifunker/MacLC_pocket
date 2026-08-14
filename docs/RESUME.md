@@ -29,13 +29,19 @@ side effect — the half-completed write IS the crash. Chain of proof:
   serving makes the wait real and the Egret transaction runs under
   masked-interrupt hand-pumped pacing for the first time.
 
-**The one remaining fork (buildAM decides):** did the Egret send NO CB1
-edges in the death window (HC05/egret_wrapper side — fix its pacing), or
-did it send them and the VIA swallowed them (the documented
-ext_fall_edge_pending coalescing, CLAUDE.md's standing suspect — fix the
-SR path / rate-limit CB1 per the repo's own recommendation)? EGS2 is now
-window-scoped [trigger..freeze]: cb1_falls=0 => Egret side; >0 with bit
-still parked => VIA side.
+**State of the conviction (three refinements deep):** buildAM's windowed
+counters killed the frozen-handshake theory — 12-27 CB1 falls in the
+death-window samples, every edge consumed. buildAN's HC05-PC tap caught
+the firmware MID-BIT in its unrolled byte-receive loop ($1503, healthy)
+~0.5 ms after the last delivery. The transaction is ALIVE at every
+delivery-anchored window depth; the give-up comes SECONDS later — a
+LIVELOCK or late failure, not a stall. buildAO added a PC-match trigger
+(source[23:0]); buildAP chains it two-stage (the +59 delivery trigger
+STAGES the match, so the first fetch of A14882 — the generic async-wait
+exit — after the final delivery is the PRAM wait's OWN exit). Capture at
+that exit = the last 64 PCs before the give-up + EGS1/EGS3 (Egret SR +
+HC05 PC) + PSN (SCSI bus) at that instant. That names the terminal
+mechanism: retry-livelock vs late handshake failure vs outer timeout.
 
 Also measured today (all in boot_problems/CLAUDE-adjacent comments):
 write-path double-shift fixed & proven; ISO CD at ID 3 shipped (its
