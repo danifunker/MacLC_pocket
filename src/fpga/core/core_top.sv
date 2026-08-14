@@ -378,7 +378,15 @@ end
 // MiSTer core: memory size and monitor mode are sampled while the machine is
 // held in reset, because a real LC only reads them at boot and the OS lays
 // out QuickDraw for the boot geometry. Changing them live is guest-hostile.
-reg         opt_mem_size    = 1'b0;   // 0 = 2 MB, 1 = 10 MB
+// ★ Default 10 MB (2026-08-14). The OS writes this register only at core
+// launch or when the menu VALUE CHANGES — a JTAG fabric push resets it and
+// the OS never rewrites, so with a 2 MB default every pushed-fabric round
+// silently ran 2 MB while the menu claimed 10 MB (the 08-12/08-13 memory
+// deception, RESUME §0). Defaulting to the machine's intended config makes
+// pushed fabrics honest; card launches are unaffected (the OS writes the
+// persisted choice at launch either way). Keep interact.json defaultval in
+// sync with this.
+reg         opt_mem_size    = 1'b1;   // 0 = 2 MB, 1 = 10 MB
 reg         opt_reset_apply = 1'b0;   // action pulses (clk_74a)
 reg         opt_reset_pram  = 1'b0;
 reg         opt_nmi         = 1'b0;
@@ -637,6 +645,38 @@ localparam [15:0] SLOT_CD   = 16'd320;   // CD-ROM ISO (read-only, ID 3)
     wire [2:0]  bd_img_mounted;
     wire [31:0] bd_img_size;
 
+// ---- JMNT: JTAG mount lever (2026-08-14) ----------------------------------
+// A fabric push wipes the mount latches, and the Analogue OS re-sends
+// dataslot_update only on a real OSD action -- so a freshly pushed fabric has
+// no disks until someone touches the Pocket (the "you re-mount" step in every
+// 08-12/08-13 capture round). This lever replays the host event from the PC:
+//   source[48]    = fire (any edge; current value loops back on the probe so
+//                   scripts read-then-invert instead of guessing)
+//   source[47:32] = slot id (310/311/320/210)
+//   source[31:0]  = image size in BYTES (the real file's size -- serving
+//                   still comes from the OS via target_dataslot_read, this
+//                   only tells the fabric what is mounted and how big)
+// The injected level holds 31 clk_74a cycles so apf_blockdev's edge detector
+// sees one clean event. A real bridge update wins the mux; overlap cannot
+// happen in practice (injection exists for pushed fabrics where the OS is
+// silent). Driver: scripts/jmnt.tcl.
+    wire [48:0] jmnt_src;
+    reg         jmnt_fire_d = 1'b0;
+    reg  [4:0]  jmnt_hold   = 5'd0;
+    always @(posedge clk_74a) begin
+        jmnt_fire_d <= jmnt_src[48];
+        if (jmnt_src[48] != jmnt_fire_d) jmnt_hold <= 5'd31;
+        else if (jmnt_hold != 5'd0)      jmnt_hold <= jmnt_hold - 5'd1;
+    end
+    wire        jmnt_active  = (jmnt_hold != 5'd0);
+    wire        bd_dsu       = dataslot_update | jmnt_active;
+    wire [15:0] bd_dsu_id    = dataslot_update ? dataslot_update_id   : jmnt_src[47:32];
+    wire [31:0] bd_dsu_size  = dataslot_update ? dataslot_update_size : jmnt_src[31:0];
+    altsource_probe #(
+        .instance_id ("JMNT"), .probe_width (1), .source_width (49),
+        .sld_auto_instance_index ("YES")
+    ) cp_jmnt (.probe(jmnt_src[48]), .source(jmnt_src), .source_clk(clk_74a), .source_ena(1'b1));
+
 apf_blockdev #(
     .BUF_BASE ( 32'h4000_0000 )
 ) blockdev (
@@ -648,9 +688,11 @@ apf_blockdev #(
     .bridge_wr_data ( bridge_wr_data ),
     .bridge_rd_data ( bd_bridge_rd_data ),
 
-    .dataslot_update      ( dataslot_update ),
-    .dataslot_update_id   ( dataslot_update_id ),
-    .dataslot_update_size ( dataslot_update_size ),
+    // Muxed with the JMNT lever above -- injected mounts are indistinguishable
+    // from OS-announced ones from here on down.
+    .dataslot_update      ( bd_dsu ),
+    .dataslot_update_id   ( bd_dsu_id ),
+    .dataslot_update_size ( bd_dsu_size ),
 
     .target_dataslot_read       ( target_dataslot_read ),
     .target_dataslot_write      ( target_dataslot_write ),
@@ -1293,21 +1335,10 @@ mac_lc_pocket machine (
     .serial_rxd     ( 1'b1 ),          // idle mark
 
     .cfg_cpuType    ( 2'b10 ),         // 68020
-    // LOCKED to 10 MB (0xE4). The selector still exists in RTL (opt_mem_size,
-    // register 0xF0000000) but is no longer exposed in interact.json and is
-    // not used here.
-    //
-    // Two reasons. Hardware suggests only the 10 MB config boots reliably; and
-    // the variable was `persist: true`, so a setting changed in an earlier
-    // session silently altered a fundamental machine parameter on the next
-    // boot — a manufactured source of run-to-run variation while we are
-    // chasing intermittency.
-    //
-    // Caveat worth remembering: 2 MB is the config the Verilator boot oracle
-    // actually validates (sim.v hardwires 8'h24); the 10 MB SIMM path has
-    // never been exercised in simulation. To restore the choice, put the
-    // Memory variable back in interact.json and wire opt_mem_size here.
-    // 0 = 2 MB (configRAMSize 8'h24), 1 = 10 MB (8'hE4).
+    // Memory config: selectable via the interact.json Memory item (register
+    // 0xF0000000, opt_mem_size above), 0 = 2 MB (configRAMSize 8'h24),
+    // 1 = 10 MB (8'hE4). History below, newest last — the evidence has
+    // flipped more than once, so read all of it before trusting any line.
     //
     // Set to 2 MB on 2026-08-10 after the ASC was fixed and the machine began
     // playing the CHIMES OF DEATH -- a 68k POST failure, most commonly the RAM
@@ -1335,6 +1366,13 @@ mac_lc_pocket machine (
     // Verilator boot oracle validates -- sim.v hardwires 8'h24 -- while
     // PORT_STATUS records the 10 MB SIMM path as never exercised in
     // simulation. If boot goes wrong, try 2 MB before suspecting anything else.
+    //
+    // 2026-08-13 UPDATE, superseding the death-chime line above: after the
+    // write-path and VIA-timer fixes, a user-confirmed TRUE-10 MB round
+    // (menu re-select + Reset & Apply, games disk) passed POST, played the
+    // chime, and reached "Welcome to Macintosh" -- 10 MB POSTs fine now.
+    // The death chimes were measured on the 08-10 netlist and do not carry
+    // forward.
     .cfg_memSize    ( opt_mem_size ),
     .nmi_pulse      ( opt_nmi_sys ),
     // Same pulse also stays in .reset above: the zeroing takes ~8 us and the
