@@ -669,9 +669,161 @@ localparam [15:0] SLOT_CD   = 16'd320;   // CD-ROM ISO (read-only, ID 3)
         else if (jmnt_hold != 5'd0)      jmnt_hold <= jmnt_hold - 5'd1;
     end
     wire        jmnt_active  = (jmnt_hold != 5'd0);
-    wire        bd_dsu       = dataslot_update | jmnt_active;
-    wire [15:0] bd_dsu_id    = dataslot_update ? dataslot_update_id   : jmnt_src[47:32];
-    wire [31:0] bd_dsu_size  = dataslot_update ? dataslot_update_size : jmnt_src[31:0];
+
+// ---- AMNT: launch-time auto-mount from the data slot table (2026-08-14) ----
+// The OS sends dataslot_update (host 0x008A) only when the USER re-loads a
+// slot from the OSD -- data.json docs: "If a user reloads this slot, APF will
+// send [008A Data slot update]". The INITIAL assignment of a deferload slot's
+// default file (data.json "filename", e.g. maclc.hda) is announced through
+// the DATA SLOT TABLE instead: "slot will not be loaded, but its size and ID
+// will still be communicated to the core" -- word 2i = slot id [15:0], word
+// 2i+1 = size in bytes, written into core_bridge_cmd's table RAM (bridge
+// 0xF8002000+) during the launch sequence Reset Enter -> slot access ->
+// 0x008F allcomplete -> Reset Exit. apf_blockdev keys off dataslot_update
+// alone, so the launch announcement was dropped on the floor and a fresh
+// card boot sat at the flashing "?" with maclc.hda assigned but unmounted
+// (user-confirmed 2026-08-14).
+//
+// So: on the FIRST rising edge of dataslot_allcomplete after configuration,
+// walk table entries 0..31 through core_bridge_cmd's port-A read side (which
+// nothing else drives) and synthesize one mount per known slot id with a
+// nonzero size, muxed into bd_dsu exactly like JMNT above.
+//  * NOT gated on reset_n: 0x008F lands while the OS still holds reset --
+//    Reset Exit comes after -- same defect family as the ungated update
+//    latch in apf_blockdev (buildY). Downstream is safe: scsi.v's mounted/
+//    capacity latches have no reset term, and the floppy leg re-arms
+//    apf_blockdev's own copy machinery (gated on rom_done).
+//  * One-shot (amnt_done is never cleared): a real OSD pick sends 0x008A
+//    AND rewrites the table, so a re-scan would echo it as a duplicate
+//    mount. Scanning once keeps tb_disk_swap semantics untouched.
+//  * A JTAG fabric push wipes the table RAM and dataslot_allcomplete with
+//    the rest of the fabric, so pushed fabrics still mount via JMNT.
+//  * mf_datatable port A has registered outputs (outdata_reg_a = CLOCK0):
+//    q_a is valid two clocks after the address registers, hence lat = 2.
+//  * Table words 0..63 power up zero (build_id.mif fills only 0xE0-0xE2),
+//    so an unwritten table cannot fake an entry.
+    localparam [2:0] A_IDLE = 3'd0,   // await first allcomplete rise
+                     A_STLE = 3'd1,   // settle after allcomplete
+                     A_RDID = 3'd2,   // read slot-id word (entry*2)
+                     A_RDSZ = 3'd3,   // read size word (entry*2+1)
+                     A_EVAL = 3'd4,   // known id + nonzero size?
+                     A_FIRE = 3'd5,   // drive the synthesized update
+                     A_GAP  = 3'd6,   // low gap so the next edge is clean
+                     A_DONE = 3'd7;   // parked until reconfiguration
+
+    reg  [2:0]  amnt_state = A_IDLE;
+    reg         amnt_acp_d = 1'b0;
+    reg         amnt_done  = 1'b0;
+    reg  [9:0]  amnt_wait  = 10'd0;
+    reg  [4:0]  amnt_entry = 5'd0;
+    reg  [1:0]  amnt_lat   = 2'd0;
+    reg  [15:0] amnt_id    = 16'd0;
+    reg  [31:0] amnt_size  = 32'd0;
+    reg  [9:0]  amnt_addr  = 10'd0;
+    reg  [4:0]  amnt_hold  = 5'd0;
+    reg  [3:0]  amnt_fired = 4'd0;    // AMNT probe: mounts synthesized
+    wire [4:0]  amnt_next  = amnt_entry + 5'd1;
+    wire        amnt_active = (amnt_hold != 5'd0);
+
+    always @(posedge clk_74a) begin
+        amnt_acp_d <= dataslot_allcomplete;
+        if (amnt_hold != 5'd0) amnt_hold <= amnt_hold - 5'd1;
+
+        case (amnt_state)
+        A_IDLE: if (dataslot_allcomplete && !amnt_acp_d && !amnt_done) begin
+            amnt_done  <= 1'b1;
+            amnt_wait  <= 10'd1023;          // ~14 us; the table writes all
+            amnt_state <= A_STLE;            // precede 0x008F, this is margin
+        end
+        A_STLE: begin
+            amnt_entry <= 5'd0;
+            if (amnt_wait != 10'd0) amnt_wait <= amnt_wait - 10'd1;
+            else begin
+                amnt_addr  <= 10'd0;         // entry 0, id word
+                amnt_lat   <= 2'd2;
+                amnt_state <= A_RDID;
+            end
+        end
+        A_RDID: begin
+            if (amnt_lat != 2'd0) amnt_lat <= amnt_lat - 2'd1;
+            else begin
+                amnt_id    <= datatable_q[15:0];
+                amnt_addr  <= {4'd0, amnt_entry, 1'b1};
+                amnt_lat   <= 2'd2;
+                amnt_state <= A_RDSZ;
+            end
+        end
+        A_RDSZ: begin
+            if (amnt_lat != 2'd0) amnt_lat <= amnt_lat - 2'd1;
+            else begin
+                amnt_size  <= datatable_q;
+                amnt_state <= A_EVAL;
+            end
+        end
+        A_EVAL: begin
+            if (amnt_size != 32'd0 &&
+                (amnt_id == SLOT_HDD0 || amnt_id == SLOT_HDD1 ||
+                 amnt_id == SLOT_CD   || amnt_id == SLOT_FLOPPY)) begin
+                amnt_state <= A_FIRE;
+            end else if (amnt_entry == 5'd31) begin
+                amnt_state <= A_DONE;
+            end else begin
+                amnt_entry <= amnt_next;
+                amnt_addr  <= {4'd0, amnt_next, 1'b0};
+                amnt_lat   <= 2'd2;
+                amnt_state <= A_RDID;
+            end
+        end
+        A_FIRE: begin
+            // Start driving only while the mux is quiet; a real update or a
+            // JMNT injection landing mid-pulse would merge with ours (same
+            // accepted overlap caveat as JMNT -- cannot happen at launch,
+            // and the scanner never runs again after it).
+            if (amnt_hold == 5'd0 && !dataslot_update && !jmnt_active) begin
+                amnt_hold  <= 5'd15;
+                amnt_fired <= amnt_fired + 4'd1;
+            end else if (amnt_hold == 5'd1) begin
+                amnt_wait  <= 10'd15;
+                amnt_state <= A_GAP;
+            end
+        end
+        A_GAP: begin
+            if (amnt_wait != 10'd0) amnt_wait <= amnt_wait - 10'd1;
+            else if (amnt_entry == 5'd31) amnt_state <= A_DONE;
+            else begin
+                amnt_entry <= amnt_next;
+                amnt_addr  <= {4'd0, amnt_next, 1'b0};
+                amnt_lat   <= 2'd2;
+                amnt_state <= A_RDID;
+            end
+        end
+        A_DONE: amnt_state <= A_DONE;        // parked until the next config
+        default: amnt_state <= A_DONE;
+        endcase
+    end
+
+    // Port A of the framework's data slot table RAM -- read-only scan use.
+    // These three were undriven before; nothing else touches port A.
+    assign datatable_addr = amnt_addr;
+    assign datatable_wren = 1'b0;
+    assign datatable_data = 32'd0;
+
+    // AMNT probe word (decoded by scripts/read_bdst.tcl): quasi-static once
+    // the scan parks in A_DONE, so the JTAG read needs no handshake.
+    wire [31:0] dbg_amnt = { amnt_fired,        // [31:28] mounts synthesized
+                             amnt_done,         // [27]    scan armed/ran
+                             amnt_state,        // [26:24] 7 = done
+                             3'd0, amnt_entry,  // [23:16] last entry scanned
+                             amnt_id };         // [15:0]  last id read
+
+    // Real bridge update > JMNT injection > launch scan.
+    wire        bd_dsu       = dataslot_update | jmnt_active | amnt_active;
+    wire [15:0] bd_dsu_id    = dataslot_update ? dataslot_update_id
+                             : jmnt_active     ? jmnt_src[47:32]
+                                               : amnt_id;
+    wire [31:0] bd_dsu_size  = dataslot_update ? dataslot_update_size
+                             : jmnt_active     ? jmnt_src[31:0]
+                                               : amnt_size;
     altsource_probe #(
         .instance_id ("JMNT"), .probe_width (1), .source_width (49),
         .sld_auto_instance_index ("YES")
@@ -1023,6 +1175,13 @@ apf_bridge_loader #(
         .instance_id ("BDWW"), .probe_width (32), .source_width (1),
         .sld_auto_instance_index ("YES")
     ) cp_bdww (.probe(bd_dbg_bdww),          .source(), .source_clk(clk_sys), .source_ena(1'b1));
+
+    // Launch-scan witness: did AMNT run, how many mounts did it synthesize?
+    // (clk_74a data, but every field is quasi-static once the scan parks.)
+    altsource_probe #(
+        .instance_id ("AMNT"), .probe_width (32), .source_width (1),
+        .sld_auto_instance_index ("YES")
+    ) cp_amnt (.probe(dbg_amnt),             .source(), .source_clk(clk_74a), .source_ena(1'b1));
 `endif
 
 

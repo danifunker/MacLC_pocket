@@ -45,6 +45,16 @@ if {[info exists idx(BDWW)]} {
     puts [format "  last WRITTEN sector words 0,1   : %04X %04X (staged, file order)" \
         [expr {($ww >> 16) & 0xFFFF}] [expr {$ww & 0xFFFF}]]
 }
+if {[info exists idx(AMNT)]} {
+    scan [read_probe_data -instance_index $idx(AMNT) -value_in_hex] %x am
+    set am [expr {$am & 0xFFFFFFFF}]
+    # Launch-time auto-mount scan (core_top AMNT). state 7 = scan finished.
+    # On a card boot expect fired>=1, armed=1, state=7. After a JTAG push the
+    # table is wiped: fired=0/armed=0 is NORMAL there (use jmnt.tcl instead).
+    puts [format "  AMNT launch scan: fired=%d armed=%d state=%d entry=%d last_id=%d" \
+        [expr {($am >> 28) & 0xF}] [expr {($am >> 27) & 1}] [expr {($am >> 24) & 7}] \
+        [expr {($am >> 16) & 0x1F}] [expr {$am & 0xFFFF}]]
+}
 if {[info exists idx(SDW0)]} {
     scan [read_probe_data -instance_index $idx(SDW0) -value_in_hex] %x sw
     set sw [expr {$sw & 0xFFFFFFFF}]
