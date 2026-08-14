@@ -50,8 +50,22 @@ module maclc_v8_video(
     input  [15:0] vram_rdata
 );
 
-reg [10:0] h_total, h_active, h_sync_start, h_sync_end;
-reg [9:0] v_total, v_active, v_sync_start, v_sync_end;
+// Scanout timing — see the POCKET CUT note below: one fixed mode, so these are
+// constants, NOT a mode-selected combinational block.  They MUST stay
+// localparams: as `reg`s driven by a constant-only `always @(*)`, Verilator 5.x
+// elides the block entirely (ALWNEVER: "no variables read"), leaving every
+// timing term 0 — h_count/v_count free-run without wrapping and vsync never
+// asserts, so the sim's frame counter sits at 0 forever while the guest boots
+// normally.  Quartus folds either form to the same constants; only the sim
+// diverges.  (Cost a session on 2026-08-14.)
+localparam [10:0] h_total     = 11'd640;
+localparam [10:0] h_active    = 11'd512;
+localparam [10:0] h_sync_start= 11'd528;
+localparam [10:0] h_sync_end  = 11'd576;
+localparam [9:0]  v_total     = 10'd407;
+localparam [9:0]  v_active    = 10'd384;
+localparam [9:0]  v_sync_start= 10'd385;
+localparam [9:0]  v_sync_end  = 10'd388;
 
 // --- Config CDC: 2FF sync into the scanout clock domain --------------------
 // video_mode/monitor_id/test_* are clk_sys-domain, quasi-static (OSD / guest
@@ -99,13 +113,8 @@ end
 // along with the clock mux in the top level.
 //
 // monitor_id is still an input (pseudovia reports it to the ROM as the
-// monitor sense value) but no longer selects timing here.
-always @(*) begin
-    h_total = 11'd640; h_active = 11'd512;
-    h_sync_start = 11'd528; h_sync_end = 11'd576;
-    v_total = 10'd407; v_active = 10'd384;
-    v_sync_start = 10'd385; v_sync_end = 10'd388;
-end
+// monitor sense value) but no longer selects timing here.  The timing values
+// themselves are the localparams declared at the top of the module.
 
 reg [10:0] h_count;
 reg [9:0] v_count;
@@ -184,7 +193,8 @@ end
 
 // --- Video Address Generation (packed on-chip framebuffer) ---
 // vram_bram stores each scanline as words_per_line CONTIGUOUS words (the V8's
-// 1024-byte stride gap is removed by the packing in addrController). Display
+// stride gap is removed by the packing in addrController — 512 B/line on the
+// 256K SIMM this fork presents, 1024 B with vram_force_512k). Display
 // line L therefore lives at packed word offset L*words_per_line, which we
 // accumulate per scanline to avoid a per-pixel multiply.
 

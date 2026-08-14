@@ -43,6 +43,7 @@
 #include <iomanip>
 #include <vector>
 #include <algorithm>
+#include <sys/time.h>
 using namespace std;
 
 // stb_image_write for PNG screenshots
@@ -79,6 +80,14 @@ bool verbose_diag = false;
 // ---------
 bool cpu_trace_enable = false;  // Enable after ROM download
 bool cpu_trace_disabled = false; // --no-cpu-trace: skip per-instruction trace (long runs)
+// --cpu-trace-from <frame>: hold the trace file closed until this frame, so a
+// long boot can be run at full speed and still yield a full-disassembly trace
+// of just the window of interest (the mystery-B fault lands at F503 with the
+// POST-skip ROM; ~16k instructions/frame makes a 15-frame window very readable).
+int cpu_trace_from = 0;
+// --patch-watch: poll the RAM array for changes to the Gestalt-patch words.
+bool patch_watch = false;
+bool fix_src = false;
 bool cpu_trace_started = false;  // Wait for ROM load and reset
 FILE* cpu_trace_file = nullptr;
 const char* cpu_trace_filename = "cpu_trace.log";
@@ -120,6 +129,20 @@ bool periph_debug_prev_bus_control = false;  // For edge detection
 // ------------------------
 std::vector<int> screenshot_frames;
 bool screenshot_mode = false;
+// --screenshot-every <N>: also save a PNG every N frames.  Long runs (the
+// System 7.1 crash hunt lands 900-1200 frames in) need a filmstrip, not a
+// single sample — a crash dialog that appears and is then overdrawn is
+// invisible to a one-shot screenshot.
+int screenshot_every = 0;
+int last_periodic_frame = -1;
+// --heartbeat <N>: print frame/wall-clock progress every N frames (0 = off).
+// Long headless runs are otherwise indistinguishable from a hang.
+int heartbeat_every = 60;
+int last_heartbeat_frame = -1;
+struct timeval sim_start_tv;
+// --screenshot-prefix <p>: path/name prefix for saved PNGs, so concurrent runs
+// (and successive experiments) don't overwrite each other's frames.
+std::string screenshot_prefix;
 
 // Stop at frame functionality
 // ---------------------------
@@ -165,6 +188,11 @@ SimBlockDevice blockdevice(console);
 // and --floppy0/1 on the command line.
 std::string scsi_disk_files[2];
 std::string cdrom_file;        // --cdrom <iso> -> block-device slot 2 (SCSI ID 3 CD)
+// --rom <file>: override the boot ROM. Mainly for the POST-skip ROM built by
+// verilator/patch_skip_ramtest.py — the 10 MB RAM march costs ~1700 frames of
+// every run, and the mystery-B fault is documented as invariant across
+// cold/warm boot (the patch takes the ROM's own warm-start path).
+std::string rom_file_opt;
 std::string floppy_disk_files[2];
 
 // Input handling
@@ -186,9 +214,12 @@ const int input_menu = 12;
 
 // Video
 // -----
-// Mac LC VGA mode (monitor_id=6) is 640x480
-#define VGA_WIDTH 640
-#define VGA_HEIGHT 480
+// POCKET CUT: one video mode only — 12" RGB, monitor ID 2, 512x384 (see the
+// POCKET CUT note in rtl/maclc_v8_video.sv). The old 640x480 (ID 6) buffer left
+// 128 dead columns and 96 dead rows of never-written memory in every screenshot,
+// which read as a grey L-shaped border around the real image.
+#define VGA_WIDTH 512
+#define VGA_HEIGHT 384
 #define VGA_ROTATE 0
 #define VGA_SCALE_X vga_scale
 #define VGA_SCALE_Y vga_scale
@@ -340,7 +371,102 @@ int verilate() {
 								(unsigned)rf[0],(unsigned)rf[1],(unsigned)rf[2],(unsigned)rf[6],(unsigned)rf[7]); DLOG("      D4(testmask)=%08X D3=%08X A0=%08X A1=%08X\n",(unsigned)rf[4],(unsigned)rf[3],(unsigned)rf[8],(unsigned)rf[9]); en++;
 						}
 					}
-					{   // MOVES-BERR fix verification: machine-config word D2 (and D5
+						{   // MYSTERY B (docs/RESUME.md): the Gestalt-family RAM patch's
+						// LINK/UNLK/RTS epilogue at $C172-$C17A returns to $400E6C —
+						// the boot-blocks image base, whose first word is the 'LK'
+						// signature ($4C4B) = an illegal instruction. Dump the frame
+						// pointer and stack pointer at each step of the epilogue and
+						// at the fatal fetch, so the stack arithmetic is measured
+						// rather than inferred. rf[8..15] = A0..A7.
+						static int mb=0;
+						if ((mpc==0x00BFF8 || mpc==0x00C172 || mpc==0x00C178 ||
+						     mpc==0x00C17A || mpc==0x400E6C) && mb<40) {
+							auto &rf = VERTOPINTERN->emu__DOT__tg68k__DOT__tg68k__DOT__regfile;
+							fprintf(stderr,
+								"[MYSTB] F%d PC=%06X  A6=%08X A7=%08X  A3=%08X A4=%08X D4=%08X D5=%08X D6=%08X D7=%08X\n",
+								video.count_frame, mpc,
+								(unsigned)rf[14], (unsigned)rf[15],
+								(unsigned)rf[11], (unsigned)rf[12],
+								(unsigned)rf[4], (unsigned)rf[5],
+								(unsigned)rf[6], (unsigned)rf[7]);
+							mb++;
+						}
+					}
+					{   // MYSTERY B, the actual defect: an LZ decompressor at $BB9E-$BBC8
+						// expands a code resource into $C000+. Its literal path is
+						// `move.b (A0)+,(A2)+`, so the byte written to $C01A came
+						// STRAIGHT from source memory at A0. Guest $C01A must end up
+						// $2C00 (`move.l D0,D6`) — MAME has that; we get $0000, and the
+						// resulting instruction-stream desync is what kills the boot.
+						// Print the source pointer and the source byte for the stores
+						// around $C01A: that separates "the source buffer was already
+						// corrupt" (disk/SCSI read path) from "the store went wrong"
+						// (CPU/bus).  rf[8]=A0, rf[10]=A2.
+						if (mpc == 0x00BBA2 || mpc == 0x00BBA4) {
+							auto &rf = VERTOPINTERN->emu__DOT__tg68k__DOT__tg68k__DOT__regfile;
+							unsigned a2 = (unsigned)rf[10] & 0xFFFFFF;
+							if (a2 >= 0xC010 && a2 <= 0xC020) {
+								auto &mem = VERTOPINTERN->emu__DOT__ram__DOT__mem;
+								unsigned a0 = (unsigned)rf[8] & 0xFFFFFF;
+								unsigned w  = mem[0x100000 + (a0 >> 1)];
+								unsigned b  = (a0 & 1) ? (w & 0xFF) : (w >> 8);
+								fprintf(stderr, "[LZ] F%d PC=%06X  A0=%06X A2=%06X  srcbyte=%02X (srcword=%04X)\n",
+									video.count_frame, mpc, a0, a2, b, w);
+								// Dump the COMPRESSED SOURCE buffer once, so it can be
+								// diffed against the same bytes on disk. If the source
+								// is already wrong the SCSI read path corrupted it; if
+								// it is right, the CPU mis-expanded it.
+								static bool srcdumped = false;
+								if (!srcdumped) {
+									srcdumped = true;
+									fprintf(stderr, "[SRCDUMP] compressed source $C220-$C25F:\n");
+									for (unsigned x = 0xC220; x < 0xC260; x += 16) {
+										fprintf(stderr, "  %06X:", x);
+										for (unsigned o = 0; o < 16; o += 2)
+											fprintf(stderr, " %04X", mem[0x100000 + ((x + o) >> 1)]);
+										fprintf(stderr, "\n");
+									}
+								}
+							}
+						}
+					}
+					{   // MYSTERY B: dump the guest state that decides the case, at the
+						// moment of the fatal fetch. sim_ram is a flat word array;
+						// addrController maps CPU byte address A (< 8 MB, in the SIMM)
+						// to SDRAM word $100000 + (A>>1) — see ram_sdram_word.
+						static bool dumped = false;
+						if (mpc == 0x400E6C && !dumped) {
+							dumped = true;
+							auto &mem = VERTOPINTERN->emu__DOT__ram__DOT__mem;
+							auto rdw = [&](unsigned byteaddr) -> unsigned {
+								return mem[0x100000 + (byteaddr >> 1)];
+							};
+							auto rdl = [&](unsigned a) -> unsigned {
+								return (rdw(a) << 16) | rdw(a + 2);
+							};
+							// ---- VRAM geometry witnesses (docs/RESUME.md sanity check:
+							// ScreenRow must be $0200 = 512 on the 256K SIMM) ----
+							fprintf(stderr, "[VRAMCHK] ScreenRow($106)=%04X  ScrnBase($824)=%08X  "
+							                "MainDevice($8A4)=%08X  DSErrCode($AF0)=%04X\n",
+								rdw(0x106), rdl(0x824), rdl(0x8A4), rdw(0xAF0));
+							// ---- The Gestalt-family RAM patch, for the MAME diff ----
+							fprintf(stderr, "[PATCHDUMP] $C000-$C17F:\n");
+							for (unsigned a = 0xC000; a < 0xC180; a += 16) {
+								fprintf(stderr, "  %06X:", a);
+								for (unsigned o = 0; o < 16; o += 2) fprintf(stderr, " %04X", rdw(a + o));
+								fprintf(stderr, "\n");
+							}
+							// ---- The boot-blocks image head ----
+							fprintf(stderr, "[BBDUMP] $400E60-$400EAF:\n");
+							for (unsigned a = 0x400E60; a < 0x400EB0; a += 16) {
+								fprintf(stderr, "  %06X:", a);
+								for (unsigned o = 0; o < 16; o += 2) fprintf(stderr, " %04X", rdw(a + o));
+								fprintf(stderr, "\n");
+							}
+							fflush(stderr);
+						}
+					}
+				{   // MOVES-BERR fix verification: machine-config word D2 (and D5
 						// jump index) at the dispatch $A00AB0. MAME: D2=$CC000D07.
 						static int n=0;
 						if (mpc==0xA00AB0 && n<8) {
@@ -676,7 +802,9 @@ int verilate() {
 					if (last_download && !*bus.ioctl_download && !cpu_trace_enable && !cpu_trace_disabled) {
 						cpu_trace_enable = true;
 						DLOG( "*** Enabling CPU trace after ROM download ***\n");
-						if (!cpu_trace_file) {
+						// With --cpu-trace-from the file is opened later, in the
+						// frame loop, so only the window of interest is written.
+						if (!cpu_trace_file && cpu_trace_from == 0) {
 							cpu_trace_file = fopen(cpu_trace_filename, "w");
 						}
 					}
@@ -699,6 +827,11 @@ void show_help() {
 	printf("  --headless, --no-gui          Run without SDL/ImGui (CI/headless)\n");
 	printf("  --screenshot <frames>         Take screenshots at specified frame numbers\n");
 	printf("                                (comma-separated list, e.g., 100,200,300)\n");
+	printf("  --screenshot-every <N>        Also save a PNG every N frames (filmstrip)\n");
+	printf("  --rom <file>                  Boot ROM override (default ../releases/boot0.rom)\n");
+	printf("  --cpu-trace-from <frame>      Only write cpu_trace.log from this frame onward\n");
+	printf("  --screenshot-prefix <p>       Path/name prefix for saved PNGs (e.g. ../scratch/run1_)\n");
+	printf("  --heartbeat <N>               Print frame/wall-clock progress every N frames (0=off, default 60)\n");
 	printf("  --stop-at-frame <frame>       Exit simulation after specified frame\n");
 	printf("  -v, --verbose                 Enable verbose bring-up diagnostics\n");
 	printf("                                (overlay/FC/march/RAMCFG/bus/CPU-trace spam)\n");
@@ -720,8 +853,9 @@ void save_screenshot(int frame_number) {
 		return;
 	}
 
-	char filename[256];
-	snprintf(filename, sizeof(filename), "screenshot_frame_%04d.png", frame_number);
+	char filename[512];
+	snprintf(filename, sizeof(filename), "%sscreenshot_frame_%04d.png",
+	         screenshot_prefix.c_str(), frame_number);
 
 	// Read from the video output buffer that video.Clock() writes to
 	// The colour format is: 0xFF000000 | B << 16 | G << 8 | R (ABGR)
@@ -798,6 +932,29 @@ int main(int argc, char** argv, char** env) {
 			}
 			printf("Screenshot mode enabled for frames: %s\n", frames_str.c_str());
 			i++;
+		} else if (strcmp(argv[i], "--screenshot-every") == 0 && i + 1 < argc) {
+			screenshot_mode = true;
+			screenshot_every = std::stoi(argv[i + 1]);
+			printf("Periodic screenshots every %d frames\n", screenshot_every);
+			i++;
+		} else if (strcmp(argv[i], "--cpu-trace-from") == 0 && i + 1 < argc) {
+			cpu_trace_from = std::stoi(argv[i + 1]);
+			printf("CPU trace will start at frame %d\n", cpu_trace_from);
+			i++;
+		} else if (strcmp(argv[i], "--fix-src") == 0) {
+			fix_src = true;
+			patch_watch = true;
+		} else if (strcmp(argv[i], "--patch-watch") == 0) {
+			patch_watch = true;
+		} else if (strcmp(argv[i], "--rom") == 0 && i + 1 < argc) {
+			rom_file_opt = argv[i + 1];
+			i++;
+		} else if (strcmp(argv[i], "--screenshot-prefix") == 0 && i + 1 < argc) {
+			screenshot_prefix = argv[i + 1];
+			i++;
+		} else if (strcmp(argv[i], "--heartbeat") == 0 && i + 1 < argc) {
+			heartbeat_every = std::stoi(argv[i + 1]);
+			i++;
 		} else if (strcmp(argv[i], "--stop-at-frame") == 0 && i + 1 < argc) {
 			stop_at_frame = std::stoi(argv[i + 1]);
 			stop_at_frame_enabled = true;
@@ -829,6 +986,8 @@ int main(int argc, char** argv, char** env) {
 			floppy_disk_files[1] = argv[++i]; // secondary floppy
 		}
 	}
+
+	gettimeofday(&sim_start_tv, NULL);
 
 	// Create core and initialise
 	top = new Vemu();
@@ -943,7 +1102,8 @@ int main(int argc, char** argv, char** env) {
 	}
 
 	// Auto-load Mac LC ROM at startup
-	const char* rom_file = "../releases/boot0.rom";
+	const char* rom_file = rom_file_opt.empty() ? "../releases/boot0.rom"
+	                                            : rom_file_opt.c_str();
 	bus.QueueDownload(rom_file, 0, 1);  // index 0 for ROM
 	fprintf(stderr, "Machine type: Mac LC, loading ROM: %s\n", rom_file);
 
@@ -1141,6 +1301,92 @@ int main(int argc, char** argv, char** env) {
 
 		video.UpdateTexture();
 
+		// MYSTERY B: poll the RAM array directly for changes to the Gestalt-patch
+		// words $C018-$C01E. A bus-level write watcher can miss a store if the
+		// _ramWE/cpuBusControl qualification is wrong; reading the array is
+		// unambiguous. Prints the before/after value and the frame, so we can see
+		// whether $C01A ever held a sane opcode before it read $0000.
+		if (patch_watch) {
+			auto &mem = VERTOPINTERN->emu__DOT__ram__DOT__mem;
+			static unsigned prev[4] = {0xFFFFFFFFu, 0, 0, 0};
+			for (int k = 0; k < 4; k++) {
+				unsigned a = 0xC018 + 2 * k;
+				unsigned v = mem[0x100000 + (a >> 1)];
+				if (prev[0] != 0xFFFFFFFFu && v != prev[k]) {
+					printf("[PATCHPOLL] F%d  $%04X: %04X -> %04X\n",
+					       video.count_frame, a, prev[k], v);
+					fflush(stdout);
+				}
+				prev[k] = v;
+			}
+		}
+
+		// MYSTERY B confirmation lever (--fix-src): repair the ONE corrupted
+		// byte in the compressed source buffer before the decompressor reads
+		// it.  Sector 57710 byte +4 is $2C; it lands at guest $C237, so the
+		// word at $C236 must read $552C and instead reads $5500.  If the whole
+		// crash really is this one byte, correcting it here must let the boot
+		// continue.  This is a DIAGNOSTIC, not a fix — the defect is upstream
+		// in the SCSI delivery path.
+		if (fix_src) {
+			auto &mem = VERTOPINTERN->emu__DOT__ram__DOT__mem;
+			unsigned idx = 0x100000 + (0xC236 >> 1);
+			if (mem[idx] == 0x5500) {
+				mem[idx] = 0x552C;
+				printf("[FIXSRC] F%d: repaired $C236 5500 -> 552C\n", video.count_frame);
+				fflush(stdout);
+			}
+		}
+
+		// MYSTERY B: is the SCSI sector buffer itself correct? The block model
+		// presents word[2] = $2C00 (verified), the guest ends up with $0000.
+		// buffer0 holds the even byte of each word, buffer1 the odd byte, in a
+		// RING_LOG=5 ring of 256-word slots. Find the slot holding our sector by
+		// its first two words (2005 A055) and report word[2]. Buffer correct =>
+		// the SERVE path lost it; buffer wrong => the FILL lost it.
+		if (patch_watch) {
+			static bool scanned = false;
+			if (!scanned && video.count_frame >= 501) {
+				auto &b0 = VERTOPINTERN->emu__DOT__dc0__DOT__scsi__DOT__target__BRA__0__KET____DOT__target__DOT__buffer0__DOT__ram_ab;
+				auto &b1 = VERTOPINTERN->emu__DOT__dc0__DOT__scsi__DOT__target__BRA__0__KET____DOT__target__DOT__buffer1__DOT__ram_ab;
+				for (int slot = 0; slot < 32; slot++) {
+					int base = slot * 256;
+					if (b0[base] == 0x20 && b1[base] == 0x05 &&
+					    b0[base+1] == 0xA0 && b1[base+1] == 0x55) {
+						printf("[BUFCHK] F%d slot %d: word[0]=%02X%02X word[1]=%02X%02X "
+						       "word[2]=%02X%02X word[3]=%02X%02X  (word[2] must be 2C00)\n",
+						       video.count_frame, slot,
+						       b0[base],   b1[base],   b0[base+1], b1[base+1],
+						       b0[base+2], b1[base+2], b0[base+3], b1[base+3]);
+						fflush(stdout);
+						scanned = true;
+						break;
+					}
+				}
+			}
+		}
+
+		// Open the gated CPU trace once the window of interest is reached.
+		if (cpu_trace_from > 0 && !cpu_trace_file && !cpu_trace_disabled &&
+		    video.count_frame >= cpu_trace_from) {
+			cpu_trace_file = fopen(cpu_trace_filename, "w");
+			printf("[F%d] CPU trace window opened -> %s\n",
+			       video.count_frame, cpu_trace_filename);
+			fflush(stdout);
+		}
+
+		// Progress heartbeat — headless long runs otherwise look like a hang.
+		if (heartbeat_every > 0 && video.count_frame != last_heartbeat_frame &&
+		    (video.count_frame % heartbeat_every) == 0) {
+			last_heartbeat_frame = video.count_frame;
+			struct timeval now; gettimeofday(&now, NULL);
+			double secs = (now.tv_sec - sim_start_tv.tv_sec) +
+			              (now.tv_usec - sim_start_tv.tv_usec) / 1e6;
+			printf("[HB] frame %d  wall %.1fs  PC=%08X\n",
+			       video.count_frame, secs, (unsigned)VERTOPINTERN->debug_pc);
+			fflush(stdout);
+		}
+
 		// Handle screenshots at specified frames
 		bool took_screenshot_this_frame = false;
 		if (screenshot_mode) {
@@ -1150,6 +1396,12 @@ int main(int argc, char** argv, char** env) {
 				screenshot_frames.erase(it);
 				took_screenshot_this_frame = true;
 			}
+		}
+		if (screenshot_every > 0 && video.count_frame != last_periodic_frame &&
+		    video.count_frame > 0 && (video.count_frame % screenshot_every) == 0) {
+			last_periodic_frame = video.count_frame;
+			save_screenshot(video.count_frame);
+			took_screenshot_this_frame = true;
 		}
 
 		// Check if we should stop at this frame

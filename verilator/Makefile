@@ -5,7 +5,7 @@ TOP = --top-module emu
 RTL = ../rtl
 V_INC = +incdir+$(RTL)
 
-V_DEFINE = +define+debug=1 +define+SIMULATION=1 +define+USE_ASC_AUDIO=1  -CFLAGS "-I../sim/imgui -I../sim/vinc -I../sim/ -g "  --timescale-override 1ps/1ps -Wno-TIMESCALEMOD \
+V_DEFINE = +define+debug=1 +define+SIMULATION=1 +define+USE_ASC_AUDIO=1  -CFLAGS "-I../sim/imgui -I../sim/vinc -I../sim/ -I/opt/homebrew/include -g "  --timescale-override 1ps/1ps -Wno-TIMESCALEMOD \
 	-I$(RTL) \
 	-I$(RTL)/tg68k \
 	-I$(RTL)/uart \
@@ -13,6 +13,9 @@ V_DEFINE = +define+debug=1 +define+SIMULATION=1 +define+USE_ASC_AUDIO=1  -CFLAGS
         --timing
 # Suppress common warnings that don't affect simulation correctness
 V_DEFINE += -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-IMPLICIT -Wno-PINMISSING -Wno-UNUSEDSIGNAL -Wno-UNOPTFLAT -Wno-CASEINCOMPLETE -Wno-UNSIGNED -Wno-CMPCONST -Wno-LATCH -Wno-UNDRIVEN -Wno-MISINDENT -Wno-COMBDLY -Wno-INITIALDLY -Wno-SYNCASYNCNET -Wno-BLKLOOPINIT -Wno-MULTIDRIVEN -Wno-GENUNNAMED
+# NOTE: ALWNEVER is deliberately NOT waived.  Verilator 5.x elides a constant-only
+# `always @(*)` block ("no variables read"), which silently zeroed the V8 video
+# timing constants and killed vsync in sim.  Treat any ALWNEVER hit as a real bug.
 #V_DEFINE += --threads 8  # this slows it way down
 V_DEFINE += --trace-fst
 # Uncomment to enable verbose per-instruction/per-cycle debug traces (HC05, TG68, VIA, PVIA, etc.)
@@ -27,11 +30,11 @@ UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S), Darwin) #APPLE
 	ECHO_MESSAGE = "Mac OS X"
 	LIBS += -framework OpenGL -framework Cocoa -framework IOKit -framework CoreVideo `sdl2-config --libs`
-	LIBS += -L/usr/local/lib -L/opt/local/lib
+	LIBS += -L/usr/local/lib -L/opt/local/lib -L/opt/homebrew/lib -llz4
 
 	CXXFLAGS += `sdl2-config --cflags` -Iimgui
 	CXXFLAGS += `sdl2-config --cflags | sed 's|include/SDL2|include/|'`
-	CXXFLAGS += -I/usr/local/include -I/opt/local/include
+	CXXFLAGS += -I/usr/local/include -I/opt/local/include -I/opt/homebrew/include
 	CFLAGS = $(CXXFLAGS) -Iimgui
 endif
 
@@ -112,7 +115,9 @@ $(VOUT): $(V_SRC)  Makefile
 
 $(EXE): $(VOUT) $(C_SRC)
 #	(cd obj_dir; make OPT="-fauto-inc-dec -fdce -fdefer-pop -fdse -ftree-ccp -ftree-ch -ftree-fre -ftree-dce -ftree-dse" -f Vemu.mk)
-	(cd obj_dir; make -f Vemu.mk)
+#	OPT_FAST=-O2 on the generated model: the default -Os costs ~40% wall-clock on
+#	the long (1000+ frame) boot runs this harness exists for.
+	(cd obj_dir; make -f Vemu.mk OPT_FAST=-O2)
 
 fast:
 	(cd obj_dir; rm -f *.o ; make OPT="-fcompare-elim -fcprop-registers -fguess-branch-probability -fauto-inc-dec -fif-conversion2 -fif-conversion -fipa-pure-const -fdce -fipa-profile -fipa-reference -fmerge-constants -fsplit-wide-types -fdefer-pop -fdse -ftree-ccp -ftree-ch -ftree-fre -ftree-dce -ftree-dse -ftree-builtin-call-dce -ftree-copyrename -ftree-dominator-opts -ftree-forwprop -ftree-phiprop -ftree-sra -ftree-pta -ftree-ter -funit-at-a-time -ftree-bit-ccp -falign-functions  -falign-jumps -falign-loops  -falign-labels -fcaller-saves -fcrossjumping -fcse-follow-jumps -fcse-skip-blocks -fdelete-null-pointer-checks -fdevirtualize -fexpensive-optimizations -fgcse  -fgcse-lm -finline-small-functions -findirect-inlining -fipa-sra -foptimize-sibling-calls -fpartial-inlining -fpeephole2 -fregmove -freorder-blocks  -freorder-functions -frerun-cse-after-loop -fsched-interblock  -fsched-spec -fschedule-insns -fschedule-insns2 -fstrict-aliasing -fstrict-overflow -ftree-switch-conversion -ftree-pre -ftree-vrp" -f Vemu.mk)

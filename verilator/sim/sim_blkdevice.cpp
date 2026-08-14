@@ -101,6 +101,17 @@ void SimBlockDevice::BeforeEval(int cycles)
          int byte2 = disk[i].get();
          *sd_buff_dout = (byte1 << 8) | (byte2 & 0xFF);
          *sd_buff_addr = bytecnt/2;  // Word address
+         // MYSTERY B: log the first words handed to the RTL for the watched LBA.
+         {
+            static int wl = -2;
+            if (wl == -2) { wl = -1;
+              const char* m = Verilated::commandArgsPlusMatch("watch_lba=");
+              if (m && m[0]) { const char* eq = strchr(m,'='); if (eq) wl = atoi(eq+1); }
+            }
+            if (wl >= 0 && (int)*(sd_lba[i]) == wl && bytecnt < 24)
+              fprintf(stderr, "[BLKW] lba %d word[%u] <= %04X\n",
+                      wl, (unsigned)*sd_buff_addr, (unsigned)*sd_buff_dout);
+         }
          bytecnt += 2;
          *sd_buff_wr= 1;
          //printf("cycles %x reading %X : %X ack %x\n",cycles,*sd_buff_addr,*sd_buff_dout,*sd_ack );
@@ -161,6 +172,30 @@ fprintf(stderr,"mounting flag cleared  %d\n",i);
         }
         if (bitcheck(*sd_wr,i)) {
                 writing = true;
+        }
+
+        // MYSTERY B: watch a specific LBA as it is served, so the bytes this
+        // model hands to the RTL can be compared against the file itself.
+        // +watch_lba=<n>
+        {
+            static int wlba = -2;
+            if (wlba == -2) {
+                wlba = -1;
+                const char* m = Verilated::commandArgsPlusMatch("watch_lba=");
+                if (m && m[0]) { const char* eq = strchr(m, '='); if (eq) wlba = atoi(eq + 1); }
+            }
+            if (wlba >= 0 && lba == wlba && bitcheck(*sd_rd,i)) {
+                std::streampos save = disk[i].tellg();
+                disk[i].clear();
+                disk[i].seekg((std::streamoff)lba * kBLKSZ);
+                unsigned char hb[16];
+                disk[i].read((char*)hb, 16);
+                fprintf(stderr, "[BLK] serving lba %d from FILE:", lba);
+                for (int q = 0; q < 16; q++) fprintf(stderr, " %02X", hb[q]);
+                fprintf(stderr, "\n");
+                disk[i].clear();
+                disk[i].seekg(save);
+            }
         }
 
         disk[i].clear();

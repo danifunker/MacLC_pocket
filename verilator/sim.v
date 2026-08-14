@@ -190,8 +190,18 @@ module emu
 	assign AUDIO_L = asc_sample_l;
 	assign AUDIO_R = asc_sample_r;
 
-	// Mac LC memory configuration
-	wire [7:0] configRAMSize = 8'h24; // 2MB: no SIMM, 2MB board only
+	// Mac LC memory configuration.
+	// mac_lc_pocket.sv drives `cfg_memSize ? 8'hE4 : 8'h24` and the Pocket's
+	// opt_mem_size RTL default is 1, so a stock Pocket boots 10 MB (2 MB
+	// motherboard + 8 MB SIMM). The sim matches that by DEFAULT so the harness
+	// reproduces the shipping machine; `+mem2` selects the 2 MB config for A/B.
+	//   $E4 = 10 MB (SIMM bits[7:6]=11 -> 8 MB SIMM), $24 = 2 MB (no SIMM).
+	reg [7:0] configRAMSize = 8'hE4;
+	initial begin
+		if ($test$plusargs("mem2")) configRAMSize = 8'h24;
+		$display("SIM CONFIG: configRAMSize=%02x (%0d MB)", configRAMSize,
+		         (configRAMSize == 8'hE4) ? 10 : 2);
+	end
 	wire [7:0] pvia_ram_config_out;   // Active RAM config from pseudovia
 	wire       pvia_ram_configured;   // ROM has programmed V8 config ($0 mirror enable)
 
@@ -817,6 +827,14 @@ module emu
 		.ariel_data_in(ariel_reg_dout),
 		.selectPseudoVIA(selectPseudoVIA),
 		.pseudovia_data_in(pseudovia_dout),
+		// Open-bus for unmapped reads ($FFFF). mac_lc_pocket.sv:1404 connects
+		// this (restored there 2026-08-11); sim.v had it MISSING, so inside
+		// dataController_top the port defaulted to 0 and the open-bus case
+		// (dataController_top.sv:330) could never fire — unmapped reads fell
+		// through to stale memoryDataIn. That is exactly the fall-through the
+		// boot ROM's RAM-probe XOR test misreads as "RAM present", so the sim
+		// could size memory differently from the FPGA. Keep both tops identical.
+		.selectUnmapped(selectUnmapped),
 
 		.ps2_key(ps2_key),
 		.capslock(capslock),
@@ -1104,6 +1122,144 @@ module emu
 					sim_frame_count, cpuAddr, memoryAddr, last_fetch_pc);
 			end
 		end
+	end
+
+	// ------------------------------------------------------------------
+	// MYSTERY-B TRAPS — docs/RESUME.md §1-NEXT.
+	//
+	// The games-disk System 7.1 death, as decoded on hardware: a Gestalt-family
+	// RAM patch ($C000-$C17B) returns through a return slot holding $400E6C —
+	// the boot-blocks IMAGE base ('LK' = $4C4B) — executes the signature, and
+	// takes an illegal-instruction exception (vector 4, vector address $10).
+	// DSErrCode ($AF0) then reads 3.
+	//
+	//   VECFETCH — any supervisor read of a vector at $000000-$00002F, with the
+	//              vector number and the last fetch PC.  Vector 4 = illegal
+	//              instruction = the fatal one; the fault RE-FIRES during the
+	//              SysError wait, so the FIRST occurrence is the one to trace.
+	//   BBEXEC   — an instruction FETCH inside the boot-blocks image band
+	//              ($400E00-$400EFF): the smoking gun itself.
+	//   WWSP     — (+wwsp) every write to the live-stack band $3FF700-$3FF7BF
+	//              or the BootGlobals band $400E00-$400EFF, WITH the writer's
+	//              PC.  This is buildAX's 8-slot hardware write-watcher with
+	//              unlimited depth — the whole reason for reproducing in sim.
+	// ------------------------------------------------------------------
+	reg trap_as_d = 1'b1;
+	reg wwsp_en   = 1'b0;
+	integer vec_count = 0;
+	integer bbexec_count = 0;
+	// +wwsp_from=<frame>: the live-stack band sees thousands of writes per frame
+	// during boot, so gate the watcher to the frames around the fault (the death
+	// lands at F503 with the POST-skip ROM). 0 = log from reset.
+	integer wwsp_from = 0;
+	integer sdmard_from = 0;
+	reg     patchw_en = 1'b0;
+	reg     sdmard_en = 1'b0;
+	reg        sdma_as_d = 1'b1;
+	reg        sdma_active = 1'b0;
+	reg [23:0] sdma_addr;
+	reg [15:0] sdma_data;
+	initial begin
+		wwsp_en   = $test$plusargs("wwsp");
+		patchw_en = $test$plusargs("patchw");
+		sdmard_en = $test$plusargs("sdmard");
+		void'($value$plusargs("wwsp_from=%d", wwsp_from));
+		void'($value$plusargs("sdmard_from=%d", sdmard_from));
+		if (wwsp_en)   $display("SIM CONFIG: WWSP write-watcher ON from frame %0d", wwsp_from);
+		if (patchw_en) $display("SIM CONFIG: PATCHW ($BF80-$C1FF) write-watcher ON");
+	end
+
+	always @(posedge clk_sys) begin
+		trap_as_d <= _cpuAS;
+		if (trap_as_d && !_cpuAS) begin
+			// FAULT vector fetch: supervisor read of $000008-$000013 =
+			// vector 2 (bus error), 3 (address error), 4 (ILLEGAL INSTRUCTION).
+			// Vector 4 is the fatal one in mystery B.
+			//
+			// Deliberately NARROW. Two things flood a wider window:
+			//   * vector 10 ($28, A-line) is the Toolbox trap dispatcher — every
+			//     _Trap the Mac executes reads it (8,000+ hits / 300 frames,
+			//     a 28 MB log, and it slows the sim measurably);
+			//   * the POST RAM march ($A468xx) walks low RAM as DATA, so its
+			//     reads look like vector fetches. The $A46xxx filter drops those.
+			if (_cpuRW && cpuFC[2] && cpuAddr[23:6] == 18'd0
+			    && cpuAddr[5:0] >= 6'h08 && cpuAddr[5:0] < 6'h14
+			    && last_fetch_pc[23:12] != 12'hA46) begin
+				vec_count = vec_count + 1;
+				$display("[F%0d] *** VECFETCH #%0d: vector %0d (addr %h) fc=%b lastFetchPC=%h lastOp=%h",
+					sim_frame_count, vec_count, cpuAddr[7:2], cpuAddr[23:0],
+					cpuFC, last_fetch_pc, last_fetch_opcode);
+			end
+			// Instruction fetch inside the boot-blocks image band.
+			if (tg68_busstate == 2'b00 && cpuAddr[23:8] == 16'h400E) begin
+				bbexec_count = bbexec_count + 1;
+				if (bbexec_count <= 32)
+					$display("[F%0d] *** BBEXEC #%0d: fetch at %h (boot-blocks image band)",
+						sim_frame_count, bbexec_count, cpuAddr[23:0]);
+			end
+		end
+		// Write-watcher (opt-in: +wwsp, gated by +wwsp_from=<frame>).
+		if (wwsp_en && (sim_frame_count >= wwsp_from) && !_ramWE && cpuBusControl &&
+		    (((cpuAddr[23:0] >= 24'h3FF700) && (cpuAddr[23:0] <= 24'h3FF7BF)) ||
+		     (cpuAddr[23:8] == 16'h400E)))
+			$display("[F%0d] WWSP: wr %h <= %h  PC=%h",
+				sim_frame_count, cpuAddr[23:0], cpuDataOut, last_fetch_pc);
+
+		// SDMARD (opt-in: +sdmard) — the SCSI pseudo-DMA drain loop is
+		// `move.l (A0),(A2)+` at ROM $A092A2-$A092B0 (unrolled x8). Log what the
+		// CPU READS from the DMA window, with the longword flag, so a bad READ
+		// (scsi.v/ncr5380 byte packing) can be told apart from a bad misaligned
+		// WRITE (TG68K / bus glue). Gated late to keep the volume sane.
+		// Sample ONCE per completed cycle (AS rising edge) — a combinational
+		// sample over the whole cycle is ambiguous. Hierarchical refs read the
+		// ncr5380's serve state so a stale-window serve is visible directly.
+		sdma_as_d <= _cpuAS;
+		if (!_cpuAS && selectSCSIDMA && _cpuRW) begin
+			sdma_active <= 1'b1;
+			sdma_addr   <= cpuAddr[23:0];
+			sdma_data   <= dataControllerDataOut;
+		end
+		if (sdma_as_d && _cpuAS && sdma_active) begin
+			sdma_active <= 1'b0;
+			// +sdmard_from=<frame> bounds the volume (a full boot serves
+			// hundreds of thousands of cycles). Dumps the FULL serve state: the
+			// ncr5380 pair registers, the target's byte counter, and the dpram
+			// look-ahead outputs + prefetch-controller state, so a stale q_c/q_d
+			// is visible directly rather than inferred.
+			if (sdmard_en && (sim_frame_count >= sdmard_from))
+				// NB: a CONCATENATED format string ({"a","b"}) is silently
+				// dropped by Verilator 5 — the whole $display disappears from
+				// the generated model with no warning. Keep it one string.
+				$display("[F%0d] SDMARD a=%h d=%h dcnt=%0d mac=%h | pair=%h next=%h 2nd=%h supp=%b settle=%0d hold=%0d | b0=%h b0n=%h b0n2=%h b1=%h b1n=%h | pf_st=%0d pf_v=%b pf_c=%h pf_d=%h ac=%h ad=%h",
+					sim_frame_count, sdma_addr, sdma_data,
+					dc0.scsi.target[0].target.data_cnt,
+					dc0.scsi.target[0].target.mac_addr,
+					dc0.scsi.din_pair_r, dc0.scsi.din_pair_next_r,
+					dc0.scsi.dma_second_word_data, dc0.scsi.dma_suppress_ack_latched,
+					dc0.scsi.dma_settle, dc0.scsi.dma_ack_holdoff,
+					dc0.scsi.target[0].target.buffer0_dout,
+					dc0.scsi.target[0].target.buffer0_dout_next,
+					dc0.scsi.target[0].target.buffer0_dout_next2,
+					dc0.scsi.target[0].target.buffer1_dout,
+					dc0.scsi.target[0].target.buffer1_dout_next,
+					dc0.scsi.target[0].target.buffer0.pf_st,
+					dc0.scsi.target[0].target.buffer0.pf_valid,
+					dc0.scsi.target[0].target.buffer0.pf_c_addr,
+					dc0.scsi.target[0].target.buffer0.pf_d_addr,
+					dc0.scsi.target[0].target.buffer0.address_c,
+					dc0.scsi.target[0].target.buffer0.address_d);
+		end
+
+		// PATCHW (opt-in: +patchw) — every write to the Gestalt-family RAM patch
+		// body $BF80-$C1FF, with the writer's PC. The fault is a single $0000
+		// word at $C01A inside otherwise perfect code: this says whether the
+		// loader ever wrote the right value there and something zeroed it, or
+		// whether it arrived zero. Band extended to $C2FF to cover the COMPRESSED
+		// source buffer at $C230+ (sector 57710 lands with byte 0 at $C233).
+		if (patchw_en && !_ramWE && cpuBusControl &&
+		    (cpuAddr[23:0] >= 24'h00BF80) && (cpuAddr[23:0] <= 24'h00C2FF))
+			$display("[F%0d] PATCHW: wr %h <= %h  PC=%h",
+				sim_frame_count, cpuAddr[23:0], cpuDataOut, last_fetch_pc);
 	end
 `endif
 	assign debug_cpuAddr = cpuAddr;
