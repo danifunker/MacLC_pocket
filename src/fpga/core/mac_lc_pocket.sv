@@ -2277,6 +2277,7 @@ module mac_lc_pocket
 	reg  [12:0] pcrb_k = 13'd0;      // countdown, in ring writes
 	reg  [8:0]  pcrb_klat = 9'd0;    // K latched at arm (polls spray the source)
 	reg  [23:0] pcrb_match = 24'd0;  // PC-match trigger, latched at arm
+	reg         pcrb_stage2 = 1'b0;  // buildAP: delivery trigger stages the match
 	reg         pcrb_trig_d = 1'b0, pcrb_armed_cnt = 1'b0;
 	reg  [31:0] pcsn1 = 32'd0, pcsn2 = 32'd0;   // bus snapshot at window freeze
 	reg  [31:0] egsn1 = 32'd0;                  // Egret/SR snapshot at freeze
@@ -2324,9 +2325,23 @@ module mac_lc_pocket
 		// longer kills the capture, and the arm/jboot/trigger JTAG ordering
 		// races are gone. One capture per arm (armed_cnt gates re-fire).
 		// ★ buildAO: OR'd with the PC-match trigger (fetch of pcrb_match).
-		if (((ext_trig && !pcrb_trig_d) ||
-		     (pcrb_match != 24'd0 && fetch_valid &&
-		      last_fetch_pc[23:0] == pcrb_match)) && !pcrb_armed_cnt) begin
+		// ★ buildAP: TWO-STAGE — when BOTH are armed, the delivery trigger
+		// (ext_trig) STAGES the PC-match rather than firing the countdown:
+		// the first pcrb_match fetch AFTER the round's final delivery is the
+		// PRAM wait's own exit (A14882 is the generic async-I/O wait exit —
+		// every disk read exits there too; post-delivery, only the PRAM
+		// wait remains). No JTAG timing in the loop.
+		if (ext_trig && !pcrb_trig_d && pcrb_match != 24'd0)
+			pcrb_stage2 <= 1'b1;
+		if (pcrb_src[47] && !pcrb_arm_d)
+			pcrb_stage2 <= 1'b0;
+		// Rule: match==0 -> delivery trigger fires directly. match!=0 -> the
+		// match fires only once STAGED by the delivery trigger (for a
+		// standalone PC-match, arm FRZE trig at an already-passed count —
+		// it stages immediately).
+		if (((ext_trig && !pcrb_trig_d && pcrb_match == 24'd0) ||
+		     (pcrb_match != 24'd0 && pcrb_stage2 &&
+		      fetch_valid && last_fetch_pc[23:0] == pcrb_match)) && !pcrb_armed_cnt) begin
 			pcrb_k         <= {pcrb_klat, 4'd0};      // K x16 writes to go
 			pcrb_armed_cnt <= 1'b1;
 			pcrb_frozen    <= 1'b0;
