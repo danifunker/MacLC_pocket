@@ -158,7 +158,74 @@ are SILENT NO-OPS (cost this session two phantom rounds).
 
 Card launches were never affected. The old toggle-dance is obsolete.
 
-## 0.1 ★★★ 08-15: THE TWO OPEN ISSUES (read this first, then 0.0/0.5)
+## 0.05 ★★★ 08-15 EVENING: BOTH ISSUES CRACKED — READ THIS, THEN 0.1's history
+
+**ISSUE B (interact menu) RESOLVED — deep-envelope method.** Three surgical
+theories failed on HW (final newline; combined interact+data cap — ROM slot
+parameters 1->0, kept, harmless; defaultval index-vs-value semantics — kept,
+string-hex form). What worked: a file with EVERY measurable axis at or under
+a hardware-proven maximum (our loading 4-entry file + the on-card
+Mazamars312 Amiga files as the proof corpus): 15 vars (=Amiga), 5-option
+lists (proven 8), 6219 B (proven 6271/6636), max line 33, string-hex list
+defaultvals, string slider defaultvals, slider max 300. LOADS + mouse-mode
+default CONFIRMED on HW. The killer axis was never isolated (one of: 16-opt
+lists / 16th var / 22KB size / slider max 511 / numeric slider defaultval) —
+bisect-up ladder = restore one axis at a time from interact_full16.json
+(kept at repo root). Reference bytes: scratch/settings-forensics-2026-08-15/
+(both Amiga cores' dists + our Settings tree; interact_persist.json proved
+benign). Y/Start custom sliders + NMI still sacrificed; one menu slot free.
+
+**ISSUE A (boot instability) ROOT-CAUSED to BOOT-AT-DEPTH; ship = mono boot.**
+The 08-15 tally matrix (per-boot Finder-load success, ~30 user boots):
+  AZ 3/4 · BB 4/6 · BI(=BH RTL+mono seed) 3/4   <- base rate ~75-90%
+  BH 0/N · BJ(=BH+save-req disarm, colour) 0/3 · BK(=import seed+3-byte
+  record graft 83/AA/0A, colour CONFIRMED on screen) 0/3  <- collapse
+Triangulation: fabric chain BA..BH exonerated (BI base-rate on newest RTL);
+the five non-video seed bytes exonerated (BK==BJ); the slot-220 disarm is
+not the colour cure (BJ==BH). ★ THE REFRAME (user fact): every colour
+session ever — incl. the AZ marathon — was booted 1bpp then set to 256
+colours MANUALLY in Monitors. 8bpp RUNTIME is proven solid for hours;
+BOOTING at 8bpp (seed accepted -> whole startup+Finder-build at depth)
+collapses ~100% with F-Line/hang at the desktop-build phase. BE-morning
+"colour validated" = small-sample luck; there was never a stable
+boot-at-depth era. Failure class (F-Line = executing garbage) says
+corrupted READS more than video-write contention; vram_bram is structurally
+innocent (true dual-port, no arbitration); prime suspects = the CPU-side
+VRAM-shadow READ path through pocket_sdram (8x RMW traffic at 8bpp;
+sim_ram can't see it — sim runC boots 8bpp clean) and the colour boot's
+different disk-read pattern (icl8 resources; Mystery-B lineage).
+  Diagnostic staged, not run: buildBL = 4bpp graft seed (commit 952c5ad;
+  0x58=82) — depth-proportional vs colour-path-binary discriminator.
+  ALSO: shared-RTL video glitch (MiSTer too) was CONSISTENT on BI in
+  Finder — same placement family for BI/BJ/BK; log which builds show it.
+  First-boot-after-card-insert failed 3/4 times on base builds (weak
+  long-off-decay signal; unresolved).
+
+**Fixes landed on the way (all in the tree):** buildBH launch-scrub gate
+(504us post-lock delay + private scrub_pend flag — the BG scrub was VOID in
+the init-ladder window AND its ioctl_wait use could false-ack a producer;
+also fixed BG's dropped 8th word). buildBJ slot-220 save-req DISARM
+(landmine #2 made live: every guest PRAM write burst fired a doomed save at
+a nonexistent slot and wedged the SCSI-serving sequencer ~450ms+ — fires
+every session incl. manual Monitors sets). Dist JSONs byte-clean + ROM slot
+parameters:0.
+
+**SHIP = buildBM** (compiling at handoff): current RTL (scrub gate + disarm)
++ import-era mono seed = the battle-tested 1bpp boot; users set colours in
+Monitors per session (or drop a depth-setting utility into Startup Items on
+the games disk — runs post-Finder, past the fragile window). Tally + soak
+before dist/release.
+
+**PRAM PERSISTENCE (user wants it): feasible, GATED on boot-at-depth.**
+Plumbing exists: apf_blockdev's MiSTer-derived PRAM FSM (pram_rd_todo=0
+"was 1: load once at power-up" — re-enable), re-arm pram_save_req_r (one
+line in mac_lc_pocket.sv, comment marks it), declare slot 220 + ship a
+256-byte pram file in dist. BLOCKED because persisted depth makes every
+boot a colour boot = today's collapse. Sequence: BM ship -> crack
+boot-at-depth (BL first) -> persistence + a Reset PRAM menu action (menu
+has one free slot) + save-flow bench.
+
+## 0.1 ★★ 08-15 MORNING: THE TWO OPEN ISSUES (history; superseded by 0.05)
 
 **ISSUE A — BOOT INSTABILITY DURING FINDER LOAD (the real problem).**
 Random error class per boot (Unimplemented Trap / bad F-Line / blank
