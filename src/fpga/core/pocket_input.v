@@ -67,6 +67,18 @@ module pocket_input #(
 	// 14=select 15=start.
 	input  wire [15:0] cont1_key,
 
+	// Per-button key mappings (buildBF): PS/2 Set 2 scancodes, bit 8 = E0.
+	// Already RESOLVED by core_top (the Custom indirection happens there);
+	// 9'h000 = unmapped (the button emits nothing). clk domain, quasi-static
+	// (interact writes are rare and human-paced).
+	input  wire [8:0]  map_a,
+	input  wire [8:0]  map_b,
+	input  wire [8:0]  map_x,
+	input  wire [8:0]  map_y,
+	input  wire [8:0]  map_l,
+	input  wire [8:0]  map_r,
+	input  wire [8:0]  map_start,
+
 	// Synthesised buses into adb_device
 	output reg  [10:0] ps2_key,
 	output reg  [24:0] ps2_mouse,
@@ -107,9 +119,13 @@ module pocket_input #(
 	// simply skip them.
 	// Slots 0..3 are the D-pad (suppressed in PTR mode, where it drives the
 	// mouse). Slot 4 is A, which is the mouse BUTTON in PTR mode and so is also
-	// suppressed there. Slots 5..9 type in BOTH modes -- Command in particular
+	// suppressed there. Slots 5..10 type in BOTH modes -- Command in particular
 	// has to work while pointing, since the Mac uses it with the mouse.
-	localparam integer NKEYS = 10;
+	// buildBF: slots 4..10 take their scancodes from the map_* inputs (the old
+	// fixed assignments are now the interact.json defaults); slot 10 adds R1,
+	// previously unused. A map of 9'h000 means "unmapped" and is masked out of
+	// `want` below, so it can never emit a code-000 event.
+	localparam integer NKEYS = 11;
 
 	function [8:0] key_for;
 		input integer idx;
@@ -119,12 +135,13 @@ module pocket_input #(
 				1: key_for = SC_DOWN;
 				2: key_for = SC_LEFT;
 				3: key_for = SC_RIGHT;
-				4: key_for = SC_ENTER;  // A (far right) -> Return / mouse click
-				5: key_for = SC_SPACE;  // B -> Space
-				6: key_for = SC_LSHIFT; // X -> Shift (Prince of Persia careful step)
-				7: key_for = SC_N;      // Y (far left) -> N
-				8: key_for = SC_ESC;    // L trigger -> Escape
-				9: key_for = SC_CMD;    // Start -> Command
+				4: key_for = map_a;      // default Return; mouse click in PTR
+				5: key_for = map_b;      // default Space
+				6: key_for = map_x;      // default Shift
+				7: key_for = map_y;      // default N
+				8: key_for = map_l;      // default Escape
+				9: key_for = map_start;  // default Command
+				10: key_for = map_r;     // default Q (new slot)
 				default: key_for = 9'h000;
 			endcase
 		end
@@ -145,6 +162,7 @@ module pocket_input #(
 				7: button_for = keys[B_Y];
 				8: button_for = keys[B_L1];
 				9: button_for = keys[B_START];
+				10: button_for = keys[B_R1];
 				default: button_for = 1'b0;
 			endcase
 		end
@@ -192,21 +210,32 @@ module pocket_input #(
 	// emit the key-up events — that is the clean-release guarantee.
 
 	reg  [NKEYS-1:0] held;             // as last reported to the Mac
-	reg  [3:0]       scan;             // 0..NKEYS-1 (10 slots -> 4 bits)
+	reg  [3:0]       scan;             // 0..NKEYS-1 (11 slots -> 4 bits)
 	reg              releasing;        // draining held keys after a mode flip
+	// The scancode each held slot was PRESSED with. Releases must emit this,
+	// not key_for(scan): if the user remaps a button while holding it, the
+	// release otherwise carries the NEW code and the OLD key sticks down on
+	// the Mac forever (buildBF).
+	reg  [8:0]       held_code [0:NKEYS-1];
 
-	wire [NKEYS-1:0] want_raw = { button_for(9, keys), button_for(8, keys),
+	wire [NKEYS-1:0] want_raw = { button_for(10, keys),
+	                              button_for(9, keys), button_for(8, keys),
 	                              button_for(7, keys), button_for(6, keys),
 	                              button_for(5, keys), button_for(4, keys),
 	                              button_for(3, keys), button_for(2, keys),
 	                              button_for(1, keys), button_for(0, keys) };
 
+	// A slot whose map is 9'h000 is UNMAPPED: it must never want, or the
+	// scanner would emit code-000 events. The D-pad four are always mapped.
+	wire [NKEYS-1:0] mapped = { |map_r, |map_start, |map_l, |map_y,
+	                            |map_x, |map_b, |map_a, 4'b1111 };
+
 	// In PTR mode the D-pad drives the mouse and A is the mouse button, so
-	// slots 0..4 must read as released. B/X/Y/L/Start keep typing in both
+	// slots 0..4 must read as released. B/X/Y/L/R/Start keep typing in both
 	// modes -- Command especially, which is used together with the mouse.
 	wire [NKEYS-1:0] want = releasing ? {NKEYS{1'b0}}
-	                      : mode_ptr  ? {want_raw[9:5], 5'b00000}
-	                                  : want_raw;
+	                      : mode_ptr  ? ({want_raw[10:5], 5'b00000} & mapped)
+	                                  : (want_raw & mapped);
 
 	wire scan_bit_held = held[scan];
 	wire scan_bit_want = want[scan];
@@ -222,15 +251,19 @@ module pocket_input #(
 			if (mode_flip)      releasing <= 1'b1;
 			else if (held == 0) releasing <= 1'b0;
 
-			// NKEYS is 10, not a power of two, so the wrap must be explicit --
-			// a free-running 4-bit counter would index slots 10..15, which do
+			// NKEYS is 11, not a power of two, so the wrap must be explicit --
+			// a free-running 4-bit counter would index slots 11..15, which do
 			// not exist and would emit key_for()'s default 9'h000.
 			scan <= (scan == NKEYS-1) ? 4'd0 : scan + 4'd1;
 
 			if (scan_bit_want != scan_bit_held) begin
-				// Emit exactly one event and record the new state.
-				ps2_key    <= { ~ps2_key[10], scan_bit_want, key_for(scan) };
+				// Emit exactly one event and record the new state. Presses
+				// carry the CURRENT map; releases carry the code the press
+				// used (see held_code above).
+				ps2_key    <= { ~ps2_key[10], scan_bit_want,
+				                scan_bit_want ? key_for(scan) : held_code[scan] };
 				held[scan] <= scan_bit_want;
+				if (scan_bit_want) held_code[scan] <= key_for(scan);
 			end
 		end
 	end
