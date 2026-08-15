@@ -359,6 +359,21 @@ always @(*) begin
     32'hF0000000: bridge_rd_data <= {31'd0, opt_mem_size};
     // (0xF0000010 Video Test Pattern and 0xF0000014 Debug Disk Stage were
     // bring-up UI, removed 2026-08-14 with the working release.)
+    // buildBF key-mapper registers: persisted variables must read back.
+    32'hF0000018: bridge_rd_data <= {23'd0, opt_map_a};
+    32'hF000001C: bridge_rd_data <= {23'd0, opt_map_b};
+    32'hF0000020: bridge_rd_data <= {23'd0, opt_map_x};
+    32'hF0000024: bridge_rd_data <= {23'd0, opt_map_y};
+    32'hF0000028: bridge_rd_data <= {23'd0, opt_map_l};
+    32'hF000002C: bridge_rd_data <= {23'd0, opt_map_r};
+    32'hF0000030: bridge_rd_data <= {23'd0, opt_map_start};
+    32'hF0000034: bridge_rd_data <= {23'd0, opt_code_a};
+    32'hF0000038: bridge_rd_data <= {23'd0, opt_code_b};
+    32'hF000003C: bridge_rd_data <= {23'd0, opt_code_x};
+    32'hF0000040: bridge_rd_data <= {23'd0, opt_code_y};
+    32'hF0000044: bridge_rd_data <= {23'd0, opt_code_l};
+    32'hF0000048: bridge_rd_data <= {23'd0, opt_code_r};
+    32'hF000004C: bridge_rd_data <= {23'd0, opt_code_start};
     32'hF0xxxxxx: bridge_rd_data <= 32'd0;   // actions read back as 0
     32'hF8xxxxxx: begin
         bridge_rd_data <= cmd_bridge_rd_data;
@@ -389,6 +404,27 @@ reg         opt_reset_apply = 1'b0;   // action pulses (clk_74a)
 reg         opt_reset_pram  = 1'b0;
 reg         opt_nmi         = 1'b0;
 
+// ---- buildBF: per-button key mappings -------------------------------------
+// Seven map registers (the Core Settings dropdowns; value = PS/2 Set 2
+// scancode with bit 8 = the E0 prefix; 9'h1FF = "use this button's Custom
+// code"; 9'h000 = unmapped) and seven custom-code registers. Defaults are
+// the pre-buildBF fixed mapping, plus Q on the previously-unused R trigger.
+// interact.json marks them persist, so each MUST read back its own value.
+reg [8:0] opt_map_a     = 9'h05A;  // Return
+reg [8:0] opt_map_b     = 9'h029;  // Space
+reg [8:0] opt_map_x     = 9'h012;  // Shift
+reg [8:0] opt_map_y     = 9'h031;  // N
+reg [8:0] opt_map_l     = 9'h076;  // Escape
+reg [8:0] opt_map_r     = 9'h015;  // Q
+reg [8:0] opt_map_start = 9'h011;  // Command
+reg [8:0] opt_code_a     = 9'h000;
+reg [8:0] opt_code_b     = 9'h000;
+reg [8:0] opt_code_x     = 9'h000;
+reg [8:0] opt_code_y     = 9'h000;
+reg [8:0] opt_code_l     = 9'h000;
+reg [8:0] opt_code_r     = 9'h000;
+reg [8:0] opt_code_start = 9'h000;
+
 always @(posedge clk_74a) begin
     // Actions are one-shot: they self-clear once the core side has seen them.
     opt_reset_apply <= 1'b0;
@@ -401,6 +437,20 @@ always @(posedge clk_74a) begin
         32'hF0000004: opt_reset_apply <= bridge_wr_data[0];
         32'hF0000008: opt_reset_pram  <= bridge_wr_data[0];
         32'hF000000C: opt_nmi         <= bridge_wr_data[0];
+        32'hF0000018: opt_map_a      <= bridge_wr_data[8:0];
+        32'hF000001C: opt_map_b      <= bridge_wr_data[8:0];
+        32'hF0000020: opt_map_x      <= bridge_wr_data[8:0];
+        32'hF0000024: opt_map_y      <= bridge_wr_data[8:0];
+        32'hF0000028: opt_map_l      <= bridge_wr_data[8:0];
+        32'hF000002C: opt_map_r      <= bridge_wr_data[8:0];
+        32'hF0000030: opt_map_start  <= bridge_wr_data[8:0];
+        32'hF0000034: opt_code_a     <= bridge_wr_data[8:0];
+        32'hF0000038: opt_code_b     <= bridge_wr_data[8:0];
+        32'hF000003C: opt_code_x     <= bridge_wr_data[8:0];
+        32'hF0000040: opt_code_y     <= bridge_wr_data[8:0];
+        32'hF0000044: opt_code_l     <= bridge_wr_data[8:0];
+        32'hF0000048: opt_code_r     <= bridge_wr_data[8:0];
+        32'hF000004C: opt_code_start <= bridge_wr_data[8:0];
         default: ;
         endcase
     end
@@ -1214,12 +1264,41 @@ apf_bridge_loader #(
     wire [24:0] ps2_mouse;
     wire        ptr_mode;
 
+// buildBF: bring the 14 mapper registers (clk_74a) into clk_sys as one packed
+// quasi-static bus, then resolve the Custom indirection (map value 9'h1FF =
+// "use this button's code register"). Menu writes are human-paced; a one-cycle
+// mixed value during a change is harmless (pocket_input's held_code releases
+// whatever code was pressed, so even a mid-hold remap cannot strand a key).
+    wire [62:0] kmap_74  = { opt_map_start, opt_map_r, opt_map_l, opt_map_y,
+                             opt_map_x, opt_map_b, opt_map_a };
+    wire [62:0] kcode_74 = { opt_code_start, opt_code_r, opt_code_l, opt_code_y,
+                             opt_code_x, opt_code_b, opt_code_a };
+    reg  [62:0] kmap_s1, kmap_s2, kcode_s1, kcode_s2;
+    always @(posedge clk_sys) begin
+        kmap_s1  <= kmap_74;   kmap_s2  <= kmap_s1;
+        kcode_s1 <= kcode_74;  kcode_s2 <= kcode_s1;
+    end
+    wire [8:0] rmap_a     = (kmap_s2[ 0 +: 9] == 9'h1FF) ? kcode_s2[ 0 +: 9] : kmap_s2[ 0 +: 9];
+    wire [8:0] rmap_b     = (kmap_s2[ 9 +: 9] == 9'h1FF) ? kcode_s2[ 9 +: 9] : kmap_s2[ 9 +: 9];
+    wire [8:0] rmap_x     = (kmap_s2[18 +: 9] == 9'h1FF) ? kcode_s2[18 +: 9] : kmap_s2[18 +: 9];
+    wire [8:0] rmap_y     = (kmap_s2[27 +: 9] == 9'h1FF) ? kcode_s2[27 +: 9] : kmap_s2[27 +: 9];
+    wire [8:0] rmap_l     = (kmap_s2[36 +: 9] == 9'h1FF) ? kcode_s2[36 +: 9] : kmap_s2[36 +: 9];
+    wire [8:0] rmap_r     = (kmap_s2[45 +: 9] == 9'h1FF) ? kcode_s2[45 +: 9] : kmap_s2[45 +: 9];
+    wire [8:0] rmap_start = (kmap_s2[54 +: 9] == 9'h1FF) ? kcode_s2[54 +: 9] : kmap_s2[54 +: 9];
+
 pocket_input #(
     .CLK_HZ ( 32_500_000 )
 ) input_bridge (
     .clk        ( clk_sys ),
     .reset      ( ~pll_core_locked_sys ),
     .cont1_key  ( cont1_key[15:0] ),
+    .map_a      ( rmap_a ),
+    .map_b      ( rmap_b ),
+    .map_x      ( rmap_x ),
+    .map_y      ( rmap_y ),
+    .map_l      ( rmap_l ),
+    .map_r      ( rmap_r ),
+    .map_start  ( rmap_start ),
     .ps2_key    ( ps2_key ),
     .ps2_mouse  ( ps2_mouse ),
     .ptr_mode   ( ptr_mode )
