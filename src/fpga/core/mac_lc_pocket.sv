@@ -1723,7 +1723,7 @@ module mac_lc_pocket
 	// DC42 write offset: active from the word after the magic (word 41)
 	wire [19:0] dio_flp_a = dc42_skip ? (dio_addr[19:0] - 20'd42) : dio_addr[19:0];
 
-	// ---- Launch scrub: force the ROM's COLD boot path (buildBG) ------------
+	// ---- Launch scrub: force the ROM's COLD boot path (buildBG; gated buildBH)
 	// SDRAM survives a core relaunch (the Pocket only reconfigures the FPGA),
 	// so a relaunch presents the ROM with the PREVIOUS session's RAM — warm
 	// signature ('WLSC' at $CFC) included. The ROM then takes its warm path
@@ -1732,12 +1732,54 @@ module mac_lc_pocket
 	// (user 2026-08-14: full power-off boots behave better than relaunches).
 	// A core launch IS a cold boot of the virtual machine, so scrub the warm
 	// signature before the CPU ever runs: 8 zero words over bytes $CF8-$D07,
-	// through the same dio write path the downloads use (same accept/retire
-	// pacing; the CPU is held by rom_loaded until the ROM arrives, and the
-	// OS's first bridge write is milliseconds away — the scrub takes
-	// microseconds once pocket_sdram's init ladder opens).
-	reg [3:0] scrub_idx = 4'd0;          // 0..7 = the eight words; bit3 = done
-	wire      scrub_busy = ~scrub_idx[3];
+	// with the same accept/retire pacing the downloads use.
+	//
+	// ★ buildBH (2026-08-15): DELAYED START + PRIVATE IN-FLIGHT FLAG. Two
+	// defects in the buildBG form, both found by desk-check (the sim cannot
+	// see either: sim.v uses sim_ram, no init ladder, and its own top):
+	//   1. BG started scrubbing at config, INSIDE pocket_sdram's init ladder
+	//      (~126 us = 1023 chipset cycles of NOP/refresh/MRS after pll_locked
+	//      rises, during which we/oe are IGNORED — pocket_sdram.v's
+	//      `reset != 0` branch). The retire handshake runs off
+	//      addrController's free-running extra slot, which knows nothing of
+	//      the ladder, so every scrub word retired normally and the writes
+	//      were silently VOID. The ROM download survives the same window
+	//      only because the OS's first bridge write arrives milliseconds
+	//      after config. Fix: hold the scrub until scrub_cnt saturates —
+	//      16383 clk_sys cycles ≈ 504 us past pll_locked, 4.0x the ladder,
+	//      still ms before the OS stream, and the CPU is held by
+	//      !rom_loaded (+2 ms rst_cnt) the whole time.
+	//   2. BG signalled its words through ioctl_wait. core_top turns every
+	//      FALL of that port into a dio_ack pulse for whichever producer
+	//      ldr_dio_download selects, and apf_bridge_loader / apf_blockdev
+	//      hold each word only until their next ack — so a scrub retire
+	//      landing while a producer held a word would ack it UNWRITTEN
+	//      (the same silent-drop class as the buildT ghost slots). BG got
+	//      away with it only because its scrub ran with both producers
+	//      provably idle. Fix: scrub words carry a PRIVATE pending flag
+	//      (scrub_pend) that ORs into the accept mutex and the slot-gated
+	//      dio_write one-shot; ioctl_wait never rises for a scrub word, so
+	//      the port emits no edges and no acks — the alias class is gone
+	//      structurally, and the scrub interleaves safely even with an
+	//      (absurdly early) download: the mutex serialises the shared
+	//      dio_a/dio_data latch exactly as between download words.
+	// One-shot per config: scrub_idx[3] latches done and nothing clears it.
+	// A user reset must NOT re-scrub — by then the signature is the CURRENT
+	// session's, and the in-guest warm path is its own standing bug.
+	// Verification is desk-check + the hardware relaunch gauntlet only.
+	reg [13:0] scrub_cnt  = 14'd0;       // clk_sys cycles since pll_locked rose
+	reg        scrub_pend = 1'b0;        // scrub word in flight (private "wait")
+	reg [3:0]  scrub_idx  = 4'd0;        // 0..7 = the eight words; bit3 = done
+	wire       scrub_wait_done = (scrub_cnt == 14'd16383);
+	wire       scrub_accept_ok = scrub_wait_done && ~scrub_idx[3];
+	// Routing must hold through the LAST word's retire (scrub_pend tail) —
+	// keying it off ~scrub_idx[3] alone would drop the 8th word's slot.
+	wire       scrub_busy      = scrub_accept_ok || scrub_pend;
+
+	always @(posedge clk_sys) begin
+		if (!pll_locked)           scrub_cnt <= 14'd0;  // ladder restarts with init
+		else if (!scrub_wait_done) scrub_cnt <= scrub_cnt + 14'd1;
+	end
 
 	always @(posedge clk_sys) begin
 		// ★★ ONE-SHOT ACCEPT (buildT, 2026-08-12) — the second half of the
@@ -1756,15 +1798,17 @@ module mac_lc_pocket
 		// no ghost slots, no spurious acks, and dio_a cannot change while any
 		// dio_write=1 slot is in flight. MiSTer never needed this because HPS
 		// ioctl_wr was a one-cycle strobe, not a held level.
-		if (scrub_busy && !ioctl_wait && !dio_just_retired) begin
+		if (scrub_accept_ok && !ioctl_wait && !scrub_pend && !dio_just_retired) begin
 			// Scrub words claim the accept path first; the mutex through
-			// ioctl_wait keeps them atomic against download words exactly as
-			// download words are atomic against each other.
+			// {ioctl_wait, scrub_pend} keeps them atomic against download
+			// words exactly as download words are atomic against each other.
+			// scrub_pend, NOT ioctl_wait: the port must stay silent (see the
+			// buildBH block comment — a wait fall is an ack to a producer).
 			dio_data   <= 16'h0000;
 			dio_a      <= 23'h00067C + {19'd0, scrub_idx};  // word of byte $CF8
-			ioctl_wait <= 1;
+			scrub_pend <= 1;
 			scrub_idx  <= scrub_idx + 4'd1;
-		end else if(ioctl_wr && !ioctl_wait && !dio_just_retired) begin
+		end else if(ioctl_wr && !ioctl_wait && !scrub_pend && !dio_just_retired) begin
 			if (dio_index[1:0] != 2'b00) begin
 				// accept either byte lane order for the sim stream
 				if (dio_addr[19:0] == 20'd0) begin
@@ -1787,14 +1831,21 @@ module mac_lc_pocket
 		end
 
 		dio_old_cyc <= dioBusControl;
-		if(~dioBusControl) dio_write <= ioctl_wait;
-		// ★ Hold the download word until SDRAM can actually store it. While the
-		// init ladder runs, pocket_sdram ignores we/oe, so retiring here would
-		// throw the word away. The loader keeps dio_wr asserted and its 512-word
-		// FIFO absorbs the ~126 us wait, so nothing is lost -- the words are
-		// simply written once memory is live.
+		if(~dioBusControl) dio_write <= ioctl_wait | scrub_pend;
+		// ★ Retire = the end of the granted extra slot. NOTE (buildBH): this
+		// handshake has NO knowledge of pocket_sdram's init ladder — a word
+		// retired during the ~126 us post-config window is acknowledged AND
+		// DISCARDED (we/oe ignored while the ladder runs). Downloads are safe
+		// by arrival time alone (the OS's first bridge write is ms after
+		// config); anything fabric-generated must wait for scrub_wait_done.
+		// An earlier comment here claimed the word was "held until memory is
+		// live" — it never was; that false belief is what let buildBG's
+		// config-time scrub void itself.
 		dio_just_retired <= (dio_old_cyc & ~dioBusControl & dio_write);
-		if(dio_old_cyc & ~dioBusControl & dio_write) ioctl_wait <= 0;
+		if(dio_old_cyc & ~dioBusControl & dio_write) begin
+			ioctl_wait <= 0;
+			scrub_pend <= 0;   // mutex: at most one of the pair is ever set
+		end
 	end
 
 	// ---- Boot forensics: words actually RETIRED into SDRAM ------------------
