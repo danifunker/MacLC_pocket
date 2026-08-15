@@ -39,6 +39,10 @@ Egret (HC05) system controller with its original firmware, SWIM, SCSI, and ADB.
   investigation; prefer MFM images or the hard disk meanwhile.
 - **Restart from the Special menu does not come back** — power the Pocket
   off and on instead.
+- **Boots can be inconsistent after relaunching the core without a power
+  cycle** — if the machine stops reaching the Finder reliably, power the
+  Pocket fully off and on. (Root cause understood — the guest's warm-boot
+  signature survives a relaunch in SDRAM — and a fix is in testing.)
 - **In-guest settings don't persist** — the core boots from its built-in
   defaults (256 colours included) every launch; changes made in the guest
   (volume, mouse speed, clock) last until power-off. Avoid the "Reset

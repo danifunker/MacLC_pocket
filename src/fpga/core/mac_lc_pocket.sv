@@ -1723,6 +1723,22 @@ module mac_lc_pocket
 	// DC42 write offset: active from the word after the magic (word 41)
 	wire [19:0] dio_flp_a = dc42_skip ? (dio_addr[19:0] - 20'd42) : dio_addr[19:0];
 
+	// ---- Launch scrub: force the ROM's COLD boot path (buildBG) ------------
+	// SDRAM survives a core relaunch (the Pocket only reconfigures the FPGA),
+	// so a relaunch presents the ROM with the PREVIOUS session's RAM — warm
+	// signature ('WLSC' at $CFC) included. The ROM then takes its warm path
+	// over half-stale memory: this core's fragile path (see the broken
+	// Special->Restart), producing launch-type-correlated boot inconsistency
+	// (user 2026-08-14: full power-off boots behave better than relaunches).
+	// A core launch IS a cold boot of the virtual machine, so scrub the warm
+	// signature before the CPU ever runs: 8 zero words over bytes $CF8-$D07,
+	// through the same dio write path the downloads use (same accept/retire
+	// pacing; the CPU is held by rom_loaded until the ROM arrives, and the
+	// OS's first bridge write is milliseconds away — the scrub takes
+	// microseconds once pocket_sdram's init ladder opens).
+	reg [3:0] scrub_idx = 4'd0;          // 0..7 = the eight words; bit3 = done
+	wire      scrub_busy = ~scrub_idx[3];
+
 	always @(posedge clk_sys) begin
 		// ★★ ONE-SHOT ACCEPT (buildT, 2026-08-12) — the second half of the
 		// row-crossing-tear fix. ioctl_wr is a LEVEL the loader holds until
@@ -1740,7 +1756,15 @@ module mac_lc_pocket
 		// no ghost slots, no spurious acks, and dio_a cannot change while any
 		// dio_write=1 slot is in flight. MiSTer never needed this because HPS
 		// ioctl_wr was a one-cycle strobe, not a held level.
-		if(ioctl_wr && !ioctl_wait && !dio_just_retired) begin
+		if (scrub_busy && !ioctl_wait && !dio_just_retired) begin
+			// Scrub words claim the accept path first; the mutex through
+			// ioctl_wait keeps them atomic against download words exactly as
+			// download words are atomic against each other.
+			dio_data   <= 16'h0000;
+			dio_a      <= 23'h00067C + {19'd0, scrub_idx};  // word of byte $CF8
+			ioctl_wait <= 1;
+			scrub_idx  <= scrub_idx + 4'd1;
+		end else if(ioctl_wr && !ioctl_wait && !dio_just_retired) begin
 			if (dio_index[1:0] != 2'b00) begin
 				// accept either byte lane order for the sim stream
 				if (dio_addr[19:0] == 20'd0) begin
@@ -1894,7 +1918,9 @@ module mac_lc_pocket
 	// (buildT), which closes that hole. The pair together is the fix.
 	// Do NOT revert either half to the ioctl_wr sim form.
 	//   MiSTer form: dio_download && dioBusControl, ram_din=dio_data, ram_we=dio_write
-	wire download_cycle = dio_download && dioBusControl;
+	// scrub_busy rides the download routing ONLY (address/din/we mux below);
+	// the reset-hold and floppy-latch consumers of dio_download are untouched.
+	wire download_cycle = (dio_download | scrub_busy) && dioBusControl;
 
 	// SDRAM word address mapping:
 	// memoryAddr[22:0] is already the SDRAM word address from addrController

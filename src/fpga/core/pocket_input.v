@@ -79,6 +79,11 @@ module pocket_input #(
 	input  wire [8:0]  map_r,
 	input  wire [8:0]  map_start,
 
+	// Power-on input mode from Core Settings (buildBG): 1 = mouse (PTR),
+	// 0 = keyboard. Tracked LIVE until the user first presses Select, so a
+	// menu change applies immediately; after that Select owns the mode.
+	input  wire        ptr_default,
+
 	// Synthesised buses into adb_device
 	output reg  [10:0] ps2_key,
 	output reg  [24:0] ps2_mouse,
@@ -179,19 +184,30 @@ module pocket_input #(
 	// ---- Mode toggle on Select -------------------------------------------
 	// Rising edge only, so press-and-hold does not oscillate. Select is used
 	// (not A/B) so the toggle never collides with click or action.
-	reg mode_ptr = 1'b0;
-	reg sel_d    = 1'b0;
-	reg mode_flip;                     // 1-cycle pulse: mode just changed
+	// buildBG: until the user's FIRST Select press, the mode FOLLOWS the
+	// ptr_default setting (so the persisted power-on choice — and live menu
+	// changes — apply without a rebuild-baked constant). mode_flip is now a
+	// change DETECTOR on mode_ptr rather than a Select-edge side effect, so
+	// the clean-release drain fires however the mode changes.
+	reg mode_ptr  = 1'b1;              // matches ptr_default's RTL default
+	reg mode_d    = 1'b1;
+	reg sel_d     = 1'b0;
+	reg sel_taken = 1'b0;              // user has taken manual control
+	wire mode_flip = (mode_ptr != mode_d);   // 1-cycle: mode just changed
 	always @(posedge clk) begin
-		mode_flip <= 1'b0;
 		if (reset) begin
-			mode_ptr <= 1'b0;
-			sel_d    <= 1'b0;
+			mode_ptr  <= ptr_default;
+			mode_d    <= ptr_default;
+			sel_d     <= 1'b0;
+			sel_taken <= 1'b0;
 		end else begin
-			sel_d <= keys[B_SELECT];
+			mode_d <= mode_ptr;
+			sel_d  <= keys[B_SELECT];
 			if (keys[B_SELECT] && !sel_d) begin
 				mode_ptr  <= ~mode_ptr;
-				mode_flip <= 1'b1;
+				sel_taken <= 1'b1;
+			end else if (!sel_taken) begin
+				mode_ptr <= ptr_default;
 			end
 		end
 	end

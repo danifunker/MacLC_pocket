@@ -374,6 +374,7 @@ always @(*) begin
     32'hF0000044: bridge_rd_data <= {23'd0, opt_code_l};
     32'hF0000048: bridge_rd_data <= {23'd0, opt_code_r};
     32'hF000004C: bridge_rd_data <= {23'd0, opt_code_start};
+    32'hF0000050: bridge_rd_data <= {31'd0, opt_ptr_default};
     32'hF0xxxxxx: bridge_rd_data <= 32'd0;   // actions read back as 0
     32'hF8xxxxxx: begin
         bridge_rd_data <= cmd_bridge_rd_data;
@@ -424,6 +425,9 @@ reg [8:0] opt_code_y     = 9'h000;
 reg [8:0] opt_code_l     = 9'h000;
 reg [8:0] opt_code_r     = 9'h000;
 reg [8:0] opt_code_start = 9'h000;
+// buildBG: power-on input mode. 1 = mouse (the shipping default per user),
+// 0 = keyboard. pocket_input follows it until the first manual Select.
+reg       opt_ptr_default = 1'b1;
 
 always @(posedge clk_74a) begin
     // Actions are one-shot: they self-clear once the core side has seen them.
@@ -451,6 +455,7 @@ always @(posedge clk_74a) begin
         32'hF0000044: opt_code_l     <= bridge_wr_data[8:0];
         32'hF0000048: opt_code_r     <= bridge_wr_data[8:0];
         32'hF000004C: opt_code_start <= bridge_wr_data[8:0];
+        32'hF0000050: opt_ptr_default <= bridge_wr_data[0];
         default: ;
         endcase
     end
@@ -1264,27 +1269,41 @@ apf_bridge_loader #(
     wire [24:0] ps2_mouse;
     wire        ptr_mode;
 
-// buildBF: bring the 14 mapper registers (clk_74a) into clk_sys as one packed
-// quasi-static bus, then resolve the Custom indirection (map value 9'h1FF =
-// "use this button's code register"). Menu writes are human-paced; a one-cycle
-// mixed value during a change is harmless (pocket_input's held_code releases
-// whatever code was pressed, so even a mid-hold remap cannot strand a key).
-    wire [62:0] kmap_74  = { opt_map_start, opt_map_r, opt_map_l, opt_map_y,
-                             opt_map_x, opt_map_b, opt_map_a };
-    wire [62:0] kcode_74 = { opt_code_start, opt_code_r, opt_code_l, opt_code_y,
-                             opt_code_x, opt_code_b, opt_code_a };
-    reg  [62:0] kmap_s1, kmap_s2, kcode_s1, kcode_s2;
+// buildBG (slimmed from buildBF's suspect fit): resolve the Custom
+// indirection (map value 9'h1FF = "use this button's code register") on the
+// clk_74a side FIRST — pure combinational over quasi-static registers — then
+// cross ONE packed 64-bit bus instead of two 63-bit ones: half the CDC flops,
+// half the cross-domain routes, same behavior. Menu writes are human-paced; a
+// one-cycle mixed value during a change is harmless (pocket_input's held_code
+// releases whatever code was pressed, so a mid-hold remap cannot strand a key).
+    function [8:0] kresolve;
+        input [8:0] m;
+        input [8:0] c;
+        begin
+            kresolve = (m == 9'h1FF) ? c : m;
+        end
+    endfunction
+    wire [63:0] kmap_74 = { opt_ptr_default,
+                            kresolve(opt_map_start, opt_code_start),
+                            kresolve(opt_map_r,     opt_code_r),
+                            kresolve(opt_map_l,     opt_code_l),
+                            kresolve(opt_map_y,     opt_code_y),
+                            kresolve(opt_map_x,     opt_code_x),
+                            kresolve(opt_map_b,     opt_code_b),
+                            kresolve(opt_map_a,     opt_code_a) };
+    reg  [63:0] kmap_s1, kmap_s2;
     always @(posedge clk_sys) begin
-        kmap_s1  <= kmap_74;   kmap_s2  <= kmap_s1;
-        kcode_s1 <= kcode_74;  kcode_s2 <= kcode_s1;
+        kmap_s1 <= kmap_74;
+        kmap_s2 <= kmap_s1;
     end
-    wire [8:0] rmap_a     = (kmap_s2[ 0 +: 9] == 9'h1FF) ? kcode_s2[ 0 +: 9] : kmap_s2[ 0 +: 9];
-    wire [8:0] rmap_b     = (kmap_s2[ 9 +: 9] == 9'h1FF) ? kcode_s2[ 9 +: 9] : kmap_s2[ 9 +: 9];
-    wire [8:0] rmap_x     = (kmap_s2[18 +: 9] == 9'h1FF) ? kcode_s2[18 +: 9] : kmap_s2[18 +: 9];
-    wire [8:0] rmap_y     = (kmap_s2[27 +: 9] == 9'h1FF) ? kcode_s2[27 +: 9] : kmap_s2[27 +: 9];
-    wire [8:0] rmap_l     = (kmap_s2[36 +: 9] == 9'h1FF) ? kcode_s2[36 +: 9] : kmap_s2[36 +: 9];
-    wire [8:0] rmap_r     = (kmap_s2[45 +: 9] == 9'h1FF) ? kcode_s2[45 +: 9] : kmap_s2[45 +: 9];
-    wire [8:0] rmap_start = (kmap_s2[54 +: 9] == 9'h1FF) ? kcode_s2[54 +: 9] : kmap_s2[54 +: 9];
+    wire [8:0] rmap_a       = kmap_s2[ 0 +: 9];
+    wire [8:0] rmap_b       = kmap_s2[ 9 +: 9];
+    wire [8:0] rmap_x       = kmap_s2[18 +: 9];
+    wire [8:0] rmap_y       = kmap_s2[27 +: 9];
+    wire [8:0] rmap_l       = kmap_s2[36 +: 9];
+    wire [8:0] rmap_r       = kmap_s2[45 +: 9];
+    wire [8:0] rmap_start   = kmap_s2[54 +: 9];
+    wire       rptr_default = kmap_s2[63];
 
 pocket_input #(
     .CLK_HZ ( 32_500_000 )
@@ -1299,6 +1318,7 @@ pocket_input #(
     .map_l      ( rmap_l ),
     .map_r      ( rmap_r ),
     .map_start  ( rmap_start ),
+    .ptr_default( rptr_default ),
     .ps2_key    ( ps2_key ),
     .ps2_mouse  ( ps2_mouse ),
     .ptr_mode   ( ptr_mode )

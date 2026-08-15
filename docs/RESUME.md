@@ -69,6 +69,25 @@ Open items (user list 08-14d), status end-of-day:
   (user_reset/sdram_reinit interplay, rom_loaded latch semantics on
   warm resets). Needs its own investigation; blocks all warm-restart
   PRAM diagnostics meanwhile.
+- ★★ 08-14h BOOT INCONSISTENCY ROOT (probable) — THE WARM-PATH LEAK:
+  boots were inconsistent on buildBE with BOTH the worn and PRISTINE
+  image (image exonerated), battery/heat fine — but the user observed
+  full power-off boots behave BETTER than core relaunches. Mechanism:
+  SDRAM survives a relaunch, so the ROM sees the previous session's
+  'WLSC' warm signature ($CFC) + half-stale RAM and takes the warm
+  path — the same fragile path Special→Restart dies on. Randomness =
+  whatever the last session left behind. This also retro-suspects
+  every "unstable build" verdict made on relaunch-heavy test loops
+  (buildBF's conviction included — its fit may have been fine).
+  FIX in buildBG: launch scrub — 8 zero words over $CF8-$D07 injected
+  through the dio write path (scrub_busy rides download_cycle routing
+  only) before rom_loaded releases the CPU; forces the cold path on
+  every launch. Soft reboot stays broken (in-guest warm path is its
+  own bug); scrub covers LAUNCHES only. buildBG also carries: mapper
+  re-fit (CDC slimmed to resolve-before-crossing, 128 sync flops),
+  "Startup input mode" (Mouse default, live-follow until first
+  Select), seed 3. TRUST GATE: repeated RELAUNCH boots on HW — the
+  actual failure mode — not just cold boots.
 - 08-14f display modes: user verdict — Trinitron is REALLY good; GB
   DMG/GBP/GBP-light do nothing visible on this source (they are 160x144
   handheld colourisation profiles). Catalog fact: 0x10 Trinitron is the
