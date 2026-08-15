@@ -304,6 +304,36 @@ Rungs left: 3 = +startup-input-mode (unbundle from bcf0302), 4
 (optional) = +scrub (5144455 form). buildBO sof/rbf archived; BO =
 the fallback release candidate if the ladder stalls.
 
+**★★★ RUNG 2 (buildBP) HW PASS — MAPPER CDC EXONERATED.** User 08-15
+afternoon: "boots are working great", and the build booted **System
+6.0.8, 7.1 AND 7.5.5** (first 7.5.5 datapoint ever — readme-worthy).
+Colour intact. The observed "always keyboard at power-on + setting
+does nothing" is the PREDICTED rung-3 gap (var 130 writes into the
+void on BP fabric), NOT a bug. Custom-code map untested — blocked by
+a UX gap the user found: **sliders display/edit in DECIMAL 0-300**
+while all docs were hex, and max 300 makes the extended arrow codes
+(363-373) unreachable.
+**RUNG 3 (buildBQ) = f124909**: opt_ptr_default @0xF0000050 (write +
+readback, mouse default) + own 2FF pair beside the kmap bus (BF idiom
+— NOT BG's slimmed kmap carrier) + pocket_input live-follow logic
+from bcf0302 verbatim. NOT taken: CDC slim (unneeded — original
+passed rung 2), scrub (rung 4), seed 3 (bad family). Extended-key
+plumbing verified end-to-end (9-bit bit8 = E0 prefix throughout) —
+arrows work on existing fabric, the limit was JSON-side only.
+**INPUT UX fixes staged on the ladder branch** (39d832a + fb59258):
+slider max 300→388 + adjust_large 2→10 (arrows reachable; SINGLE-AXIS
+change vs the Issue-B proven envelope — if the next boot shows "Load
+error in interact", revert interact.json and re-trim); readme codes
+table now hex+DECIMAL incl. ready-made arrows (Up 373 Down 370 Left
+363 Right 372); root JSONs synced into the worktree so package.sh
+cannot clobber (BB-era gitignore replaced by main's; dist JSONs
+force-tracked on the branch). Next card trip = BQ bitstream +
+interact.json + readme checks: mouse at power-on, menu change
+live-follows until first Select, custom-code with decimal (Q=21),
+one arrow map. Then the rung-4 (scrub) decision + release assembly
+FROM THE LADDER BRANCH (it now carries bitstream lineage, card JSONs,
+and readme — self-contained).
+
 ## 0.05 ★★★ 08-15 EVENING: BOTH ISSUES CRACKED — READ THIS, THEN 0.1's history
 
 **ISSUE B (interact menu) RESOLVED — deep-envelope method.** Three surgical
