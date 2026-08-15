@@ -374,6 +374,7 @@ always @(*) begin
     32'hF0000044: bridge_rd_data <= {23'd0, opt_code_l};
     32'hF0000048: bridge_rd_data <= {23'd0, opt_code_r};
     32'hF000004C: bridge_rd_data <= {23'd0, opt_code_start};
+    32'hF0000050: bridge_rd_data <= {31'd0, opt_ptr_default};
     32'hF0xxxxxx: bridge_rd_data <= 32'd0;   // actions read back as 0
     32'hF8xxxxxx: begin
         bridge_rd_data <= cmd_bridge_rd_data;
@@ -410,6 +411,7 @@ reg         opt_nmi         = 1'b0;
 // code"; 9'h000 = unmapped) and seven custom-code registers. Defaults are
 // the pre-buildBF fixed mapping, plus Q on the previously-unused R trigger.
 // interact.json marks them persist, so each MUST read back its own value.
+reg       opt_ptr_default = 1'b1;  // Startup input mode: 1 = mouse (PTR) at power-on
 reg [8:0] opt_map_a     = 9'h05A;  // Return
 reg [8:0] opt_map_b     = 9'h029;  // Space
 reg [8:0] opt_map_x     = 9'h012;  // Shift
@@ -451,6 +453,7 @@ always @(posedge clk_74a) begin
         32'hF0000044: opt_code_l     <= bridge_wr_data[8:0];
         32'hF0000048: opt_code_r     <= bridge_wr_data[8:0];
         32'hF000004C: opt_code_start <= bridge_wr_data[8:0];
+        32'hF0000050: opt_ptr_default <= bridge_wr_data[0];
         default: ;
         endcase
     end
@@ -1274,9 +1277,11 @@ apf_bridge_loader #(
     wire [62:0] kcode_74 = { opt_code_start, opt_code_r, opt_code_l, opt_code_y,
                              opt_code_x, opt_code_b, opt_code_a };
     reg  [62:0] kmap_s1, kmap_s2, kcode_s1, kcode_s2;
+    reg         ptrdef_s1, ptrdef_s2;
     always @(posedge clk_sys) begin
         kmap_s1  <= kmap_74;   kmap_s2  <= kmap_s1;
         kcode_s1 <= kcode_74;  kcode_s2 <= kcode_s1;
+        ptrdef_s1 <= opt_ptr_default;  ptrdef_s2 <= ptrdef_s1;
     end
     wire [8:0] rmap_a     = (kmap_s2[ 0 +: 9] == 9'h1FF) ? kcode_s2[ 0 +: 9] : kmap_s2[ 0 +: 9];
     wire [8:0] rmap_b     = (kmap_s2[ 9 +: 9] == 9'h1FF) ? kcode_s2[ 9 +: 9] : kmap_s2[ 9 +: 9];
@@ -1298,6 +1303,7 @@ pocket_input #(
     .map_y      ( rmap_y ),
     .map_l      ( rmap_l ),
     .map_r      ( rmap_r ),
+    .ptr_default( ptrdef_s2 ),
     .map_start  ( rmap_start ),
     .ps2_key    ( ps2_key ),
     .ps2_mouse  ( ps2_mouse ),
