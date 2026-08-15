@@ -226,6 +226,37 @@ cheap (4, 6, ...); if several seeds all fail the video check, the
 glitch has gotten worse in the netlist era and needs the sim hunt
 BEFORE release.
 
+**BN first boot: F-LINE. Then two USER CORRECTIONS that re-sort everything:**
+1. ★★ FAILURE-CLASS TAXONOMY (user, load-bearing): the historical ~1/4
+   base-rate failures were HANGS; **F-lines were NEVER part of normal
+   operation** — they appeared only with probed fits, colour-at-depth
+   boots, and now BM/BN. So BI's day (hang/hang/works + glitch) = the
+   OLD failure mode; BM/BN F-lines = a DIFFERENT, serious class. My
+   first-boot-after-insert curse conflated the two classes.
+2. ★★ IMAGE CONTENT THEORY promoted (user ordered reseed): hang-class
+   crashes kill the guest MID-WRITE and accumulate content damage that
+   fsck cannot see (structure-only) — executing damaged content IS an
+   F-line. Explains F-lines across unrelated RTLs/seeds + apparent
+   determinism (same damaged file read every boot). Supporting find:
+   the on-card Mac68KColorGames_v1.hda extract had DRIFTED from
+   pristine (2478A8E5… vs DCD02C6C…) — something wrote to it since
+   08-14; renamed …-DRIFTED.hda (kept for forensics, do NOT use as a
+   reference).
+**RESEED DONE (user-ordered): card maclc.hda = pristine from zip**,
+SHA1 DCD02C6C… VERIFIED ON CARD after copy. Old live image parked as
+maclc-saves-20260815.hda (user saves intact; rb-cli get to recover
+files). Card at handoff = BN bitstream + pristine image + untouched
+Settings.
+**TEST MATRIX for the next boots (BN + pristine):**
+- F-lines GONE, hangs ≤~1/4 → content damage was the F-line source; BN
+  releasable IF video clean (seed-5 verdict still pending). The
+  hang→disk-wear→F-line cycle becomes the documented beta reality
+  (readme already advises image backups).
+- F-line STILL on first boot with a pristine image → image exonerated
+  for good → core/fit/serving class → seed re-roll or HOLD release for
+  the sim hunt. (First-boot-after-insert timing effect still unresolved
+  — the wait-90s-at-menu discriminator remains queued.)
+
 **Also done:** full .sof chain + exact-bitstream stages backed up to the
 card at D:\Backup\maclc-builds (72 files, 167 MB) — the retiring-machine
 gap is covered. PENDING USER (unchanged): the 4bpp question (was BI's
