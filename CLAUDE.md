@@ -253,13 +253,25 @@ ghdl synth -fsynopsys -fexplicit --latches --out=verilog
 
 ```bash
 cd verilator && make clean && make
-./obj_dir/Vemu --headless --no-cpu-trace --screenshot 730 --stop-at-frame 731 >/dev/null 2>&1
+./obj_dir/Vemu +mem2 --headless --no-cpu-trace --screenshot 730 --stop-at-frame 731 >/dev/null 2>&1
 ```
 
 Check the screenshot — it must show the **50% dither grey desktop with the
 arrow cursor top-left** (boot reached cursor-visible state). A uniform flat
 grey means the boot stalled — Egret communication is the first suspect.
 Corroborate with `bash check_boot.sh` (stages + ADVANCING).
+
+★ `+mem2` is REQUIRED (learned 2026-08-14): the sim's default is now 10 MB
+(matching the shipping Pocket), and the 10 MB POST RAM test runs long past
+F730 — the screenshot lands mid-test as a uniform flat grey that is
+indistinguishable from the stalled-boot signature. The F730 oracle is
+calibrated for 2 MB. (Same trap class as the resolution note below: the
+oracle frame depends on machine config, not just video mode.)
+
+★ The diskless "?" screen ends 1bpp even with a colour PRAM seed — the ROM
+resets the depth for the blink loop. Do NOT read a dithered-B&W oracle
+screenshot as "the colour seed regressed"; depth is judged by an OS-boot
+desktop or the `wpl=` probe (docs/pram_video_record.md).
 
 ### ★ THE FRAME NUMBER IS RESOLUTION-DEPENDENT (learned 2026-08-10)
 

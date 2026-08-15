@@ -831,6 +831,25 @@ end
 assign pram_save_data = pram[pram_save_addr];
 assign pram_wr_stb    = pram_region_wr;
 
+`ifdef SIMULATION
+// PRAM video-record witness (2026-08-14, docs/pram_video_record.md): the
+// firmware serving or rewriting XPRAM 0x56-0x5C (the saved video-mode
+// record + neighbours) is the whole colour-boot story — log every HC05
+// access to those bytes, plus the boot-copy's own view of 0x58-0x5A.
+always @(posedge clk) begin
+    if (cen && ram_cs && (addr13 >= 13'h156) && (addr13 <= 13'h15C)) begin
+        if (!cpu_wr)  // write
+            $display("EGRET_XPRAM_WR[%0d]: PC=%04x xpram[%02x] <= %02x",
+                     cycle_count, last_pc, addr13[7:0], cpu_dout);
+        else
+            $display("EGRET_XPRAM_RD[%0d]: PC=%04x xpram[%02x] -> %02x",
+                     cycle_count, last_pc, addr13[7:0], intram[ram_addr]);
+    end
+    if (pram_copy_busy && pram_copy_idx >= 9'h58 && pram_copy_idx <= 9'h5A)
+        $display("EGRET_PRAM_COPY: xpram[%02x] <= %02x", pram_copy_idx[7:0], pram_copy_rdata);
+end
+`endif
+
 `ifdef VERBOSE_TRACE
 // Debug stack reads around RTS execution
 always @(posedge clk) begin

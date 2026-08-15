@@ -35,26 +35,34 @@ Open items (user list 08-14d), status end-of-day:
   keycode table into pocket_input). NOTE the Pocket OS has a built-in
   remap layer (Settings/<core>/Input/input_persist.json id→remap pairs)
   — part of the wish may be an input.json richness job, not RTL.
-- ★ 08-14f PRAM colour — buildBD DID NOT FIX (user-confirmed B&W).
-  Hypothesis ledger: seed bytes ✓ (a16cea3), netlist .mif ✓ (checked in
-  buildBC db), runtime load path ✓ (buildBD streams via the
-  MiSTer-proven pram_load_* port — still B&W). MLAB power-up init is
-  hereby EXONERATED as the sole cause. Remaining: Egret XPRAM serving
-  on Pocket, ROM record validation against machine state (256K-vs-512K
-  VRAM interplay? the record was written on a 512K MiSTer), or a
-  System-side override. ★ The warm-restart discriminator is UNAVAILABLE:
-  Special→Restart is BROKEN on this core (user 08-14: "we haven't fixed
-  the soft reboot loading") — soft reboot is its own standing bug, see
-  below.
-  NEXT EXPERIMENT (decisive, runs on the machine with the Verilator
-  harness): the sim seeds pram[] natively via $readmemh — boot the
-  games disk to desktop and read the DEPTH from the existing
-  `VRAM->BRAM ... wpl=` stdout probe (1bpp@512 = wpl 32, 8bpp = 256; no
-  screenshot needed). Sim boots 8bpp ⇒ guest chain fine, fault is
-  Pocket-only delivery (then: a JTAG-free VISUAL witness build — e.g.
-  paint a corner marker when the Egret's copied pram byte $158 == $83).
-  Sim boots 1bpp ⇒ the guest/ROM rejects the record — trace the Egret
-  XPRAM serve + the video driver mode-set in the sim with $display.
+- ★ 08-14f PRAM colour — ★★★ ROOT CAUSE FOUND + FIXED 08-14 (harness
+  machine; MAME A/B + seeded Verilator; full decode in
+  **docs/pram_video_record.md**, runs in scratch/pram/). The ROM
+  validates the saved record against the MACHINE, and the match bytes
+  encode VRAM SIZE: XPRAM 0x5A = montype | (0x08 if 256K VRAM),
+  0x59 = $A0 | same. The MiSTer-captured seed said $A2/$02 (512K
+  world); this fork presents a 256K SIMM (buildAW), so the ROM
+  discarded the record at driver open (PC A4B7BC: match → pseudovia
+  video cfg $13 = 8bpp; mismatch → $10 = 1bpp + record REWRITTEN to
+  $80/$AA/$0A). It was NEVER a delivery problem — buildBC's bytes,
+  buildBD's loader and MLAB init all fully exonerated (the guest was
+  rejecting the content, not missing it; buildBD's loader can stay as
+  harmless redundancy). FIX: rtl/egret/egret.pram 0x59/0x5A → $AA/$0A;
+  scripts/nvr_to_pram.py now applies the 256K fixup automatically on
+  any future .NVR import (--keep-512k to opt out). PROOF: MAME maclc
+  @256K+montype2 sets 8bpp with the patched seed (M3) and keeps the
+  record; seeded sim 7.1 boot switches to wpl=256 (runC, colour
+  desktop). ★ TRAP for future depth work: a DISKLESS "?" boot ends
+  1bpp even when the record is accepted (the blink loop re-writes cfg
+  $00) — judge acceptance by the transient $13 write / record
+  survival / an OS-boot desktop, never by the ? screen. XPRAM 0x81
+  (slot-record byte, $A2 in the seed) was untouched by the ROM in
+  every run and did not block the colour desktop; semantics still
+  unknown. NEEDS: buildBE fit on the Quartus machine (none here) —
+  data-only change (readmemh + buildBD's M10K copy read the same
+  file), no RTL edit required. Egret XPRAM access witness added to
+  egret_wrapper.sv under SIMULATION for future PRAM work.
+  ★ Special→Restart soft reboot remains its own standing bug (below).
 - ★ 08-14f SOFT REBOOT BROKEN (standing bug, user-reported): guest
   Special→Restart does not come back up. Not newly regressed — never
   worked on the Pocket. Suspects: the machine reset path
@@ -76,6 +84,18 @@ Open items (user list 08-14d), status end-of-day:
   user directive; sim/bench only. Also: the Pocket has NO OSD-unload
   announcement path (an OSD unassign tells the guest nothing) — design
   gap, fix with the GCR package.
+  ★ NEW LEAD 08-14 (harness machine, PRELIMINARY — needs the guest's
+  real poll cadence quantified before blaming RTL): tb_gcr_read (port
+  surface re-synced to single-drive swim.v; it had not built since the
+  cut) shows POLL-PACING-MARGINAL delivery on TRACK 0 (the 12-sector
+  zone): +pollgap=80 → 15/15 address fields CLEAN; +pollgap=40 (the
+  blessed value) → 3/15 corrupt, PERIODIC every 5th field; +pollgap=20
+  → 4/15. Track 3 clean at 40. Same damage class as the HW F-line/hang
+  reports, and an offline dial for the copy-under-SDRAM-contention
+  theory (contention shifts the guest's polls toward the unsafe
+  region). Repro: /tmp/obj_gcr/Vtb_gcr_read +acclen=40 +pollgap=N
+  +ncap=12000 → scripts/gcr_census.py. tb_disk_swap: PASS on this
+  machine (full media protocol, post-migration).
 - ★ 08-14e video glitch (open, HW): intermittent glitching seen on
   Pocket for the first time — user says same occasional glitch exists
   on MiSTer MacLC. MiSTer FB=SDRAM vs Pocket FB=BRAM ⇒ common cause is
