@@ -343,20 +343,17 @@ module mac_lc_pocket
 			end
 		end
 	end
-	// ★ buildBJ (2026-08-15): SAVE-REQ DISARMED — landmine #2 made live.
-	// PRAM persistence has never worked on the Pocket (data.json has no slot
-	// 220), so every save_req fired a doomed flow at a NONEXISTENT slot and
-	// wedged apf_blockdev's shared sequencer — the same sequencer that serves
-	// SCSI — for ~450 ms when the OS error-responds, and indefinitely when it
-	// doesn't. The trigger is any guest-side PRAM write burst + 0.5 s quiet,
-	// and on every boot whose seeded video record fails the ROM's machine
-	// match, the ROM ITSELF rewrites the record = a guaranteed burst whose
-	// quiet-timer expiry lands around Finder startup — the exact phase of the
-	// long-standing ~25-30% Finder-bar boot hang (buildAZ/BB measured
-	// 2026-08-15). Dirty-tracking logic left intact for the future
-	// persistence feature; re-arm by restoring pram_save_req_r here AND
-	// adding slot 220 back to data.json.
-	assign pram_save_req_o = 1'b0;   // was: pram_save_req_r
+	// ★ buildBN (2026-08-15): the buildBJ disarm (tie-0 here) is RETIRED —
+	// indicted, not proven: both disarm builds tallied 0/N at boot (BM
+	// deterministic F-Line at MONO seed) while every base-rate build
+	// (AZ 3/4, BB 4/6, BI 3/4) shipped with the save-req live. The BJ
+	// theory (doomed slot-220 save wedges the SCSI-serving sequencer
+	// ~450 ms around Finder startup) predicted the opposite; ship what the
+	// tally blessed. Landmine #2 is therefore LIVE and accepted for the
+	// beta (readme documents the boot-retry). Do not re-disarm without a
+	// dedicated boot tally; the real fix is the persistence feature
+	// (slot 220 in data.json + pram file), which makes the save flow land.
+	assign pram_save_req_o = pram_save_req_r;
 
 	reg  iiop_mfreeze = 1'b0;   // buildAV: REGISTERED in the IIOP block (the
 	                           // buildAU combinational forward-wire did not

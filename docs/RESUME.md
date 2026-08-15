@@ -203,6 +203,29 @@ bisect_buildBI_monoseed.rbf_r, previously verified bit-exact vs its
   (rb-cli get diff vs maclc-worn.hda / pristine swap — ASK first, live
   image carries user saves).
 
+**BI TALLY VERDICT (mid-morning): 1/3 + CONSISTENT VIDEO CORRUPTION —
+BI DISQUALIFIED for release.** User: cold boot hang, warm boot hang,
+warm boot works, "this build has video corruption now". Matches
+yesterday's log line (shared-RTL glitch CONSISTENT on BI in Finder) ⇒
+the whole SEED-3 PLACEMENT FAMILY (BG..BM) is the suspect now — boot
+marginality + strong glitch expression are family traits, which SOFTENS
+the disarm-only indictment (BM's failures may be family, not disarm).
+The glitch itself remains shared-RTL (MiSTer shows it) — placement only
+modulates expression; post-release investigation via sim/MAME, NOT JTAG
+(probes change placement = rewrite the experiment; user offered JTAG,
+declined for this class).
+**IN FLIGHT: buildBN = BI's exact RTL (disarm retired — restored
+pram_save_req_o = pram_save_req_r with retirement comment; landmine #2
+live-and-accepted as on every base-rate build) + fitter SEED 5** (fresh
+roll; 3 = the bad family; 2 was the AZ/BB era but seeds don't transfer
+across netlists — any new value is an honest roll). One variable vs BI.
+Gates: hierarchy CLEAN, bench TB PASS; STA/SDRAM-paths/zero-probe on
+compile completion → package → card (already in the PC) → 4+ POWER-OFF
+boot tally + video-cleanliness check. If BN rolls bad: next seed is
+cheap (4, 6, ...); if several seeds all fail the video check, the
+glitch has gotten worse in the netlist era and needs the sim hunt
+BEFORE release.
+
 **Also done:** full .sof chain + exact-bitstream stages backed up to the
 card at D:\Backup\maclc-builds (72 files, 167 MB) — the retiring-machine
 gap is covered. PENDING USER (unchanged): the 4bpp question (was BI's
