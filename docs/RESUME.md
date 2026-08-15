@@ -158,6 +158,58 @@ are SILENT NO-OPS (cost this session two phantom rounds).
 
 Card launches were never affected. The old toggle-dance is obsolete.
 
+## 0.1 ★★★ 08-15: THE TWO OPEN ISSUES (read this first, then 0.0/0.5)
+
+**ISSUE A — BOOT INSTABILITY DURING FINDER LOAD (the real problem).**
+Random error class per boot (Unimplemented Trap / bad F-Line / blank
+never-filling dialog) — user: the CLASS is noise, the instability is the
+signal, and "many of yesterday's builds were not having this error."
+Facts: buildAZ was marathon-stable (hours of games). buildBE validated
+colour in the morning, then the SAME BYTES went boot-inconsistent in the
+evening on BOTH worn and pristine images (image/battery/heat excluded).
+buildBG (scrub+mapper+seed3) shows traps at Finder load. User
+observation: FULL POWER-OFF boots behave better than core RELAUNCHES.
+Hypotheses, ranked:
+ 1. WARM-PATH LEAK (0.0/08-14h): SDRAM survives relaunch; ROM warm-boots
+    on stale RAM. buildBG's scrub may NOT BE LANDING: it fires at config,
+    inside pocket_sdram's init-ladder window where we/oe are IGNORED but
+    the dio retire handshake still completes = writes silently VOID
+    (mac_lc_pocket.sv ~1770 documents the window; the ROM loader survives
+    it only because the OS stream arrives ms later). FIX CANDIDATE: gate
+    scrub start on memory-live (delay until the init ladder completes —
+    e.g. run scrub AFTER rom download starts/or a ~200us post-lock delay)
+    — then relaunch boots become the test.
+ 2. Fit/seed marginality — ONLY IF power-off boots also fail (the
+    pending discriminator the user hasn't answered: does buildBG trap on
+    power-cycle boots too, or only relaunches?).
+ 3. A BC→BE-era regression (PRAM seeder etc.) — bisect via archived
+    builds: every .sof in scratch/builds; exact shipped bitstreams
+    recoverable from git dist commits (buildAZ staged:
+    scratch/bitstream_buildAZ_exact.rbf_r, sha d3c62ce1…).
+Note: sim CANNOT see the init-window void (sim.v uses sim_ram, not
+pocket_sdram) — this one is desk-analysis + hardware A/B. Soft reboot
+(Special→Restart broken) is the same warm-path family.
+
+**ISSUE B — INTERACT/MAPPER MENU: ROOT CAUSE FOUND, AWAITING THE BOOT.**
+The evening's "Load error in 'interact' general error" was a MISSING
+FINAL NEWLINE: Windows Python json.dump wrote CRLF files with no
+trailing newline; package.sh's old `sed 's/$/\r/'` shipped a final lone
+`}\r`, which the parser rejects. Proven by controlled test (same buildBG
+fabric: original JSON loads, mapper JSON fails) + byte forensics (every
+loading file ends 7d0d0a). FIXED: package.sh JSON conversion now
+byte-deterministic; all repo JSONs normalized. dist ships the FULL
+16-var mapper menu byte-clean. PENDING: copy dist interact.json to the
+card (buildBG fabric is already on it), then: menu renders 16 entries →
+defaults type, R=Q, one dropdown remap, one custom-code remap, mouse
+mode at power-on. buildBF exonerated on both charges retroactively.
+
+Operational: card loop = copy/cmp to D:\Cores\danifunker.MacLC\, eject
+via PowerShell Shell.Application; gates = STA 0-neg-slack +
+check_sdram_paths + zero sld/altsource + verilator/modelsim_bench/run.sh;
+archive every .sof; NO JTAG (retired). Release v0.9.0 zip built + HELD
+(`bash scripts/release.sh --publish` when the user says go; gh authed).
+This Windows machine is retiring — keep everything in-repo.
+
 ## 0.5 ★ 08-14c: AUTO-MOUNT FIXED (buildAY); MYSTERY B IS NOW A BUS ERROR
 
 - **Launch auto-mount SHIPPED + HW-VALIDATED** (buildAY = 69f48c9, on card
