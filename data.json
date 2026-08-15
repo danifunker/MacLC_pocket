@@ -6,7 +6,7 @@
                 "name": "ROM",
                 "id": "200",
                 "required": true,
-                "parameters": 1,
+                "parameters": 0,
                 "filename": "boot0.rom",
                 "extensions": [
                     "rom"
