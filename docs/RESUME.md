@@ -235,6 +235,24 @@ GATED but UNTALLIED — next session's first HW act: BM stability tally
 (4+ boots) + the still-pending mapper INPUT tests (defaults type / one
 dropdown remap / one custom-code remap; mouse-mode already confirmed).
 PENDING USER ANSWER: the 4bpp question above.
+★ 08-15 LATE: BM's first two boots both F-Lined ("same exact error"
+twice — DETERMINISTIC, a different signature from the morning's varied
+probabilistic failures). Disk-structure damage RULED OUT on the spot:
+rb-cli fsck --checkonly on the card's live maclc.hda = CLEAN (2702
+files/422 dirs, exit 0; APM + bless + System Folder tree all intact).
+[rb-cli = "Rusty Backup", C:\Users\owner\AppData\Local\Programs\
+Rusty Backup\bin\rb-cli.exe — the user's tool of choice for image
+inspection; fsck/ls/get/cp verbs, APM-aware, partition @N addressing.
+scripts/hfs_check.py can NOT walk APM images (MDB sig 'PM' bail) —
+prefer rb-cli.] Tonight's 3-failure cluster (BI-4bpp F-Line + BM x2)
+is UNEXPLAINED; candidates: (a) content-level damage inside
+structurally-clean files (Desktop DB / System resource fork — diff
+vs maclc-worn.hda via rb-cli get would test), (b) session-persistent
+state (Settings/interact_persist now carries the day's remap tests),
+(c) the base bug presenting differently, (d) long-session environment
+(thermals — machine ran/crash-looped for hours). DISCRIMINATOR queued:
+next session's FIRST cold boot of BM after a night off — boots fine =>
+environmental; same F-Line => systematic, then content-diff the image.
 
 **PRAM PERSISTENCE (user wants it): feasible, GATED on boot-at-depth.**
 Plumbing exists: apf_blockdev's MiSTer-derived PRAM FSM (pram_rd_todo=0
