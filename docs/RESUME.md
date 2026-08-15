@@ -283,6 +283,27 @@ retest. Card at this moment: AZ bitstream + PRISTINE maclc.hda (user's
 old image parked as maclc-saves-20260815.hda; drifted extract kept as
 …-DRIFTED.hda — do not trust it).
 
+**★★★ RUNG 1 (buildBO) HW PASS — COLOUR-AT-BOOT WORKS; collapse verdict
+DEAD.** User 08-15 midday: "color works, cold boot works fine. warm
+boot hung once, but recovered the next boot. MFM floppy worked fine."
+So: colour desktop FROM SEED on a clean fit + floppy fix confirmed;
+the one warm hang = the known base-rate class. Colour + floppy are IN
+the release. THE LADDER IS NOW A GIT BRANCH: **ladder/release-rebuild**
+(pushed; worktree ../MacLC_BBcolor) — rung 1 = 17d4aeb (BO), rung 2 =
+f85739a (buildBP = + 9f26625's mapper RTL ONLY: core_top +79,
+pocket_input +69; dist hunks dropped, seed 2, one variable = the
+mapper CDC suspect). BP compiling at handoff. BP's HW check = boots +
+colour + INPUT VALIDATION (defaults type A=Return B=Space X=Shift Y=N
+L=Esc R=Q Start=Command; one dropdown remap; one custom-code remap).
+★ Card-load hygiene for BP: park Settings\danifunker.MacLC\Interact\
+_core\interact_persist.json (stale A/X/R=0 persists from dead menu
+revisions become LIVE registers on BF+ fabric = dead buttons; not a
+machine variable, log it). Startup-input-mode var 130 is INERT on BP
+(BG feature, rung 3) — power-on default is keyboard mode this rung.
+Rungs left: 3 = +startup-input-mode (unbundle from bcf0302), 4
+(optional) = +scrub (5144455 form). buildBO sof/rbf archived; BO =
+the fallback release candidate if the ladder stalls.
+
 ## 0.05 ★★★ 08-15 EVENING: BOTH ISSUES CRACKED — READ THIS, THEN 0.1's history
 
 **ISSUE B (interact menu) RESOLVED — deep-envelope method.** Three surgical
