@@ -8,52 +8,75 @@ which is based on the MacPlus MiSTer core by Sorgelig, originating from the
 Motorola 68020 CPU (via a modified TG68K core), the V8 gate array (video/glue), the
 Egret (HC05) system controller with its original firmware, SWIM, SCSI, and ADB.
 
-> **Work in progress.** This core is under active development and is not yet
-> a usable computer — see the status below before flashing expectations.
+> **Beta** (v0.9.0, 2026-08-15). The core boots System 6.0.8 and System 7.1
+> to the desktop and plays games — with the known issues listed below, the
+> headline one being that **PRAM does not save**: the machine starts
+> black-and-white every launch, and you set 256 colours in Monitors after
+> boot.
 
-## Status (2026-08-12)
+## Status (2026-08-14, beta)
 
 ### Working (verified on hardware)
 
-- **Cold boot to the flashing-`?` screen** — power on, launch the core, the machine
-  runs its full ROM POST (including the cold RAM march) and waits for a boot disk
-- **ROM loading** — `boot0.rom` is auto-loaded from the SD card at every core launch
-  and lands in SDRAM byte-perfect (verified by an on-fabric read-back oracle)
-- **Video** — 512×384 at 1/2/4/8 bpp through the Pocket's scaler, true 4:3
-- **Sound** (startup chime and death chimes have been heard many times…)
-- **Keyboard/mouse** via the Pocket's controls (ADB device model)
-- **Memory** — 2 MB or 10 MB configurations, selectable in the core menu
-- **SCSI hard disk, most of the way**: disks mount, the ROM finds them, reads
-  sectors correctly, loads and runs the Apple driver partition, shows the
-  **happy Mac**, and begins loading System 6.0.8 — see below for the last gap
+- **Boots to the desktop** from a cold start with no menu work:
+  `boot0.rom` and `maclc.hda` auto-load at launch, the machine POSTs, and
+  System comes up. The desktop starts black-and-white — open **Monitors**
+  and pick 256 Colors; the setting lasts until power-off (see Known
+  issues). Games like Prince of Persia run.
+- **Controller setup menu** (new in this beta) — "Startup input mode"
+  (mouse mode is now the power-on default) and per-button key assignment
+  (dropdown choices plus raw-keycode sliders) in the core's Interact menu
+- **SCSI hard disks** — two slots, reads and writes, hot-mount via the menu
+- **CD-ROM (ISO)** — read-only data discs on SCSI ID 3, `maclc.iso`
+  auto-mounts
+- **Floppy: 1.44 MB MFM images** — mount and read via the Floppy slot
+  (`.dsk`/`.img`, raw or DiskCopy 4.2)
+- **Video** — 512×384 at 1/2/4/8 bpp, true 4:3, plus Analogue **Display
+  Modes** (the CRT Trinitron profile suits this machine well)
+- **Sound**, **keyboard/mouse** via the Pocket's controls (ADB model),
+  **2 MB / 10 MB** memory configurations, RTC set from the Pocket's clock
+  at launch
 
-### Not working yet
+### Known issues (beta)
 
-- **SCSI hard disk boot** — the System load crashes at a deterministic point
-  shortly after the happy Mac. Actively under investigation (the failure is
-  reproducible and instrumented; see `docs/boot_problems.md` for the full
-  forensic history).
-- **Floppy disks** — the image-loading path is ported but has not been validated
-  on Pocket hardware yet
-- **PRAM persistence** — settings do not survive a power cycle (the clock is
-  still always correct: it is set from the Pocket's own RTC at launch). A
-  "Reset PRAM" action is available in the core menu.
+- **800K GCR floppy images crash or hang the system** — mount works, but
+  use can end in an F-Line bomb or a freeze; ejects can crash the Finder.
+  1.44 MB MFM images can very occasionally do the same. Under active
+  investigation; prefer MFM images or the hard disk meanwhile.
+- **Restart from the Special menu does not come back** — power the Pocket
+  off and on instead.
+- **Not every boot reaches the Finder** — in this beta roughly one boot in
+  four fails during startup (an error dialog, a bomb, or a hang at the
+  extensions bar). Power the Pocket fully off and boot again — a full
+  power cycle is more reliable than relaunching the core — and once the
+  Finder is up, the machine is stable for hours of use.
+- **PRAM does not save** — in-guest settings (colour depth, volume, mouse
+  speed, clock) reset every launch, and the machine always starts
+  black-and-white. Set 256 Colors in Monitors after boot (it sticks until
+  power-off), or drop a depth-switching utility into the Startup Items
+  folder of your boot disk to make it automatic.
+- **Rare video glitching** — a transient artifact inherited from the
+  MiSTer lineage, under investigation.
+- **Floppies are read-only** (by design for now — the drive reports
+  write-protected, so the OS never attempts a write).
 
 ### Cut from the MiSTer core (Pocket resource budget)
 
 The Pocket's FPGA is roughly half the size of the DE10-Nano's. The following
 MiSTer-core features are **not present** and are not planned unless the budget
 math changes: 16bpp video, 640×480 mode, the second (external) floppy drive,
-the CD-ROM drive, and the BlueSCSI Toolbox file transfer. See
-`docs/PORT_STATUS.md` for the arithmetic.
+CD audio / bin+cue (the ISO data CD-ROM above is what fits), and the BlueSCSI
+Toolbox file transfer. See `docs/PORT_STATUS.md` for the arithmetic.
 
 ## SD card setup
 
 ```
 /Cores/danifunker.MacLC/            <- contents of dist/Cores/danifunker.MacLC/
+/Platforms/                         <- maclc.json + _images/maclc.bin
 /Assets/maclc/common/boot0.rom      <- 512 KB Mac LC ROM (required)
 /Assets/maclc/common/maclc.hda      <- hard disk 1 (optional, auto-mounts)
 /Assets/maclc/common/maclc2.hda     <- hard disk 2 (optional, auto-mounts)
+/Assets/maclc/common/maclc.iso      <- CD-ROM ISO (optional, auto-mounts)
 ```
 
 - **`boot0.rom`** — the 512 KB Macintosh LC ROM, version `$67C`, checksum
@@ -67,9 +90,10 @@ the CD-ROM drive, and the BlueSCSI Toolbox file transfer. See
 - Floppy images (`.dsk` / `.img`, raw or DiskCopy 4.2) go anywhere on the card
   and are attached via the Floppy slot.
 
-*(Remember: SCSI boot does not complete yet — the disks mount and read, but the
-System crashes during startup. The filenames above are the intended stable
-interface and already work for the mount/read stages.)*
+*(A practical beta note: the hard-disk image is writable, and a crash while
+the guest is writing can damage its filesystem — after which boots may
+become inconsistent. Keep a backup of your `.hda` and restore it if the
+machine stops reaching the Finder reliably.)*
 
 Hard-disk images use the raw SCSI format (as used by SCSI2SD / BlueSCSI,
 documented [here](http://www.codesrc.com/mediawiki/index.php?title=HFSFromScratch)):
@@ -119,3 +143,51 @@ is the continuous reference implementation.
 - Mac LC MiSTer core and Pocket port by
   [danifunker](https://github.com/danifunker) and
   [alanswx](https://github.com/alanswx)
+
+## Controls
+
+Two modes, toggled with **Select**:
+
+- **Mouse mode** (the power-on default, configurable): the D-Pad moves the
+  cursor and **A** is the mouse button. **The toggle only re-purposes the
+  D-Pad and A** -- every other button keeps typing its key, so Command
+  chords work while pointing. Feedback is implicit: if the cursor moves,
+  you are in mouse mode.
+- **Keyboard mode**: D-Pad = arrow keys, **A** = Return, **B** = Space,
+  **X** = Shift, **Y** = N, **L** = Escape, **R** = Q, **Start** = Command.
+
+The classic Mac mouse has one button, so nothing is missing from a single
+click button.
+
+**Remapping** (new in this beta, lightly tested): the core's Interact menu
+has "Startup input mode" (which mode is active at power-on) and a
+"Button ... key" dropdown per button. Picking **Custom** in a dropdown
+makes that button send the raw keycode from its "... custom code" slider,
+for keys not on the dropdown list (Y and Start are dropdown-only in this
+beta). The **Interrupt (NMI)** action had to sit out this beta (core-menu
+size limit); it returns in a future build.
+
+Custom-code sliders take PS/2 Scan Code Set 2 "make" codes. **The slider
+shows and edits the code in DECIMAL** — use the decimal column below
+(e.g. to make a button type Q, set its slider to 21). Arrow keys are
+"extended" codes: enter them as 256 + the code, listed ready-made below.
+
+| Key | Hex | Dec | Key | Hex | Dec | Key | Hex | Dec |
+|-----|-----|-----|-----|-----|-----|-----|-----|-----|
+| A | 0x1C | 28 | N | 0x31 | 49 | 1 | 0x16 | 22 |
+| B | 0x32 | 50 | O | 0x44 | 68 | 2 | 0x1E | 30 |
+| C | 0x21 | 33 | P | 0x4D | 77 | 3 | 0x26 | 38 |
+| D | 0x23 | 35 | Q | 0x15 | 21 | 4 | 0x25 | 37 |
+| E | 0x24 | 36 | R | 0x2D | 45 | 5 | 0x2E | 46 |
+| F | 0x2B | 43 | S | 0x1B | 27 | 6 | 0x36 | 54 |
+| G | 0x34 | 52 | T | 0x2C | 44 | 7 | 0x3D | 61 |
+| H | 0x33 | 51 | U | 0x3C | 60 | 8 | 0x3E | 62 |
+| I | 0x43 | 67 | V | 0x2A | 42 | 9 | 0x46 | 70 |
+| J | 0x3B | 59 | W | 0x1D | 29 | 0 | 0x45 | 69 |
+| K | 0x42 | 66 | X | 0x22 | 34 | Up | — | 373 |
+| L | 0x4B | 75 | Y | 0x35 | 53 | Down | — | 370 |
+| M | 0x3A | 58 | Z | 0x1A | 26 | Left | — | 363 |
+| | | | | | | Right | — | 372 |
+
+Space 0x29 · Return 0x5A · Esc 0x76 · Tab 0x0D · Backspace 0x66 ·
+Shift 0x12 · Command 0x11 · Control 0x14 · period 0x49 · comma 0x41
