@@ -216,6 +216,26 @@ Monitors per session (or drop a depth-setting utility into Startup Items on
 the games disk — runs post-Finder, past the fragile window). Tally + soak
 before dist/release.
 
+**08-15 SESSION CLOSE.** User ended testing after ~30 boots (fatigue — the
+tally protocol is heavy; respect it next session). LAST OBSERVATION, logged
+verbatim: on the BI card's first boot of its second session, "at 4bpp,
+finder loaded but after everything loaded up I got a bad F-line". OPEN
+QUESTION: manually-set 4bpp (user had been setting depths in Monitors all
+day) or a SPONTANEOUS 4bpp boot? BI's staged rbf_r re-verified bit-exact
+against its archived .sof (quartus_cpf regen), and the machine hardwires
+v8_monitor_id=4'h2 + 256K ⇒ the import record (a6/06) should be REJECTED
+to 1bpp per the MAME-verified model — a spontaneous 4bpp boot would mean
+the REAL fabric's acceptance path diverges from that model (and would
+retroactively make BI's 3/4 tally a 4bpp datapoint = depth-response
+evidence). Ask the user before trusting either reading. F-Line-after-full-
+load at 4bpp leans toward collapse-follows-colour-path (not pure 8bpp
+bandwidth) if the boot was genuinely 4bpp-from-seed.
+CARD AT CLOSE = full dist = buildBM (all 10 files hash-verified). BM is
+GATED but UNTALLIED — next session's first HW act: BM stability tally
+(4+ boots) + the still-pending mapper INPUT tests (defaults type / one
+dropdown remap / one custom-code remap; mouse-mode already confirmed).
+PENDING USER ANSWER: the 4bpp question above.
+
 **PRAM PERSISTENCE (user wants it): feasible, GATED on boot-at-depth.**
 Plumbing exists: apf_blockdev's MiSTer-derived PRAM FSM (pram_rd_todo=0
 "was 1: load once at power-up" — re-enable), re-arm pram_save_req_r (one
