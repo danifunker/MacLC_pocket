@@ -263,6 +263,26 @@ gap is covered. PENDING USER (unchanged): the 4bpp question (was BI's
 second-session F-Line after a MANUAL Monitors 4bpp set, or a spontaneous
 4bpp boot?) — still decides the depth-work reading, ask when convenient.
 
+**★★★ FINAL STATE OF THE HUNT + THE PLAN OF RECORD — see
+boot_problems.md ★★★ 2026-08-16 (the full write-up: failure taxonomy,
+eliminations, fit-family finding, image-wear cycle, ladder).** Short
+form: AZ-exact booted CLEAN in the exact environment BN F-lined in ⇒
+regression confirmed INSIDE the AZ→BN netlist era, fit-expressed
+(STA-blind); everything else exonerated by measurement. User directive:
+re-assemble the release ONE FEATURE PER BUILD from the BB base (last
+F-line-free state with floppy) — the REBUILD LADDER, each rung
+hardware-gated (2-3 power-off boots, hang-vs-F-line scored, video
+noted). Rung 1 IN FLIGHT at handoff: BB tree + minimal colour graft
+seed (1a4844c pram; init-only ⇒ reproduces BB's blessed placement),
+worktree ../MacLC_BBcolor, compiling. Rung 2 = +BF mapper (the CDC
+suspect; include the never-run input validation). Rung 3 = +startup
+input mode. Rung 4 (optional) = +scrub. Never silently re-take: seed 3,
+the disarm, bundled builds. Colour-collapse evidence is CONTAMINATED
+(measured only on bad-era fits + worn image) — rung 1 is its clean
+retest. Card at this moment: AZ bitstream + PRISTINE maclc.hda (user's
+old image parked as maclc-saves-20260815.hda; drifted extract kept as
+…-DRIFTED.hda — do not trust it).
+
 ## 0.05 ★★★ 08-15 EVENING: BOTH ISSUES CRACKED — READ THIS, THEN 0.1's history
 
 **ISSUE B (interact menu) RESOLVED — deep-envelope method.** Three surgical
