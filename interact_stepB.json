@@ -1,0 +1,455 @@
+{
+    "interact": {
+        "magic": "APF_VER_1",
+        "variables": [
+            {
+                "name": "Memory",
+                "id": 100,
+                "type": "list",
+                "enabled": true,
+                "address": "0xf0000000",
+                "defaultval": 1,
+                "mask": "0xFFFFFFFE",
+                "options": [
+                    {
+                        "value": "0x00000000",
+                        "name": "2 MB"
+                    },
+                    {
+                        "value": "0x00000001",
+                        "name": "10 MB"
+                    }
+                ],
+                "persist": true
+            },
+            {
+                "name": "Reset & Apply",
+                "id": 101,
+                "type": "action",
+                "enabled": true,
+                "address": "0xf0000004",
+                "value": 1,
+                "mask": "0xFFFFFFFE"
+            },
+            {
+                "name": "Interrupt (NMI)",
+                "id": 103,
+                "type": "action",
+                "enabled": true,
+                "address": "0xf000000c",
+                "value": 1,
+                "mask": "0xFFFFFFFE"
+            },
+            {
+                "name": "Button A key",
+                "id": 110,
+                "type": "list",
+                "enabled": true,
+                "address": "0xf0000018",
+                "defaultval": 90,
+                "mask": "0xFFFFFE00",
+                "options": [
+                    {
+                        "value": "0x0000005a",
+                        "name": "Return"
+                    },
+                    {
+                        "value": "0x00000029",
+                        "name": "Space"
+                    },
+                    {
+                        "value": "0x00000015",
+                        "name": "Q"
+                    },
+                    {
+                        "value": "0x00000012",
+                        "name": "Shift"
+                    },
+                    {
+                        "value": "0x00000011",
+                        "name": "Command"
+                    },
+                    {
+                        "value": "0x0000011f",
+                        "name": "Option"
+                    },
+                    {
+                        "value": "0x00000076",
+                        "name": "Esc"
+                    },
+                    {
+                        "value": "0x000001ff",
+                        "name": "Custom (code below)"
+                    }
+                ],
+                "persist": true
+            },
+            {
+                "name": "Button B key",
+                "id": 111,
+                "type": "list",
+                "enabled": true,
+                "address": "0xf000001c",
+                "defaultval": 41,
+                "mask": "0xFFFFFE00",
+                "options": [
+                    {
+                        "value": "0x00000029",
+                        "name": "Space"
+                    },
+                    {
+                        "value": "0x00000015",
+                        "name": "Q"
+                    },
+                    {
+                        "value": "0x0000005a",
+                        "name": "Return"
+                    },
+                    {
+                        "value": "0x00000012",
+                        "name": "Shift"
+                    },
+                    {
+                        "value": "0x00000011",
+                        "name": "Command"
+                    },
+                    {
+                        "value": "0x0000011f",
+                        "name": "Option"
+                    },
+                    {
+                        "value": "0x00000076",
+                        "name": "Esc"
+                    },
+                    {
+                        "value": "0x000001ff",
+                        "name": "Custom (code below)"
+                    }
+                ],
+                "persist": true
+            },
+            {
+                "name": "Button X key",
+                "id": 112,
+                "type": "list",
+                "enabled": true,
+                "address": "0xf0000020",
+                "defaultval": 18,
+                "mask": "0xFFFFFE00",
+                "options": [
+                    {
+                        "value": "0x00000012",
+                        "name": "Shift"
+                    },
+                    {
+                        "value": "0x00000029",
+                        "name": "Space"
+                    },
+                    {
+                        "value": "0x00000015",
+                        "name": "Q"
+                    },
+                    {
+                        "value": "0x0000005a",
+                        "name": "Return"
+                    },
+                    {
+                        "value": "0x00000011",
+                        "name": "Command"
+                    },
+                    {
+                        "value": "0x0000011f",
+                        "name": "Option"
+                    },
+                    {
+                        "value": "0x00000076",
+                        "name": "Esc"
+                    },
+                    {
+                        "value": "0x000001ff",
+                        "name": "Custom (code below)"
+                    }
+                ],
+                "persist": true
+            },
+            {
+                "name": "Button Y key",
+                "id": 113,
+                "type": "list",
+                "enabled": true,
+                "address": "0xf0000024",
+                "defaultval": 49,
+                "mask": "0xFFFFFE00",
+                "options": [
+                    {
+                        "value": "0x00000031",
+                        "name": "N"
+                    },
+                    {
+                        "value": "0x00000029",
+                        "name": "Space"
+                    },
+                    {
+                        "value": "0x00000015",
+                        "name": "Q"
+                    },
+                    {
+                        "value": "0x0000005a",
+                        "name": "Return"
+                    },
+                    {
+                        "value": "0x00000012",
+                        "name": "Shift"
+                    },
+                    {
+                        "value": "0x00000011",
+                        "name": "Command"
+                    },
+                    {
+                        "value": "0x0000011f",
+                        "name": "Option"
+                    },
+                    {
+                        "value": "0x000001ff",
+                        "name": "Custom (code below)"
+                    }
+                ],
+                "persist": true
+            },
+            {
+                "name": "Button L key",
+                "id": 114,
+                "type": "list",
+                "enabled": true,
+                "address": "0xf0000028",
+                "defaultval": 118,
+                "mask": "0xFFFFFE00",
+                "options": [
+                    {
+                        "value": "0x00000076",
+                        "name": "Esc"
+                    },
+                    {
+                        "value": "0x00000029",
+                        "name": "Space"
+                    },
+                    {
+                        "value": "0x00000015",
+                        "name": "Q"
+                    },
+                    {
+                        "value": "0x0000005a",
+                        "name": "Return"
+                    },
+                    {
+                        "value": "0x00000012",
+                        "name": "Shift"
+                    },
+                    {
+                        "value": "0x00000011",
+                        "name": "Command"
+                    },
+                    {
+                        "value": "0x0000011f",
+                        "name": "Option"
+                    },
+                    {
+                        "value": "0x000001ff",
+                        "name": "Custom (code below)"
+                    }
+                ],
+                "persist": true
+            },
+            {
+                "name": "Button R key",
+                "id": 115,
+                "type": "list",
+                "enabled": true,
+                "address": "0xf000002c",
+                "defaultval": 21,
+                "mask": "0xFFFFFE00",
+                "options": [
+                    {
+                        "value": "0x00000015",
+                        "name": "Q"
+                    },
+                    {
+                        "value": "0x00000029",
+                        "name": "Space"
+                    },
+                    {
+                        "value": "0x0000005a",
+                        "name": "Return"
+                    },
+                    {
+                        "value": "0x00000012",
+                        "name": "Shift"
+                    },
+                    {
+                        "value": "0x00000011",
+                        "name": "Command"
+                    },
+                    {
+                        "value": "0x0000011f",
+                        "name": "Option"
+                    },
+                    {
+                        "value": "0x00000076",
+                        "name": "Esc"
+                    },
+                    {
+                        "value": "0x000001ff",
+                        "name": "Custom (code below)"
+                    }
+                ],
+                "persist": true
+            },
+            {
+                "name": "Button Start key",
+                "id": 116,
+                "type": "list",
+                "enabled": true,
+                "address": "0xf0000030",
+                "defaultval": 17,
+                "mask": "0xFFFFFE00",
+                "options": [
+                    {
+                        "value": "0x00000011",
+                        "name": "Command"
+                    },
+                    {
+                        "value": "0x00000029",
+                        "name": "Space"
+                    },
+                    {
+                        "value": "0x00000015",
+                        "name": "Q"
+                    },
+                    {
+                        "value": "0x0000005a",
+                        "name": "Return"
+                    },
+                    {
+                        "value": "0x00000012",
+                        "name": "Shift"
+                    },
+                    {
+                        "value": "0x0000011f",
+                        "name": "Option"
+                    },
+                    {
+                        "value": "0x00000076",
+                        "name": "Esc"
+                    },
+                    {
+                        "value": "0x000001ff",
+                        "name": "Custom (code below)"
+                    }
+                ],
+                "persist": true
+            },
+            {
+                "name": "A custom code",
+                "id": 120,
+                "type": "slider_u32",
+                "enabled": true,
+                "address": "0xf0000034",
+                "persist": true,
+                "defaultval": 0,
+                "mask": "0xFFFFFE00",
+                "graphical": {
+                    "signed": false,
+                    "min": 0,
+                    "max": 511,
+                    "adjust_small": 1,
+                    "adjust_large": 16
+                }
+            },
+            {
+                "name": "B custom code",
+                "id": 121,
+                "type": "slider_u32",
+                "enabled": true,
+                "address": "0xf0000038",
+                "persist": true,
+                "defaultval": 0,
+                "mask": "0xFFFFFE00",
+                "graphical": {
+                    "signed": false,
+                    "min": 0,
+                    "max": 511,
+                    "adjust_small": 1,
+                    "adjust_large": 16
+                }
+            },
+            {
+                "name": "X custom code",
+                "id": 122,
+                "type": "slider_u32",
+                "enabled": true,
+                "address": "0xf000003c",
+                "persist": true,
+                "defaultval": 0,
+                "mask": "0xFFFFFE00",
+                "graphical": {
+                    "signed": false,
+                    "min": 0,
+                    "max": 511,
+                    "adjust_small": 1,
+                    "adjust_large": 16
+                }
+            },
+            {
+                "name": "Y custom code",
+                "id": 123,
+                "type": "slider_u32",
+                "enabled": true,
+                "address": "0xf0000040",
+                "persist": true,
+                "defaultval": 0,
+                "mask": "0xFFFFFE00",
+                "graphical": {
+                    "signed": false,
+                    "min": 0,
+                    "max": 511,
+                    "adjust_small": 1,
+                    "adjust_large": 16
+                }
+            },
+            {
+                "name": "L custom code",
+                "id": 124,
+                "type": "slider_u32",
+                "enabled": true,
+                "address": "0xf0000044",
+                "persist": true,
+                "defaultval": 0,
+                "mask": "0xFFFFFE00",
+                "graphical": {
+                    "signed": false,
+                    "min": 0,
+                    "max": 511,
+                    "adjust_small": 1,
+                    "adjust_large": 16
+                }
+            },
+            {
+                "name": "R custom code",
+                "id": 125,
+                "type": "slider_u32",
+                "enabled": true,
+                "address": "0xf0000048",
+                "persist": true,
+                "defaultval": 0,
+                "mask": "0xFFFFFE00",
+                "graphical": {
+                    "signed": false,
+                    "min": 0,
+                    "max": 511,
+                    "adjust_small": 1,
+                    "adjust_large": 16
+                }
+            }
+        ]
+    }
+}

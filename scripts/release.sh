@@ -115,11 +115,12 @@ Highlights:
 - 68020 Macintosh LC: 2/10 MB RAM, 512x384 up to 256 colours, SCSI hard
   disks (2) + CD-ROM (ISO), floppy (1.44M MFM working; 800K GCR known issue)
 - Auto-mounts the default hard disk image at core launch
+- Boots in 256 colours out of the box
 - Display Modes (CRT Trinitron and friends) supported
 
-Known issues: 800K GCR floppies can crash or hang the system; PRAM settings
-(including colour depth) do not persist across power cycles yet -- set your
-depth in the Monitors control panel after boot.
+Known issues: 800K GCR floppies can crash or hang the system; settings
+changed inside the guest (Monitors, volume, clock) do not survive a power
+cycle yet -- the core boots from its built-in defaults each time.
 EOF
         echo "wrote $NOTES (edit before re-running to customize)"
     fi
