@@ -8,18 +8,24 @@ which is based on the MacPlus MiSTer core by Sorgelig, originating from the
 Motorola 68020 CPU (via a modified TG68K core), the V8 gate array (video/glue), the
 Egret (HC05) system controller with its original firmware, SWIM, SCSI, and ADB.
 
-> **Beta** (v0.9.0, 2026-08-14). The core boots System 6.0.8 and System 7.1
-> to a 256-colour desktop and plays games — with the known issues listed
-> below.
+> **Beta** (v0.9.0, 2026-08-15). The core boots System 6.0.8 and System 7.1
+> to the desktop and plays games — with the known issues listed below, the
+> headline one being that **PRAM does not save**: the machine starts
+> black-and-white every launch, and you set 256 colours in Monitors after
+> boot.
 
 ## Status (2026-08-14, beta)
 
 ### Working (verified on hardware)
 
-- **Boots to a 256-colour desktop** from a cold start with no menu work:
+- **Boots to the desktop** from a cold start with no menu work:
   `boot0.rom` and `maclc.hda` auto-load at launch, the machine POSTs, and
-  System comes up in colour (the depth default is pre-seeded; games like
-  Prince of Persia run)
+  System comes up. The desktop starts black-and-white — open **Monitors**
+  and pick 256 Colors; the setting lasts until power-off (see Known
+  issues). Games like Prince of Persia run.
+- **Controller setup menu** (new in this beta) — "Startup input mode"
+  (mouse mode is now the power-on default) and per-button key assignment
+  (dropdown choices plus raw-keycode sliders) in the core's Interact menu
 - **SCSI hard disks** — two slots, reads and writes, hot-mount via the menu
 - **CD-ROM (ISO)** — read-only data discs on SCSI ID 3, `maclc.iso`
   auto-mounts
@@ -39,15 +45,16 @@ Egret (HC05) system controller with its original firmware, SWIM, SCSI, and ADB.
   investigation; prefer MFM images or the hard disk meanwhile.
 - **Restart from the Special menu does not come back** — power the Pocket
   off and on instead.
-- **Boots can be inconsistent after relaunching the core without a power
-  cycle** — if the machine stops reaching the Finder reliably, power the
-  Pocket fully off and on. (Root cause understood — the guest's warm-boot
-  signature survives a relaunch in SDRAM — and a fix is in testing.)
-- **In-guest settings don't persist** — the core boots from its built-in
-  defaults (256 colours included) every launch; changes made in the guest
-  (volume, mouse speed, clock) last until power-off. Avoid the "Reset
-  PRAM" menu action: it clears the live PRAM and the machine runs
-  black-and-white until the next core launch.
+- **Not every boot reaches the Finder** — in this beta roughly one boot in
+  four fails during startup (an error dialog, a bomb, or a hang at the
+  extensions bar). Power the Pocket fully off and boot again — a full
+  power cycle is more reliable than relaunching the core — and once the
+  Finder is up, the machine is stable for hours of use.
+- **PRAM does not save** — in-guest settings (colour depth, volume, mouse
+  speed, clock) reset every launch, and the machine always starts
+  black-and-white. Set 256 Colors in Monitors after boot (it sticks until
+  power-off), or drop a depth-switching utility into the Startup Items
+  folder of your boot disk to make it automatic.
 - **Rare video glitching** — a transient artifact inherited from the
   MiSTer lineage, under investigation.
 - **Floppies are read-only** (by design for now — the drive reports
@@ -141,18 +148,39 @@ is the continuous reference implementation.
 
 Two modes, toggled with **Select**:
 
-- **Keyboard mode** (the current power-on default): D-Pad = arrow keys,
-  **A** = Return, **B** = Space, **X** = Shift, **Y** = N, **L** = Escape,
-  **Start** = Command.
-- **Mouse mode**: the D-Pad moves the cursor and **A** is the mouse button.
-  **The toggle only re-purposes the D-Pad and A** -- every other button
-  keeps typing its key, so Command chords work while pointing. Feedback is
-  implicit: if the cursor moves, you are in mouse mode.
+- **Mouse mode** (the power-on default, configurable): the D-Pad moves the
+  cursor and **A** is the mouse button. **The toggle only re-purposes the
+  D-Pad and A** -- every other button keeps typing its key, so Command
+  chords work while pointing. Feedback is implicit: if the cursor moves,
+  you are in mouse mode.
+- **Keyboard mode**: D-Pad = arrow keys, **A** = Return, **B** = Space,
+  **X** = Shift, **Y** = N, **L** = Escape, **R** = Q, **Start** = Command.
 
 The classic Mac mouse has one button, so nothing is missing from a single
-click button. For the programmer's-key/debugger function use the Core
-Settings **Interrupt (NMI)** action.
+click button.
 
-*Planned for a future build: per-button key remapping (any button to any
-Mac key -- implemented, pulled from this beta after a bad fitter run) and
-a setting to make mouse mode the power-on default.*
+**Remapping** (new in this beta, lightly tested): the core's Interact menu
+has "Startup input mode" (which mode is active at power-on) and a
+"Button ... key" dropdown per button. Picking **Custom** in a dropdown
+makes that button send the raw keycode from its "... custom code" slider,
+for keys not on the dropdown list (Y and Start are dropdown-only in this
+beta). The **Interrupt (NMI)** action had to sit out this beta (core-menu
+size limit); it returns in a future build.
+
+Custom-code sliders take PS/2 Scan Code Set 2 "make" codes (single-byte
+keys only — the arrow keys are extended codes and can't be entered yet):
+
+| Key | Code | Key | Code | Key | Code | Key | Code |
+|-----|------|-----|------|-----|------|-----|------|
+| A | 0x1C | J | 0x3B | S | 0x1B | 1 | 0x16 |
+| B | 0x32 | K | 0x42 | T | 0x2C | 2 | 0x1E |
+| C | 0x21 | L | 0x4B | U | 0x3C | 3 | 0x26 |
+| D | 0x23 | M | 0x3A | V | 0x2A | 4 | 0x25 |
+| E | 0x24 | N | 0x31 | W | 0x1D | 5 | 0x2E |
+| F | 0x2B | O | 0x44 | X | 0x22 | 6 | 0x36 |
+| G | 0x34 | P | 0x4D | Y | 0x35 | 7 | 0x3D |
+| H | 0x33 | Q | 0x15 | Z | 0x1A | 8 | 0x3E |
+| I | 0x43 | R | 0x2D | 0 | 0x45 | 9 | 0x46 |
+
+Space 0x29 · Return 0x5A · Esc 0x76 · Tab 0x0D · Backspace 0x66 ·
+Shift 0x12 · Command 0x11 · Control 0x14 · period 0x49 · comma 0x41

@@ -158,6 +158,57 @@ are SILENT NO-OPS (cost this session two phantom rounds).
 
 Card launches were never affected. The old toggle-dance is obsolete.
 
+## 0.02 ★★★ 08-15 MORNING-2 (LIVE): DISCRIMINATOR FIRED — DISARM INDICTED; RELEASE RUN ON BI
+
+**The overnight discriminator answered: SYSTEMATIC.** User: BM still
+F-lines after the night off — thermal/environment candidate (d) is DEAD.
+**User decisions this morning:** ~3/4 boot rate is ACCEPTABLE for the
+beta; make the release and document "PRAM doesn't save"; JTAG re-offered
+if wanted later (held in reserve — zero-probe rule stands, sim/bench
+remain the debug path).
+
+**DISARM INDICTED by triangulation** (desk evidence, this morning):
+- git: BI seed == BM seed BYTE-IDENTICAL (diff c54034f..1ee54b7 on
+  egret.pram is EMPTY). So BM's only deltas vs base-rate BI = the
+  slot-220 disarm RTL (7985134: `pram_save_req_o = 1'b0`) + a NEW FIT.
+- Tally pattern: every 0/N build carries the disarm (BJ colour 0/3, BM
+  MONO 0/2+N deterministic); every base-rate build lacks it (AZ 3/4,
+  BB 4/6, BI 3/4). BM failing at MONO breaks the colour-explains-all
+  reading and leaves disarm/fit as the live suspect.
+- Card state DEMOTED as suspect: live Settings persist files read from
+  the card and decoded — Memory=1 (10 MB default), startup input=Mouse
+  default, video=Trinitron; only A/X/R button dropdowns off-default
+  (val=0, matching NO current option — stale persists from yesterday's
+  16-option menu revisions; input-press path only, cannot touch an
+  untouched boot; may leave those buttons dead in keyboard mode until
+  reset in the menu). Image fsck was already CLEAN (rb-cli).
+- The tie-0 itself looks mechanically safe ⇒ if BI base-rates, suspect
+  the disarm's RE-FIT (placement) or an unmodeled consumer of
+  pram_save_req_o in apf_blockdev — investigate via bench before any
+  re-disarm; do NOT re-ship the disarm without its own tally.
+
+**ACTION TAKEN: card bitstream swapped BM→BI** (one variable; JSONs/
+Settings/assets untouched): D: bitstream.rbf_r 08C9A78D… (BM, proves the
+morning failures were true-BM bytes) → 3E274A9F… (= scratch/
+bisect_buildBI_monoseed.rbf_r, previously verified bit-exact vs its
+.sof). User tallying 4+ POWER-OFF boots now.
+- BI ≥3/4 → RELEASE = BI bytes: copy the staged rbf_r into dist, commit,
+  `bash scripts/release.sh` (zip), publish ONLY on the user's word.
+  readme.md ALREADY REWRITTEN for the mono-boot story (PRAM-doesn't-save
+  headline, ~1-in-4 boot-retry note, mouse-default + remap menu Controls
+  incl. PS/2 Set-2 code table verified vs adb_device.sv: 0x11=Command,
+  0x14=Control, Option is extended-only = not sliderable).
+- BI 0/N deterministic → bitstream exonerated → card-state round 2:
+  park Settings\danifunker.MacLC (one variable), then image content
+  (rb-cli get diff vs maclc-worn.hda / pristine swap — ASK first, live
+  image carries user saves).
+
+**Also done:** full .sof chain + exact-bitstream stages backed up to the
+card at D:\Backup\maclc-builds (72 files, 167 MB) — the retiring-machine
+gap is covered. PENDING USER (unchanged): the 4bpp question (was BI's
+second-session F-Line after a MANUAL Monitors 4bpp set, or a spontaneous
+4bpp boot?) — still decides the depth-work reading, ask when convenient.
+
 ## 0.05 ★★★ 08-15 EVENING: BOTH ISSUES CRACKED — READ THIS, THEN 0.1's history
 
 **ISSUE B (interact menu) RESOLVED — deep-envelope method.** Three surgical
