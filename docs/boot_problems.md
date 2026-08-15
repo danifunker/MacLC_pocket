@@ -911,7 +911,7 @@ hold caught before it could contaminate a capture).
 proof — see the 08-13 day-1 ★★★ above), the ISO CD-ROM ship (buildAB in
 dist), the C_IDLE one-hot ack, the qsf SEED-line mangling.
 
-## ★★★ 2026-08-16 — THE F-LINE REGRESSION HUNT: failure taxonomy, fit
+## ★★★ 2026-08-15 (late morning) — THE F-LINE REGRESSION HUNT: failure taxonomy, fit
 ## families, the image-wear cycle, and the rebuild ladder
 
 Everything below was established across 2026-08-15/16 (the BM→BN→AZ
@@ -1002,7 +1002,7 @@ the ladder.
 
 ### 5. The plan of record: the REBUILD LADDER (one variable per rung)
 
-User directive 2026-08-16: too many half-baked pieces; re-assemble the
+User directive 2026-08-15 (late morning): too many half-baked pieces; re-assemble the
 release from the last solid ground, one feature per build, a hardware
 tally (2-3 power-off boots, class-scored, video noted) gating each
 rung. The ladder doubles as the bug hunt — the rung that F-lines names

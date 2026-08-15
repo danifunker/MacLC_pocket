@@ -264,7 +264,7 @@ second-session F-Line after a MANUAL Monitors 4bpp set, or a spontaneous
 4bpp boot?) — still decides the depth-work reading, ask when convenient.
 
 **★★★ FINAL STATE OF THE HUNT + THE PLAN OF RECORD — see
-boot_problems.md ★★★ 2026-08-16 (the full write-up: failure taxonomy,
+boot_problems.md ★★★ 2026-08-15 (late morning) (the full write-up: failure taxonomy,
 eliminations, fit-family finding, image-wear cycle, ladder).** Short
 form: AZ-exact booted CLEAN in the exact environment BN F-lined in ⇒
 regression confirmed INSIDE the AZ→BN netlist era, fit-expressed
