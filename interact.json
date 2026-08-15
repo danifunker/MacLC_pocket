@@ -32,15 +32,6 @@
                 "mask": "0xFFFFFFFE"
             },
             {
-                "name": "Reset PRAM",
-                "id": 102,
-                "type": "action",
-                "enabled": true,
-                "address": "0xf0000008",
-                "value": 1,
-                "mask": "0xFFFFFFFE"
-            },
-            {
                 "name": "Interrupt (NMI)",
                 "id": 103,
                 "type": "action",
@@ -54,72 +45,72 @@
                 "id": 110,
                 "type": "list",
                 "enabled": true,
-                "address": "0xf0000018",
-                "defaultval": "0x05A",
+                "address": "0xF0000018",
+                "defaultval": 90,
                 "mask": "0xFFFFFE00",
                 "options": [
                     {
-                        "value": "0x05A",
+                        "value": "0x0000005A",
                         "name": "Return"
                     },
                     {
-                        "value": "0x029",
+                        "value": "0x00000029",
                         "name": "Space"
                     },
                     {
-                        "value": "0x015",
+                        "value": "0x00000015",
                         "name": "Q"
                     },
                     {
-                        "value": "0x012",
+                        "value": "0x00000012",
                         "name": "Shift"
                     },
                     {
-                        "value": "0x011",
+                        "value": "0x00000011",
                         "name": "Command"
                     },
                     {
-                        "value": "0x11F",
+                        "value": "0x0000011F",
                         "name": "Option"
                     },
                     {
-                        "value": "0x014",
+                        "value": "0x00000014",
                         "name": "Ctrl"
                     },
                     {
-                        "value": "0x076",
+                        "value": "0x00000076",
                         "name": "Esc"
                     },
                     {
-                        "value": "0x00D",
+                        "value": "0x0000000D",
                         "name": "Tab"
                     },
                     {
-                        "value": "0x01A",
+                        "value": "0x0000001A",
                         "name": "Z"
                     },
                     {
-                        "value": "0x022",
+                        "value": "0x00000022",
                         "name": "X"
                     },
                     {
-                        "value": "0x01C",
+                        "value": "0x0000001C",
                         "name": "A"
                     },
                     {
-                        "value": "0x01B",
+                        "value": "0x0000001B",
                         "name": "S"
                     },
                     {
-                        "value": "0x031",
+                        "value": "0x00000031",
                         "name": "N"
                     },
                     {
-                        "value": "0x016",
+                        "value": "0x00000016",
                         "name": "1/!"
                     },
                     {
-                        "value": "0x1FF",
+                        "value": "0x000001FF",
                         "name": "Custom (code below)"
                     }
                 ],
@@ -130,72 +121,72 @@
                 "id": 111,
                 "type": "list",
                 "enabled": true,
-                "address": "0xf000001c",
-                "defaultval": "0x029",
+                "address": "0xF000001C",
+                "defaultval": 41,
                 "mask": "0xFFFFFE00",
                 "options": [
                     {
-                        "value": "0x029",
+                        "value": "0x00000029",
                         "name": "Space"
                     },
                     {
-                        "value": "0x015",
+                        "value": "0x00000015",
                         "name": "Q"
                     },
                     {
-                        "value": "0x05A",
+                        "value": "0x0000005A",
                         "name": "Return"
                     },
                     {
-                        "value": "0x012",
+                        "value": "0x00000012",
                         "name": "Shift"
                     },
                     {
-                        "value": "0x011",
+                        "value": "0x00000011",
                         "name": "Command"
                     },
                     {
-                        "value": "0x11F",
+                        "value": "0x0000011F",
                         "name": "Option"
                     },
                     {
-                        "value": "0x014",
+                        "value": "0x00000014",
                         "name": "Ctrl"
                     },
                     {
-                        "value": "0x076",
+                        "value": "0x00000076",
                         "name": "Esc"
                     },
                     {
-                        "value": "0x00D",
+                        "value": "0x0000000D",
                         "name": "Tab"
                     },
                     {
-                        "value": "0x01A",
+                        "value": "0x0000001A",
                         "name": "Z"
                     },
                     {
-                        "value": "0x022",
+                        "value": "0x00000022",
                         "name": "X"
                     },
                     {
-                        "value": "0x01C",
+                        "value": "0x0000001C",
                         "name": "A"
                     },
                     {
-                        "value": "0x01B",
+                        "value": "0x0000001B",
                         "name": "S"
                     },
                     {
-                        "value": "0x031",
+                        "value": "0x00000031",
                         "name": "N"
                     },
                     {
-                        "value": "0x016",
+                        "value": "0x00000016",
                         "name": "1/!"
                     },
                     {
-                        "value": "0x1FF",
+                        "value": "0x000001FF",
                         "name": "Custom (code below)"
                     }
                 ],
@@ -206,72 +197,72 @@
                 "id": 112,
                 "type": "list",
                 "enabled": true,
-                "address": "0xf0000020",
-                "defaultval": "0x012",
+                "address": "0xF0000020",
+                "defaultval": 18,
                 "mask": "0xFFFFFE00",
                 "options": [
                     {
-                        "value": "0x012",
+                        "value": "0x00000012",
                         "name": "Shift"
                     },
                     {
-                        "value": "0x029",
+                        "value": "0x00000029",
                         "name": "Space"
                     },
                     {
-                        "value": "0x015",
+                        "value": "0x00000015",
                         "name": "Q"
                     },
                     {
-                        "value": "0x05A",
+                        "value": "0x0000005A",
                         "name": "Return"
                     },
                     {
-                        "value": "0x011",
+                        "value": "0x00000011",
                         "name": "Command"
                     },
                     {
-                        "value": "0x11F",
+                        "value": "0x0000011F",
                         "name": "Option"
                     },
                     {
-                        "value": "0x014",
+                        "value": "0x00000014",
                         "name": "Ctrl"
                     },
                     {
-                        "value": "0x076",
+                        "value": "0x00000076",
                         "name": "Esc"
                     },
                     {
-                        "value": "0x00D",
+                        "value": "0x0000000D",
                         "name": "Tab"
                     },
                     {
-                        "value": "0x01A",
+                        "value": "0x0000001A",
                         "name": "Z"
                     },
                     {
-                        "value": "0x022",
+                        "value": "0x00000022",
                         "name": "X"
                     },
                     {
-                        "value": "0x01C",
+                        "value": "0x0000001C",
                         "name": "A"
                     },
                     {
-                        "value": "0x01B",
+                        "value": "0x0000001B",
                         "name": "S"
                     },
                     {
-                        "value": "0x031",
+                        "value": "0x00000031",
                         "name": "N"
                     },
                     {
-                        "value": "0x016",
+                        "value": "0x00000016",
                         "name": "1/!"
                     },
                     {
-                        "value": "0x1FF",
+                        "value": "0x000001FF",
                         "name": "Custom (code below)"
                     }
                 ],
@@ -282,72 +273,72 @@
                 "id": 113,
                 "type": "list",
                 "enabled": true,
-                "address": "0xf0000024",
-                "defaultval": "0x031",
+                "address": "0xF0000024",
+                "defaultval": 49,
                 "mask": "0xFFFFFE00",
                 "options": [
                     {
-                        "value": "0x031",
+                        "value": "0x00000031",
                         "name": "N"
                     },
                     {
-                        "value": "0x029",
+                        "value": "0x00000029",
                         "name": "Space"
                     },
                     {
-                        "value": "0x015",
+                        "value": "0x00000015",
                         "name": "Q"
                     },
                     {
-                        "value": "0x05A",
+                        "value": "0x0000005A",
                         "name": "Return"
                     },
                     {
-                        "value": "0x012",
+                        "value": "0x00000012",
                         "name": "Shift"
                     },
                     {
-                        "value": "0x011",
+                        "value": "0x00000011",
                         "name": "Command"
                     },
                     {
-                        "value": "0x11F",
+                        "value": "0x0000011F",
                         "name": "Option"
                     },
                     {
-                        "value": "0x014",
+                        "value": "0x00000014",
                         "name": "Ctrl"
                     },
                     {
-                        "value": "0x076",
+                        "value": "0x00000076",
                         "name": "Esc"
                     },
                     {
-                        "value": "0x00D",
+                        "value": "0x0000000D",
                         "name": "Tab"
                     },
                     {
-                        "value": "0x01A",
+                        "value": "0x0000001A",
                         "name": "Z"
                     },
                     {
-                        "value": "0x022",
+                        "value": "0x00000022",
                         "name": "X"
                     },
                     {
-                        "value": "0x01C",
+                        "value": "0x0000001C",
                         "name": "A"
                     },
                     {
-                        "value": "0x01B",
+                        "value": "0x0000001B",
                         "name": "S"
                     },
                     {
-                        "value": "0x016",
+                        "value": "0x00000016",
                         "name": "1/!"
                     },
                     {
-                        "value": "0x1FF",
+                        "value": "0x000001FF",
                         "name": "Custom (code below)"
                     }
                 ],
@@ -358,72 +349,72 @@
                 "id": 114,
                 "type": "list",
                 "enabled": true,
-                "address": "0xf0000028",
-                "defaultval": "0x076",
+                "address": "0xF0000028",
+                "defaultval": 118,
                 "mask": "0xFFFFFE00",
                 "options": [
                     {
-                        "value": "0x076",
+                        "value": "0x00000076",
                         "name": "Esc"
                     },
                     {
-                        "value": "0x029",
+                        "value": "0x00000029",
                         "name": "Space"
                     },
                     {
-                        "value": "0x015",
+                        "value": "0x00000015",
                         "name": "Q"
                     },
                     {
-                        "value": "0x05A",
+                        "value": "0x0000005A",
                         "name": "Return"
                     },
                     {
-                        "value": "0x012",
+                        "value": "0x00000012",
                         "name": "Shift"
                     },
                     {
-                        "value": "0x011",
+                        "value": "0x00000011",
                         "name": "Command"
                     },
                     {
-                        "value": "0x11F",
+                        "value": "0x0000011F",
                         "name": "Option"
                     },
                     {
-                        "value": "0x014",
+                        "value": "0x00000014",
                         "name": "Ctrl"
                     },
                     {
-                        "value": "0x00D",
+                        "value": "0x0000000D",
                         "name": "Tab"
                     },
                     {
-                        "value": "0x01A",
+                        "value": "0x0000001A",
                         "name": "Z"
                     },
                     {
-                        "value": "0x022",
+                        "value": "0x00000022",
                         "name": "X"
                     },
                     {
-                        "value": "0x01C",
+                        "value": "0x0000001C",
                         "name": "A"
                     },
                     {
-                        "value": "0x01B",
+                        "value": "0x0000001B",
                         "name": "S"
                     },
                     {
-                        "value": "0x031",
+                        "value": "0x00000031",
                         "name": "N"
                     },
                     {
-                        "value": "0x016",
+                        "value": "0x00000016",
                         "name": "1/!"
                     },
                     {
-                        "value": "0x1FF",
+                        "value": "0x000001FF",
                         "name": "Custom (code below)"
                     }
                 ],
@@ -434,72 +425,72 @@
                 "id": 115,
                 "type": "list",
                 "enabled": true,
-                "address": "0xf000002c",
-                "defaultval": "0x015",
+                "address": "0xF000002C",
+                "defaultval": 21,
                 "mask": "0xFFFFFE00",
                 "options": [
                     {
-                        "value": "0x015",
+                        "value": "0x00000015",
                         "name": "Q"
                     },
                     {
-                        "value": "0x029",
+                        "value": "0x00000029",
                         "name": "Space"
                     },
                     {
-                        "value": "0x05A",
+                        "value": "0x0000005A",
                         "name": "Return"
                     },
                     {
-                        "value": "0x012",
+                        "value": "0x00000012",
                         "name": "Shift"
                     },
                     {
-                        "value": "0x011",
+                        "value": "0x00000011",
                         "name": "Command"
                     },
                     {
-                        "value": "0x11F",
+                        "value": "0x0000011F",
                         "name": "Option"
                     },
                     {
-                        "value": "0x014",
+                        "value": "0x00000014",
                         "name": "Ctrl"
                     },
                     {
-                        "value": "0x076",
+                        "value": "0x00000076",
                         "name": "Esc"
                     },
                     {
-                        "value": "0x00D",
+                        "value": "0x0000000D",
                         "name": "Tab"
                     },
                     {
-                        "value": "0x01A",
+                        "value": "0x0000001A",
                         "name": "Z"
                     },
                     {
-                        "value": "0x022",
+                        "value": "0x00000022",
                         "name": "X"
                     },
                     {
-                        "value": "0x01C",
+                        "value": "0x0000001C",
                         "name": "A"
                     },
                     {
-                        "value": "0x01B",
+                        "value": "0x0000001B",
                         "name": "S"
                     },
                     {
-                        "value": "0x031",
+                        "value": "0x00000031",
                         "name": "N"
                     },
                     {
-                        "value": "0x016",
+                        "value": "0x00000016",
                         "name": "1/!"
                     },
                     {
-                        "value": "0x1FF",
+                        "value": "0x000001FF",
                         "name": "Custom (code below)"
                     }
                 ],
@@ -510,72 +501,72 @@
                 "id": 116,
                 "type": "list",
                 "enabled": true,
-                "address": "0xf0000030",
-                "defaultval": "0x011",
+                "address": "0xF0000030",
+                "defaultval": 17,
                 "mask": "0xFFFFFE00",
                 "options": [
                     {
-                        "value": "0x011",
+                        "value": "0x00000011",
                         "name": "Command"
                     },
                     {
-                        "value": "0x029",
+                        "value": "0x00000029",
                         "name": "Space"
                     },
                     {
-                        "value": "0x015",
+                        "value": "0x00000015",
                         "name": "Q"
                     },
                     {
-                        "value": "0x05A",
+                        "value": "0x0000005A",
                         "name": "Return"
                     },
                     {
-                        "value": "0x012",
+                        "value": "0x00000012",
                         "name": "Shift"
                     },
                     {
-                        "value": "0x11F",
+                        "value": "0x0000011F",
                         "name": "Option"
                     },
                     {
-                        "value": "0x014",
+                        "value": "0x00000014",
                         "name": "Ctrl"
                     },
                     {
-                        "value": "0x076",
+                        "value": "0x00000076",
                         "name": "Esc"
                     },
                     {
-                        "value": "0x00D",
+                        "value": "0x0000000D",
                         "name": "Tab"
                     },
                     {
-                        "value": "0x01A",
+                        "value": "0x0000001A",
                         "name": "Z"
                     },
                     {
-                        "value": "0x022",
+                        "value": "0x00000022",
                         "name": "X"
                     },
                     {
-                        "value": "0x01C",
+                        "value": "0x0000001C",
                         "name": "A"
                     },
                     {
-                        "value": "0x01B",
+                        "value": "0x0000001B",
                         "name": "S"
                     },
                     {
-                        "value": "0x031",
+                        "value": "0x00000031",
                         "name": "N"
                     },
                     {
-                        "value": "0x016",
+                        "value": "0x00000016",
                         "name": "1/!"
                     },
                     {
-                        "value": "0x1FF",
+                        "value": "0x000001FF",
                         "name": "Custom (code below)"
                     }
                 ],
@@ -586,16 +577,16 @@
                 "id": 120,
                 "type": "slider_u32",
                 "enabled": true,
-                "address": "0xf0000034",
+                "address": "0xF0000034",
                 "persist": true,
                 "defaultval": 0,
                 "mask": "0xFFFFFE00",
                 "graphical": {
                     "signed": false,
                     "min": 0,
-                    "max": "0x1FF",
+                    "max": 511,
                     "adjust_small": 1,
-                    "adjust_large": "0x10"
+                    "adjust_large": 16
                 }
             },
             {
@@ -603,16 +594,16 @@
                 "id": 121,
                 "type": "slider_u32",
                 "enabled": true,
-                "address": "0xf0000038",
+                "address": "0xF0000038",
                 "persist": true,
                 "defaultval": 0,
                 "mask": "0xFFFFFE00",
                 "graphical": {
                     "signed": false,
                     "min": 0,
-                    "max": "0x1FF",
+                    "max": 511,
                     "adjust_small": 1,
-                    "adjust_large": "0x10"
+                    "adjust_large": 16
                 }
             },
             {
@@ -620,16 +611,16 @@
                 "id": 122,
                 "type": "slider_u32",
                 "enabled": true,
-                "address": "0xf000003c",
+                "address": "0xF000003C",
                 "persist": true,
                 "defaultval": 0,
                 "mask": "0xFFFFFE00",
                 "graphical": {
                     "signed": false,
                     "min": 0,
-                    "max": "0x1FF",
+                    "max": 511,
                     "adjust_small": 1,
-                    "adjust_large": "0x10"
+                    "adjust_large": 16
                 }
             },
             {
@@ -637,33 +628,16 @@
                 "id": 123,
                 "type": "slider_u32",
                 "enabled": true,
-                "address": "0xf0000040",
+                "address": "0xF0000040",
                 "persist": true,
                 "defaultval": 0,
                 "mask": "0xFFFFFE00",
                 "graphical": {
                     "signed": false,
                     "min": 0,
-                    "max": "0x1FF",
+                    "max": 511,
                     "adjust_small": 1,
-                    "adjust_large": "0x10"
-                }
-            },
-            {
-                "name": "L custom code",
-                "id": 124,
-                "type": "slider_u32",
-                "enabled": true,
-                "address": "0xf0000044",
-                "persist": true,
-                "defaultval": 0,
-                "mask": "0xFFFFFE00",
-                "graphical": {
-                    "signed": false,
-                    "min": 0,
-                    "max": "0x1FF",
-                    "adjust_small": 1,
-                    "adjust_large": "0x10"
+                    "adjust_large": 16
                 }
             },
             {
@@ -671,33 +645,33 @@
                 "id": 125,
                 "type": "slider_u32",
                 "enabled": true,
-                "address": "0xf0000048",
+                "address": "0xF0000048",
                 "persist": true,
                 "defaultval": 0,
                 "mask": "0xFFFFFE00",
                 "graphical": {
                     "signed": false,
                     "min": 0,
-                    "max": "0x1FF",
+                    "max": 511,
                     "adjust_small": 1,
-                    "adjust_large": "0x10"
+                    "adjust_large": 16
                 }
             },
             {
-                "name": "Start custom code",
-                "id": 126,
+                "name": "L custom code",
+                "id": 124,
                 "type": "slider_u32",
                 "enabled": true,
-                "address": "0xf000004c",
+                "address": "0xF0000044",
                 "persist": true,
                 "defaultval": 0,
                 "mask": "0xFFFFFE00",
                 "graphical": {
                     "signed": false,
                     "min": 0,
-                    "max": "0x1FF",
+                    "max": 511,
                     "adjust_small": 1,
-                    "adjust_large": "0x10"
+                    "adjust_large": 16
                 }
             }
         ]
