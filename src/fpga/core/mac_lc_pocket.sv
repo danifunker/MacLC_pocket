@@ -343,7 +343,20 @@ module mac_lc_pocket
 			end
 		end
 	end
-	assign pram_save_req_o = pram_save_req_r;
+	// ★ buildBJ (2026-08-15): SAVE-REQ DISARMED — landmine #2 made live.
+	// PRAM persistence has never worked on the Pocket (data.json has no slot
+	// 220), so every save_req fired a doomed flow at a NONEXISTENT slot and
+	// wedged apf_blockdev's shared sequencer — the same sequencer that serves
+	// SCSI — for ~450 ms when the OS error-responds, and indefinitely when it
+	// doesn't. The trigger is any guest-side PRAM write burst + 0.5 s quiet,
+	// and on every boot whose seeded video record fails the ROM's machine
+	// match, the ROM ITSELF rewrites the record = a guaranteed burst whose
+	// quiet-timer expiry lands around Finder startup — the exact phase of the
+	// long-standing ~25-30% Finder-bar boot hang (buildAZ/BB measured
+	// 2026-08-15). Dirty-tracking logic left intact for the future
+	// persistence feature; re-arm by restoring pram_save_req_r here AND
+	// adding slot 220 back to data.json.
+	assign pram_save_req_o = 1'b0;   // was: pram_save_req_r
 
 	reg  iiop_mfreeze = 1'b0;   // buildAV: REGISTERED in the IIOP block (the
 	                           // buildAU combinational forward-wire did not
