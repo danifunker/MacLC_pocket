@@ -71,13 +71,24 @@
 set dram_chip_clk "ic|mp1|mf_pllbase_inst|altera_pll_i|general[1].gpll~PLL_OUTPUT_COUNTER|divclk"
 set dram_cont_clk "ic|mp1|mf_pllbase_inst|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk"
 
+# ★ 2026-08-16: clk_mem (general[0]), the dram phase clock (general[1]) and
+# clk_sys (general[2]) are SAME-PLL, integer-ratio, edge-aligned clocks, and
+# pocket_sdram hands CPU data between mem and sys with no synchronizers BY
+# DESIGN (the "65 MHz must stay exactly 8x" law). The old grouping declared
+# them ASYNCHRONOUS, which told STA to ignore every path between the CPU and
+# the SDRAM controller — the entire interface was untimed, and its behavior
+# was decided by placement luck. That is the fit-lottery mechanism behind
+# months of per-build corruption (F-lines / icon garbage / video corruption /
+# hangs — all read-path damage). They now share one group so STA times the
+# interface; clk_pix (general[3]) stays async (its crossings are metastable-
+# hardened and false-pathed in maclc_constraints.sdc).
 set_clock_groups -asynchronous \
  -group { bridge_spiclk } \
  -group { clk_74a } \
  -group { clk_74b } \
  -group { ic|mp1|mf_pllbase_inst|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk \
-          ic|mp1|mf_pllbase_inst|altera_pll_i|general[1].gpll~PLL_OUTPUT_COUNTER|divclk } \
- -group { ic|mp1|mf_pllbase_inst|altera_pll_i|general[2].gpll~PLL_OUTPUT_COUNTER|divclk } \
+          ic|mp1|mf_pllbase_inst|altera_pll_i|general[1].gpll~PLL_OUTPUT_COUNTER|divclk \
+          ic|mp1|mf_pllbase_inst|altera_pll_i|general[2].gpll~PLL_OUTPUT_COUNTER|divclk } \
  -group { ic|mp1|mf_pllbase_inst|altera_pll_i|general[3].gpll~PLL_OUTPUT_COUNTER|divclk }
 
 # Read path: data launched by the SDRAM relative to the clock it sees.
