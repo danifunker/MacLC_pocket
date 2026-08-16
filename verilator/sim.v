@@ -670,7 +670,8 @@ module emu
 		.sample_l(asc_sample_l),
 		.sample_r(asc_sample_r),
 		.sample_tick(asc_sample_tick),
-		.irq(asc_irq)
+		.irq(asc_irq),
+		.dbg_asc()
 	);
 
 	// Historic 16.25 MHz pixel cadence: the sim keeps scanout on clk_sys with a

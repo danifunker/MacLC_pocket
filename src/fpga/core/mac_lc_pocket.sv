@@ -719,6 +719,8 @@ module mac_lc_pocket
 	localparam SDMA_TIMEOUT = 23'd8125000;  // ~250 ms @ 32.5 MHz (MiSTer parity)
 	reg [22:0] sdma_stall_ctr = 23'd0;
 	reg        sdma_berr      = 1'b0;
+	reg [22:0] sdma_stall_max = 23'd0;   // anchor feed (psdt), MiSTer form
+	reg [7:0]  sdma_berr_cnt  = 8'd0;    // anchor feed (psdt), MiSTer form
 	always @(posedge clk_sys) begin
 		if (!_cpuReset) begin
 			sdma_stall_ctr <= 0;
@@ -728,14 +730,38 @@ module mac_lc_pocket
 			sdma_berr      <= 0;
 		end else if (selectSCSIDMA && !scsiDREQ && !sdma_berr) begin
 			sdma_stall_ctr <= sdma_stall_ctr + 23'd1;
+			if (sdma_stall_ctr > sdma_stall_max) sdma_stall_max <= sdma_stall_ctr;
 			if (sdma_stall_ctr == SDMA_TIMEOUT) begin
 				sdma_berr <= 1'b1;   // held until AS deasserts
+				if (sdma_berr_cnt != 8'hFF) sdma_berr_cnt <= sdma_berr_cnt + 8'd1;
 `ifdef SIMULATION
 				$display("SDMA_BERR_TIMEOUT: addr=%h @%0t", cpuAddr, $time);
 `endif
 			end
 		end else if (selectSCSIDMA)
 			sdma_stall_ctr <= 0;
+	end
+
+	// --- Active pseudo-DMA stall snapshot (ported from MiSTer with the
+	// anchor completion, 2026-08-17) — latches the live SCSI engine state
+	// the FIRST time a DACK access is DREQ-starved past SDMA_SNAP_THRESH.
+	// These registers exist to be ANCHORED (psds/psd2/psd3): they load the
+	// ncr5380/scsi.v witness cones so the pseudo-DMA datapath synthesis
+	// cannot fold into the marginal forms the anchor law exists to prevent.
+	localparam SDMA_SNAP_THRESH = 23'd520000;   // ~16 ms @ 32.5 MHz (tunable)
+	reg        sdma_snapped    = 1'b0;
+	reg [15:0] sdma_snap_scsi2 = 16'd0;
+	reg [31:0] sdma_snap_ncr   = 32'd0;
+	reg [31:0] sdma_snap_wr    = 32'd0;
+	always @(posedge clk_sys) begin
+		if (!_cpuReset)
+			sdma_snapped <= 1'b0;
+		else if (!sdma_snapped && sdma_stall_ctr == SDMA_SNAP_THRESH) begin
+			sdma_snap_scsi2 <= dbg_scsi2_w;   // phase0/1, io_rd, io_wr, io_ack
+			sdma_snap_ncr   <= dbg_ncr_w;     // dreq/dma_en/dma_ack/holdoff/mr_dma/pmatch/tcr
+			sdma_snap_wr    <= dbg_wr_w;      // data_cnt/phase/io_busy/sd_buff_sel/data_complete
+			sdma_snapped    <= 1'b1;
+		end
 	end
 
 	wire cpu_berr = (fc7_berr && !_cpuAS) || sdma_berr;
@@ -1233,7 +1259,8 @@ module mac_lc_pocket
 		.sample_l(asc_sample_l),
 		.sample_r(asc_sample_r),
 		.sample_tick(asc_sample_tick),
-		.irq(asc_irq)
+		.irq(asc_irq),
+		.dbg_asc(dbg_asc_w)
 	);
 
 	// Historic 16.25 MHz pixel cadence: the sim keeps scanout on clk_sys with a
@@ -1392,25 +1419,40 @@ module mac_lc_pocket
 	// Adaptations from the reference block, each deliberate:
 	// - anchor_cda0-4/cdur: NOT ported — cd_audio.sv is cut from this fork;
 	//   those cones do not exist.
-	// - anchor_psdt/psds/psd2/psd3: the MiSTer top's SDMA snapshot capture
-	//   deck was not imported; psdt is re-formed here from this top's own
-	//   always-on SDMA watchdog (sdma_berr + sdma_stall_ctr), which loads
-	//   the equivalent stall/berr cone. The snap words have no equivalent.
+	// - anchor_psdt/psds/psd2/psd3: COMPLETED 2026-08-17 (v1.0.0 field
+	//   report: F-line rate returned with the trio absent — a partial
+	//   anchor half-works, exactly as MiSTer's 08-03 note warns). The SDMA
+	//   snapshot deck is now ported (watchdog stall_max/berr_cnt + the
+	//   threshold snapshot above cpu_berr), psdt carries the reference's
+	//   exact word form, and psds/psd2/psd3 pin the ncr5380/scsi.v
+	//   pseudo-DMA witness cones (dbg_ncr/dbg_wr — ports existed unwired).
 	// - anchor_ring0/1, anchor_wrfb, anchor_flp0/1/2: ported as-is (the
 	//   witness outputs survived in shared RTL, marked "anchor feed").
 	// Same law as upstream: never remove, `ifdef, or XOR-fold these
 	// registers — a reduction lets synthesis restructure the pinned cones.
-	// ~224 FFs is the entire cost.
+	// ~352 FFs is the entire cost.
+	// - anchor_asc0: Pocket-only extension (2026-08-17, v1.0.0 field report:
+	//   alert sound starts and never stops, machine otherwise fine, MiSTer
+	//   clean on byte-identical asc.sv). Pins the ASC FIFO-A status cone
+	//   (count/pointer comparators, FIFOSTAT flags, irq) — the same
+	//   unpinned-comparator class as the SCSI cones, one subsystem over.
 	wire [31:0] dbg_wrfb_w, dbg_ring0_w, dbg_ring1_w;
+	wire [31:0] dbg_ncr_w, dbg_wr_w, dbg_asc_w;
 	wire [15:0] dbg_flp_byte_cnt_w, dbg_flp_miss_cnt_w, dbg_flp_step_cnt_w;
 	wire [6:0]  dbg_flp_track_w;
 	wire        dbg_flp_side_w, dbg_flp_byte_stb_w;
 	wire [7:0]  dbg_iwm_latch_w, dbg_flp_raw_w;
-	(* preserve, noprune *) reg [31:0] anchor_psdt, anchor_wrfb,
+	(* preserve, noprune *) reg [31:0] anchor_psdt, anchor_psds, anchor_psd2,
+	                                   anchor_psd3, anchor_wrfb,
 	                                   anchor_ring0, anchor_ring1,
-	                                   anchor_flp0, anchor_flp1, anchor_flp2;
+	                                   anchor_flp0, anchor_flp1, anchor_flp2,
+	                                   anchor_asc0;
 	always @(posedge clk_sys) begin
-		anchor_psdt  <= {8'd0, sdma_berr, sdma_stall_ctr};
+		anchor_psdt  <= {sdma_berr_cnt, 1'b0, sdma_stall_max};
+		anchor_psds  <= {15'd0, sdma_snapped, sdma_snap_scsi2};
+		anchor_psd2  <= sdma_snap_ncr;
+		anchor_psd3  <= sdma_snap_wr;
+		anchor_asc0  <= dbg_asc_w;
 		anchor_wrfb  <= dbg_wrfb_w;
 		anchor_ring0 <= dbg_ring0_w;
 		anchor_ring1 <= dbg_ring1_w;
@@ -1452,9 +1494,9 @@ module mac_lc_pocket
 		.dbg_scsi2(dbg_scsi2_w),
 		.dbg_scsi4(dbg_scsi4_w),
 		.dbg_scsi5(dbg_scsi5_w),
-		.dbg_ncr(),
+		.dbg_ncr(dbg_ncr_w),
 		.dbg_ncr2(),
-		.dbg_wr(),
+		.dbg_wr(dbg_wr_w),
 		// Marginality-anchor feeds (2026-08-16) — NOT probes; see the
 		// always-on anchor block above this instantiation.
 		.dbg_wrfb(dbg_wrfb_w),

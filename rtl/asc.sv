@@ -38,7 +38,17 @@ module asc(
 	output reg               sample_tick,
 
 	// Interrupts
-	output reg    irq      // Active HIGH (PseudoVIA inverts it)
+	output reg    irq,     // Active HIGH (PseudoVIA inverts it)
+
+	// Always-on marginality-anchor witness (2026-08-17): the FIFO-A status
+	// cone — count/pointer comparators, the live FIFOSTAT flags, irq. The
+	// v1.0.0 field report (alert sound starts and never stops; fine on
+	// MiSTer; RTL byte-identical) matches the unpinned-comparator-cone
+	// class: if this cone synthesizes marginal, "buffer done" never reports
+	// and the Sound Manager channel never closes. Passive feed; the top
+	// anchors it (mac_lc_pocket.sv anchor block, anchor_asc0). Same law as
+	// the other anchor feeds: never remove or `ifdef.
+	output wire [31:0] dbg_asc
 );
 
 `ifdef USE_ASC_AUDIO
@@ -135,6 +145,11 @@ module asc(
 	wire [7:0] fifo_stat = {6'b0,
 	                        (count_a == 0) || (count_a >= 11'd1023),
 	                        (count_a < 512)};
+
+	// Anchor witness (see port comment): every load-bearing term of the
+	// FIFO-A status cone in one word.
+	assign dbg_asc = { irq, fifo_pend_v, fifo_stat[1:0], count_a,
+	                   rptr_a, wptr_a[9:3] };
 
 	integer i;
 	always @(posedge clk) begin
