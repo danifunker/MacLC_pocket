@@ -1130,3 +1130,55 @@ the killer commit-family.
 - Boot-tally protocol: full power-off between boots; score every boot
   hang-vs-F-line-vs-clean + video note. Respect user fatigue: 2-3
   boots per rung, not 6.
+
+## ★★★ 2026-08-16c — ROOT CAUSE, NUMERIC: THE CPU↔SDRAM INTERFACE WAS
+## NEVER TIMED. The "fit lottery" was an untimed clock crossing.
+
+`src/fpga/core/core_constraints.sdc` declared the PLL outputs as
+asynchronous clock groups with clk_mem (general[0], 65 MHz) and clk_sys
+(general[2], 32.5 MHz) in SEPARATE groups. Those are same-PLL,
+integer-ratio, edge-aligned clocks, and `pocket_sdram` passes CPU
+data/control between them with no synchronizers BY DESIGN (the "65 must
+stay exactly 8×" law). `set_clock_groups -asynchronous` told STA to
+ignore every path between them: the entire CPU↔SDRAM interface was
+untimed, unreported, and placed by luck, build after build. The
+`check_sdram_paths` gate never saw it — it times the DQ pins against
+the DRAM clock inside one group.
+
+**Numeric witness** (2026-08-16, buildBV fit — the deterministic-
+corruption family — re-timed with the groups merged): sys→mem worst
+slack **−5.561 ns** (TG68K regfile write-enable cone →
+`pocket_sdram|sd_dout_r`); mem→sys +3.05 ns. A path that misses by 5 ns
+at these frequencies corrupts on silicon, deterministically, while STA
+reports the build clean.
+
+This single defect subsumes the whole phenomenology:
+- Per-fit behavior classes (AZ/BS lucky, BM/BN/BU/BV unlucky) — which
+  direction/paths stretched decided the expression: read-side long =
+  F-lines / icon garbage; write-side long = corrupted writes = video
+  corruption AND plausibly the on-disk image wear (the guest writing
+  garbage through a broken path during normal operation).
+- STA-green-yet-broken builds; placement-dependent, netlist-alignment-
+  dependent, boot-deterministic behavior.
+- The anchors "working" (BS) and "failing" (BU): they never addressed
+  the mechanism — they just reshuffled placement. The anchor law is
+  now DEMOTED to bystander pending re-evaluation; keep the registers
+  (harmless) until BW-class builds prove stable, then retire them in a
+  controlled experiment if desired.
+- The bad-fit sessions also POISONED SETTINGS: Analogue OS persisted
+  garbage interact readbacks (all button dropdowns = 0) from a
+  corrupted-bridge-path session; park Settings on every bad-fit
+  recovery from now on.
+
+FIX (committed with this entry): general[0], general[1] (dram phase)
+and general[2] share one timed group; clk_pix stays async (its
+crossings are metastable-hardened + false-pathed). The standard
+"Slack : -" = 0 gate now genuinely covers the interface. buildBW =
+first build with the interface timed. Its hardware verdict is the
+final word on this theory.
+
+Falsifiable prediction, stated before BW's hardware test: builds that
+close timing under the merged groups boot consistently (up to the
+serving-timing hang class, which is a separate, milder story); the
+per-fit corruption classes (deterministic F-line / icon / video
+corruption) do not recur on timing-clean builds.
