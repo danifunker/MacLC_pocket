@@ -1364,6 +1364,62 @@ module mac_lc_pocket
 
 	// SCSI debug buses (wired to the SCS1/SCS2 probes; see the ISSP deck)
 	wire [15:0] dbg_scsi_w, dbg_scsi2_w, dbg_scsi4_w, dbg_scsi5_w;
+	// ── Always-on marginality anchor (ported from MiSTer 2026-08-16) ────────
+	// MiSTer learned this the hard way (MacLC.sv.reference:1238-1296, dates
+	// 2026-07-29/08-03/08-04): probes-OFF fits of this shared RTL
+	// deterministically corrupt the SCSI read path on hardware — the exact
+	// signature is FINDER COLOUR-ICON GARBAGE escalating to error-11/F-Line
+	// bombs — while fits whose probe fanout loads these same cones pass. STA
+	// is met either way and does not predict it. The recurring fingerprint is
+	// RING-STALE serving (a ring slot served at/past the rd_hps_blk fill
+	// boundary); the pinned nets are the stall comparators, fill counter and
+	// look-ahead adder of each disk target (scsi.v dbg_ring — comparator nets
+	// shared with io_busy by construction), the write-path first-beat word,
+	// and the floppy fetch cone (SDRAM slot -> dskReadDataLatch -> encoder),
+	// which failed the same way on MiSTer with the SCSI anchor alone present.
+	//
+	// THE POCKET PORT NEVER CARRIED THIS ANCHOR (severed at import with the
+	// probe decks it fed). 2026-08-16 evidence it is needed here too: the
+	// rung-3 ladder netlists (buildBQ seed 2, buildBR seed 4 — two different
+	// placements) both garble Finder colour icons IDENTICALLY on a
+	// SHA-verified pristine disk from the first desktop draw, while the
+	// rung-2 netlist (buildBP) is clean on the same disk in the same session
+	// — netlist-alignment-dependent, placement-independent, exactly the
+	// MiSTer-documented class. The historic Pocket fit-family behaviour
+	// (hang-family vs deterministic-F-line-family fits, BM/BN era) fits the
+	// same mechanism: mis-read icon data is drawn, mis-read code F-lines.
+	//
+	// Adaptations from the reference block, each deliberate:
+	// - anchor_cda0-4/cdur: NOT ported — cd_audio.sv is cut from this fork;
+	//   those cones do not exist.
+	// - anchor_psdt/psds/psd2/psd3: the MiSTer top's SDMA snapshot capture
+	//   deck was not imported; psdt is re-formed here from this top's own
+	//   always-on SDMA watchdog (sdma_berr + sdma_stall_ctr), which loads
+	//   the equivalent stall/berr cone. The snap words have no equivalent.
+	// - anchor_ring0/1, anchor_wrfb, anchor_flp0/1/2: ported as-is (the
+	//   witness outputs survived in shared RTL, marked "anchor feed").
+	// Same law as upstream: never remove, `ifdef, or XOR-fold these
+	// registers — a reduction lets synthesis restructure the pinned cones.
+	// ~224 FFs is the entire cost.
+	wire [31:0] dbg_wrfb_w, dbg_ring0_w, dbg_ring1_w;
+	wire [15:0] dbg_flp_byte_cnt_w, dbg_flp_miss_cnt_w, dbg_flp_step_cnt_w;
+	wire [6:0]  dbg_flp_track_w;
+	wire        dbg_flp_side_w, dbg_flp_byte_stb_w;
+	wire [7:0]  dbg_iwm_latch_w, dbg_flp_raw_w;
+	(* preserve, noprune *) reg [31:0] anchor_psdt, anchor_wrfb,
+	                                   anchor_ring0, anchor_ring1,
+	                                   anchor_flp0, anchor_flp1, anchor_flp2;
+	always @(posedge clk_sys) begin
+		anchor_psdt  <= {8'd0, sdma_berr, sdma_stall_ctr};
+		anchor_wrfb  <= dbg_wrfb_w;
+		anchor_ring0 <= dbg_ring0_w;
+		anchor_ring1 <= dbg_ring1_w;
+		anchor_flp0  <= {dbg_flp_byte_cnt_w, dbg_flp_miss_cnt_w};
+		anchor_flp1  <= {dbg_flp_step_cnt_w, dbg_iwm_latch_w, dbg_flp_raw_w};
+		anchor_flp2  <= {dbg_flp_byte_stb_w, dbg_flp_side_w, dbg_flp_track_w,
+		                 1'b0, dskReadAddrInt};
+	end
+
 	dataController_top #(SCSI_DEVS) dc0
 	(
 		.clk32(clk_sys),
@@ -1399,6 +1455,11 @@ module mac_lc_pocket
 		.dbg_ncr(),
 		.dbg_ncr2(),
 		.dbg_wr(),
+		// Marginality-anchor feeds (2026-08-16) — NOT probes; see the
+		// always-on anchor block above this instantiation.
+		.dbg_wrfb(dbg_wrfb_w),
+		.dbg_ring0(dbg_ring0_w),
+		.dbg_ring1(dbg_ring1_w),
 		.selectSCC(selectSCC),
 		.selectIWM(selectIWM),
 		.selectVIA(selectVIA),
@@ -1498,16 +1559,18 @@ module mac_lc_pocket
 		.pram_wr_stb(pram_wr_stb_w),
 		.pram_ready(pram_ready_r),
 
-		// PFLP floppy diagnostics — FPGA-only (feed ISSP probes in MacLC.sv);
-		// explicitly unconnected here
-		.dbg_flp_byte_cnt(),
-		.dbg_flp_miss_cnt(),
+		// PFLP floppy diagnostics — on MiSTer these fed ISSP probes; here
+		// they feed the always-on marginality anchor (2026-08-16). Only
+		// dbg_flp_disk_data stays unconnected (not an anchor input).
+		.dbg_flp_byte_cnt(dbg_flp_byte_cnt_w),
+		.dbg_flp_miss_cnt(dbg_flp_miss_cnt_w),
 		.dbg_flp_disk_data(),
-		.dbg_flp_track(),
-		.dbg_flp_side(),
-		.dbg_flp_step_cnt(),
-		.dbg_iwm_latch(),
-		.dbg_flp_byte_stb(),
+		.dbg_flp_track(dbg_flp_track_w),
+		.dbg_flp_side(dbg_flp_side_w),
+		.dbg_flp_step_cnt(dbg_flp_step_cnt_w),
+		.dbg_iwm_latch(dbg_iwm_latch_w),
+		.dbg_flp_byte_stb(dbg_flp_byte_stb_w),
+		.dbg_flp_raw(dbg_flp_raw_w),
 
 		// ---- Egret / VIA shift-register taps, for SignalTap --------------
 		// These were left unconnected at import.
