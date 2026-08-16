@@ -1,365 +1,345 @@
 {
- "interact": {
-  "magic": "APF_VER_1",
-  "variables": [
-   {
-    "name": "Memory",
-    "id": 100,
-    "type": "list",
-    "enabled": true,
-    "address": "0xf0000000",
-    "defaultval": 1,
-    "mask": "0xFFFFFFFE",
-    "options": [
-     {
-      "value": "0x00000000",
-      "name": "2 MB"
-     },
-     {
-      "value": "0x00000001",
-      "name": "10 MB"
-     }
-    ],
-    "persist": true
-   },
-   {
-    "name": "Reset & Apply",
-    "id": 101,
-    "type": "action",
-    "enabled": true,
-    "address": "0xf0000004",
-    "value": 1,
-    "mask": "0xFFFFFFFE"
-   },
-   {
-    "name": "Startup input mode",
-    "id": 130,
-    "type": "list",
-    "enabled": true,
-    "address": "0xf0000050",
-    "defaultval": 1,
-    "mask": "0xFFFFFFFE",
-    "options": [
-     {
-      "value": "0x00000000",
-      "name": "Keyboard"
-     },
-     {
-      "value": "0x00000001",
-      "name": "Mouse"
-     }
-    ],
-    "persist": true
-   },
-   {
-    "name": "Button A key",
-    "id": 110,
-    "type": "list",
-    "enabled": true,
-    "address": "0xf0000018",
-    "defaultval": "0x5a",
-    "mask": "0xFFFFFE00",
-    "options": [
-     {
-      "value": "0x5a",
-      "name": "Return"
-     },
-     {
-      "value": "0x29",
-      "name": "Space"
-     },
-     {
-      "value": "0x12",
-      "name": "Shift"
-     },
-     {
-      "value": "0x11",
-      "name": "Command"
-     },
-     {
-      "value": "0x1ff",
-      "name": "Custom"
-     }
-    ],
-    "persist": true
-   },
-   {
-    "name": "Button B key",
-    "id": 111,
-    "type": "list",
-    "enabled": true,
-    "address": "0xf000001c",
-    "defaultval": "0x29",
-    "mask": "0xFFFFFE00",
-    "options": [
-     {
-      "value": "0x29",
-      "name": "Space"
-     },
-     {
-      "value": "0x5a",
-      "name": "Return"
-     },
-     {
-      "value": "0x12",
-      "name": "Shift"
-     },
-     {
-      "value": "0x11",
-      "name": "Command"
-     },
-     {
-      "value": "0x1ff",
-      "name": "Custom"
-     }
-    ],
-    "persist": true
-   },
-   {
-    "name": "Button X key",
-    "id": 112,
-    "type": "list",
-    "enabled": true,
-    "address": "0xf0000020",
-    "defaultval": "0x12",
-    "mask": "0xFFFFFE00",
-    "options": [
-     {
-      "value": "0x12",
-      "name": "Shift"
-     },
-     {
-      "value": "0x5a",
-      "name": "Return"
-     },
-     {
-      "value": "0x29",
-      "name": "Space"
-     },
-     {
-      "value": "0x11",
-      "name": "Command"
-     },
-     {
-      "value": "0x1ff",
-      "name": "Custom"
-     }
-    ],
-    "persist": true
-   },
-   {
-    "name": "Button Y key",
-    "id": 113,
-    "type": "list",
-    "enabled": true,
-    "address": "0xf0000024",
-    "defaultval": "0x31",
-    "mask": "0xFFFFFE00",
-    "options": [
-     {
-      "value": "0x31",
-      "name": "N"
-     },
-     {
-      "value": "0x5a",
-      "name": "Return"
-     },
-     {
-      "value": "0x29",
-      "name": "Space"
-     },
-     {
-      "value": "0x12",
-      "name": "Shift"
-     },
-     {
-      "value": "0x1ff",
-      "name": "Custom"
-     }
-    ],
-    "persist": true
-   },
-   {
-    "name": "Button L key",
-    "id": 114,
-    "type": "list",
-    "enabled": true,
-    "address": "0xf0000028",
-    "defaultval": "0x76",
-    "mask": "0xFFFFFE00",
-    "options": [
-     {
-      "value": "0x76",
-      "name": "Esc"
-     },
-     {
-      "value": "0x5a",
-      "name": "Return"
-     },
-     {
-      "value": "0x29",
-      "name": "Space"
-     },
-     {
-      "value": "0x12",
-      "name": "Shift"
-     },
-     {
-      "value": "0x1ff",
-      "name": "Custom"
-     }
-    ],
-    "persist": true
-   },
-   {
-    "name": "Button R key",
-    "id": 115,
-    "type": "list",
-    "enabled": true,
-    "address": "0xf000002c",
-    "defaultval": "0x15",
-    "mask": "0xFFFFFE00",
-    "options": [
-     {
-      "value": "0x15",
-      "name": "Q"
-     },
-     {
-      "value": "0x5a",
-      "name": "Return"
-     },
-     {
-      "value": "0x29",
-      "name": "Space"
-     },
-     {
-      "value": "0x12",
-      "name": "Shift"
-     },
-     {
-      "value": "0x1ff",
-      "name": "Custom"
-     }
-    ],
-    "persist": true
-   },
-   {
-    "name": "Button Start key",
-    "id": 116,
-    "type": "list",
-    "enabled": true,
-    "address": "0xf0000030",
-    "defaultval": "0x11",
-    "mask": "0xFFFFFE00",
-    "options": [
-     {
-      "value": "0x11",
-      "name": "Command"
-     },
-     {
-      "value": "0x5a",
-      "name": "Return"
-     },
-     {
-      "value": "0x29",
-      "name": "Space"
-     },
-     {
-      "value": "0x12",
-      "name": "Shift"
-     },
-     {
-      "value": "0x1ff",
-      "name": "Custom"
-     }
-    ],
-    "persist": true
-   },
-   {
-    "name": "A custom code",
-    "id": 120,
-    "type": "slider_u32",
-    "enabled": true,
-    "defaultval": "0",
-    "persist": true,
-    "address": "0xf0000034",
-    "mask": "0xFFFFFE00",
-    "graphical": {
-     "signed": false,
-     "min": 0,
-     "max": 388,
-     "adjust_small": 1,
-     "adjust_large": 10
-    }
-   },
-   {
-    "name": "B custom code",
-    "id": 121,
-    "type": "slider_u32",
-    "enabled": true,
-    "defaultval": "0",
-    "persist": true,
-    "address": "0xf0000038",
-    "mask": "0xFFFFFE00",
-    "graphical": {
-     "signed": false,
-     "min": 0,
-     "max": 388,
-     "adjust_small": 1,
-     "adjust_large": 10
-    }
-   },
-   {
-    "name": "X custom code",
-    "id": 122,
-    "type": "slider_u32",
-    "enabled": true,
-    "defaultval": "0",
-    "persist": true,
-    "address": "0xf000003c",
-    "mask": "0xFFFFFE00",
-    "graphical": {
-     "signed": false,
-     "min": 0,
-     "max": 388,
-     "adjust_small": 1,
-     "adjust_large": 10
-    }
-   },
-   {
-    "name": "L custom code",
-    "id": 124,
-    "type": "slider_u32",
-    "enabled": true,
-    "defaultval": "0",
-    "persist": true,
-    "address": "0xf0000044",
-    "mask": "0xFFFFFE00",
-    "graphical": {
-     "signed": false,
-     "min": 0,
-     "max": 388,
-     "adjust_small": 1,
-     "adjust_large": 10
-    }
-   },
-   {
-    "name": "R custom code",
-    "id": 125,
-    "type": "slider_u32",
-    "enabled": true,
-    "defaultval": "0",
-    "persist": true,
-    "address": "0xf0000048",
-    "mask": "0xFFFFFE00",
-    "graphical": {
-     "signed": false,
-     "min": 0,
-     "max": 388,
-     "adjust_small": 1,
-     "adjust_large": 10
-    }
-   }
-  ]
- }
+  "interact": {
+    "magic": "APF_VER_1",
+    "variables": [
+      {
+        "name": "Memory",
+        "id": 100,
+        "type": "list",
+        "enabled": true,
+        "address": "0xf0000000",
+        "defaultval": 1,
+        "mask": "0xFFFFFFFE",
+        "options": [
+          {
+            "value": "0x00000000",
+            "name": "2 MB"
+          },
+          {
+            "value": "0x00000001",
+            "name": "10 MB"
+          }
+        ],
+        "persist": true
+      },
+      {
+        "name": "Reset & Apply",
+        "id": 101,
+        "type": "action",
+        "enabled": true,
+        "address": "0xf0000004",
+        "value": 1,
+        "mask": "0xFFFFFFFE"
+      },
+      {
+        "name": "Button A key",
+        "id": 110,
+        "type": "list",
+        "enabled": true,
+        "address": "0xf0000018",
+        "defaultval": "0x5a",
+        "mask": "0xFFFFFE00",
+        "options": [
+          {
+            "value": "0x5a",
+            "name": "Return"
+          },
+          {
+            "value": "0x29",
+            "name": "Space"
+          },
+          {
+            "value": "0x12",
+            "name": "Shift"
+          },
+          {
+            "value": "0x11",
+            "name": "Command"
+          },
+          {
+            "value": "0x1ff",
+            "name": "Custom"
+          }
+        ],
+        "persist": true
+      },
+      {
+        "name": "Button B key",
+        "id": 111,
+        "type": "list",
+        "enabled": true,
+        "address": "0xf000001c",
+        "defaultval": "0x29",
+        "mask": "0xFFFFFE00",
+        "options": [
+          {
+            "value": "0x29",
+            "name": "Space"
+          },
+          {
+            "value": "0x5a",
+            "name": "Return"
+          },
+          {
+            "value": "0x12",
+            "name": "Shift"
+          },
+          {
+            "value": "0x11",
+            "name": "Command"
+          },
+          {
+            "value": "0x1ff",
+            "name": "Custom"
+          }
+        ],
+        "persist": true
+      },
+      {
+        "name": "Button X key",
+        "id": 112,
+        "type": "list",
+        "enabled": true,
+        "address": "0xf0000020",
+        "defaultval": "0x12",
+        "mask": "0xFFFFFE00",
+        "options": [
+          {
+            "value": "0x12",
+            "name": "Shift"
+          },
+          {
+            "value": "0x5a",
+            "name": "Return"
+          },
+          {
+            "value": "0x29",
+            "name": "Space"
+          },
+          {
+            "value": "0x11",
+            "name": "Command"
+          },
+          {
+            "value": "0x1ff",
+            "name": "Custom"
+          }
+        ],
+        "persist": true
+      },
+      {
+        "name": "Button Y key",
+        "id": 113,
+        "type": "list",
+        "enabled": true,
+        "address": "0xf0000024",
+        "defaultval": "0x31",
+        "mask": "0xFFFFFE00",
+        "options": [
+          {
+            "value": "0x31",
+            "name": "N"
+          },
+          {
+            "value": "0x5a",
+            "name": "Return"
+          },
+          {
+            "value": "0x29",
+            "name": "Space"
+          },
+          {
+            "value": "0x12",
+            "name": "Shift"
+          },
+          {
+            "value": "0x1ff",
+            "name": "Custom"
+          }
+        ],
+        "persist": true
+      },
+      {
+        "name": "Button L key",
+        "id": 114,
+        "type": "list",
+        "enabled": true,
+        "address": "0xf0000028",
+        "defaultval": "0x76",
+        "mask": "0xFFFFFE00",
+        "options": [
+          {
+            "value": "0x76",
+            "name": "Esc"
+          },
+          {
+            "value": "0x5a",
+            "name": "Return"
+          },
+          {
+            "value": "0x29",
+            "name": "Space"
+          },
+          {
+            "value": "0x12",
+            "name": "Shift"
+          },
+          {
+            "value": "0x1ff",
+            "name": "Custom"
+          }
+        ],
+        "persist": true
+      },
+      {
+        "name": "Button R key",
+        "id": 115,
+        "type": "list",
+        "enabled": true,
+        "address": "0xf000002c",
+        "defaultval": "0x15",
+        "mask": "0xFFFFFE00",
+        "options": [
+          {
+            "value": "0x15",
+            "name": "Q"
+          },
+          {
+            "value": "0x5a",
+            "name": "Return"
+          },
+          {
+            "value": "0x29",
+            "name": "Space"
+          },
+          {
+            "value": "0x12",
+            "name": "Shift"
+          },
+          {
+            "value": "0x1ff",
+            "name": "Custom"
+          }
+        ],
+        "persist": true
+      },
+      {
+        "name": "Button Start key",
+        "id": 116,
+        "type": "list",
+        "enabled": true,
+        "address": "0xf0000030",
+        "defaultval": "0x11",
+        "mask": "0xFFFFFE00",
+        "options": [
+          {
+            "value": "0x11",
+            "name": "Command"
+          },
+          {
+            "value": "0x5a",
+            "name": "Return"
+          },
+          {
+            "value": "0x29",
+            "name": "Space"
+          },
+          {
+            "value": "0x12",
+            "name": "Shift"
+          },
+          {
+            "value": "0x1ff",
+            "name": "Custom"
+          }
+        ],
+        "persist": true
+      },
+      {
+        "name": "A custom code",
+        "id": 120,
+        "type": "slider_u32",
+        "enabled": true,
+        "defaultval": "0",
+        "persist": true,
+        "address": "0xf0000034",
+        "mask": "0xFFFFFE00",
+        "graphical": {
+          "signed": false,
+          "min": 0,
+          "max": 388,
+          "adjust_small": 1,
+          "adjust_large": 10
+        }
+      },
+      {
+        "name": "B custom code",
+        "id": 121,
+        "type": "slider_u32",
+        "enabled": true,
+        "defaultval": "0",
+        "persist": true,
+        "address": "0xf0000038",
+        "mask": "0xFFFFFE00",
+        "graphical": {
+          "signed": false,
+          "min": 0,
+          "max": 388,
+          "adjust_small": 1,
+          "adjust_large": 10
+        }
+      },
+      {
+        "name": "X custom code",
+        "id": 122,
+        "type": "slider_u32",
+        "enabled": true,
+        "defaultval": "0",
+        "persist": true,
+        "address": "0xf000003c",
+        "mask": "0xFFFFFE00",
+        "graphical": {
+          "signed": false,
+          "min": 0,
+          "max": 388,
+          "adjust_small": 1,
+          "adjust_large": 10
+        }
+      },
+      {
+        "name": "L custom code",
+        "id": 124,
+        "type": "slider_u32",
+        "enabled": true,
+        "defaultval": "0",
+        "persist": true,
+        "address": "0xf0000044",
+        "mask": "0xFFFFFE00",
+        "graphical": {
+          "signed": false,
+          "min": 0,
+          "max": 388,
+          "adjust_small": 1,
+          "adjust_large": 10
+        }
+      },
+      {
+        "name": "R custom code",
+        "id": 125,
+        "type": "slider_u32",
+        "enabled": true,
+        "defaultval": "0",
+        "persist": true,
+        "address": "0xf0000048",
+        "mask": "0xFFFFFE00",
+        "graphical": {
+          "signed": false,
+          "min": 0,
+          "max": 388,
+          "adjust_small": 1,
+          "adjust_large": 10
+        }
+      }
+    ]
+  }
 }

@@ -50,8 +50,8 @@ writing can damage its filesystem.
 
 ## Controls
 
-Two input modes, toggled with **Select**. Mouse mode is the power-on
-default (configurable in the core menu).
+Two input modes, toggled with **Select**. The core powers on in keyboard
+mode; press Select once for mouse mode.
 
 - **Mouse mode**: D-Pad moves the cursor, **A** clicks. Only the D-Pad and
   A are re-purposed — every other button still types its key, so Command
