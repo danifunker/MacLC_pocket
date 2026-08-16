@@ -10,12 +10,23 @@ fit families, image wear, the ladder). Ladder branch:
 |---|---|---|---|
 | 1 | BO | BB + colour graft seed (1a4844c pram) | **PASS** — colour desktop from seed, floppy OK |
 | 2 | BP | + BF mapper RTL (9f26625) | **PASS** — 6.0.8/7.1/7.5.5 boot; defaults+dropdown+custom(`a`,`` ` ``) typed |
-| 3 | BQ | + startup-input-mode (from bcf0302) + arrow codes in menu (max 388) | feature untallied; fit rolled GLITCHY (screen corruption) |
-| 3b | BR | same netlist, seed 4 re-roll | COMPILING at handoff |
+| 3 | BQ | + startup-input-mode (from bcf0302) + arrow codes in menu (max 388) | feature PASS (mouse default works); netlist GARBLES icons |
+| 3b | BR | same netlist, seed 4 re-roll | GARBLES icons IDENTICALLY ⇒ synthesis-alignment class, not placement |
+| 3c | BS | + **the ported MiSTer marginality anchor** (seed 2, pure A/B vs BQ) | COMPILING at handoff — see boot_problems ★★★ 08-16b |
 
-- Card: main core = BQ; `MacLCprev` second core = BP fallback (duplicate
-  750 MB image at Assets/maclcprev/ — suspect in a card-wide instability
-  bump; free-space check pending next card load).
+- ★★★ 08-16b THE HEADLINE: the icon garbling led to the discovery that
+  the Pocket port SEVERED MiSTer's always-on marginality anchor at
+  import (MacLC.sv.reference:1238-96 documents our exact symptom:
+  "Finder colour-icon noise → error-11/F-Line", ring-stale serving,
+  STA-blind). Anchor now ported (buildBS). If BS is clean this likely
+  retires the whole fit-family F-line class; icon-gate every future
+  netlist in the Finder. Full write-up: boot_problems.md ★★★ 08-16b.
+- Card: main core = BR + reseed-3 pristine maclc.hda (damaged image
+  parked as maclc-icons-garbled-20260816.hda — user saves inside;
+  fsck error InvalidCnidRange = write-back damage from the garbling
+  era); `MacLCprev` second core = BP fallback. ★ CORRECTION: both
+  cores share the ONE maclc.hda (the earlier "duplicate image at
+  Assets/maclcprev/" note was wrong; free space fine at 25.4 GB).
 - ★ WAIT-AT-MENU CONFIRMED HELPING (user): power on → ~60 s at Pocket
   menu → launch = fewer boot failures. Standing tally protocol + readme
   note. (Pocket OS card-indexing contention.)

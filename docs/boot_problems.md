@@ -966,6 +966,50 @@ buildBR. The video-glitch expression is placement-lottery even on
 good-era netlists; F-lines so far are not. Expect to re-roll any
 glitchy fit rather than debug the feature that triggered the
 recompile.
+
+### ★★★ 2026-08-16b — SOLVED (mechanism found): THE MISSING MARGINALITY
+### ANCHOR. Read this before ANY future stability work.
+
+The "screen corruption" was pinned down and it rewrote the story:
+
+1. User described it precisely: **Finder icons garbled and wrong-sized,
+   cascading** — not scanout artifacts. That is disk-READ corruption
+   being drawn (and then written back by the Finder = the cascade, and
+   = the fsck damage that "followed the builds").
+2. Conviction sequence, all on hardware, one session: identical
+   garbling on BQ (seed 2) AND BR (seed 4) = placement-independent;
+   survives the startup-mode feature DORMANT (keyboard persisted) =
+   not the feature's function; still there on a SHA-verified pristine
+   reseed = not the disk; **BP clean on the SAME pristine disk in the
+   same session** (both cores share one maclc.hda — the "prev core has
+   its own copy" note in earlier RESUME revisions was WRONG) = the
+   rung-3 NETLIST convicted. Identical expression across two
+   placements = decided at SYNTHESIS ALIGNMENT, not placement.
+3. Then the archaeology: **MiSTer already had this exact bug and this
+   exact fix.** MacLC.sv.reference:1238-1296 — the "always-on
+   marginality anchor": probes-OFF fits deterministically corrupt the
+   SCSI read path (verbatim symptom list: "Finder colour-icon noise →
+   error-11 / F-Line bombs"), STA green, fingerprint = RING-STALE
+   serving; cure = (* preserve, noprune *) sink registers on the ring
+   comparator/fill/look-ahead cones + write-path + floppy fetch cone.
+   **The Pocket port severed the anchor at import** (it rode with the
+   probe decks it fed; the witness nets themselves survived in shared
+   RTL, still marked "anchor feed"). Every Pocket netlist since import
+   has re-rolled dice MiSTer had already confiscated.
+4. This unifies the fit-family mystery: the same latent read-path race
+   lands differently per netlist — mis-read icon RESOURCES get drawn
+   (BQ/BR), mis-read CODE gets executed (the BM/BN deterministic
+   F-lines, and plausibly Mystery B's boot-blocks signature), clean
+   alignments show nothing (AZ, BB, BO, BP). The hang base-rate
+   remains a separate open (serving-timing class).
+
+FIX: buildBS = rung-3 netlist + the ported anchor (anchor_ring0/1,
+anchor_wrfb, anchor_flp0/1/2 verbatim; anchor_psdt re-formed from the
+Pocket top's SDMA watchdog; cd_audio words not portable — module cut),
+seed 2 = pure A/B against BQ. The anchor is PERMANENT structural RTL
+from now on — same law as upstream: never remove, ifdef, or fold it.
+If BS's icons are clean, gate future netlists in the Finder on colour
+icons (MiSTer's icon_gate discipline) before trusting them.
 Prime netlist suspects (entered exactly at the good/bad boundary): the
 **mapper clock-domain crossing** (BF; re-fit "CDC slimmed + 128 sync
 flops" in BG) and the **launch scrub** (BG/BH). The last builds known
