@@ -2,6 +2,12 @@
 
 ## -4. ★★★ v1.0.1 SHIPPED (2026-08-17, morning after the all-nighter)
 
+**★ READ docs/BUILD_INSTABILITY.md FIRST** — the plain-language
+postmortem of the 08-15→08-17 build arc: verdict table, eliminations
+with evidence, the surviving theory and its honest status, and the
+ordered plan (BY = BP+alert fix; the BX constraint experiment).
+
+
 https://github.com/danifunker/MacLC_pocket/releases/tag/v1.0.1
 Ships **buildBP's exact bytes** (6b2ee6ec…, sof archived + on-card
 backup; RTL = main-history commit f85739a) — the only build that
