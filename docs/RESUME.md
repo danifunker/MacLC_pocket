@@ -1,3 +1,34 @@
+# RESUME — MacLC Pocket (2026-08-17: ★★★ v1.0.1 RELEASED — BP bytes)
+
+## -4. ★★★ v1.0.1 SHIPPED (2026-08-17, morning after the all-nighter)
+
+https://github.com/danifunker/MacLC_pocket/releases/tag/v1.0.1
+Ships **buildBP's exact bytes** (6b2ee6ec…, sof archived + on-card
+backup; RTL = main-history commit f85739a) — the only build that
+survived the night's clean-state gauntlet (user: "works 100% fine",
+re-verified same morning in BOTH card slots). Packaging: 14-var menu
+(id-130 trimmed), corrected info.txt (package.sh now propagates it),
+keyboard-mode power-on documented, honest notes incl. the ALERT
+WORKAROUND (alert volume 0 = menu-bar flash — the stuck-beep bug is
+in these bytes; its fix exists but only ever rode condemned builds).
+- ★ DETERMINISM TEST PASSED: BP's exact tree recompiled = rbf differs
+  from the archived rbf by 327 bytes in 2 clusters = header + the
+  build_id timestamp ROM (PRE_FLOW build_id_gen.tcl). Toolchain
+  deterministic, BUILD MACHINE EXONERATED. The fit-marginality story
+  stands alone, with the -3 section's localization (Finder-load-only,
+  ?-screen and Welcome clean) painting the target: constrain/harden
+  the VRAM-shadow RMW cone, prove on condemned netlist BX.
+- Post-release queue, in order: (1) re-land the ASC alert fix alone on
+  the BP base (buildBY candidate = f85739a + dbg_asc/anchor_asc0 ONLY),
+  (2) the VRAM-shadow constraint experiment on BX, (3) mouse-default
+  as sampled-at-reset, (4) the standing opens (GCR, hangs, PRAM,
+  restart). ONE variable per build; the one-boot damn-test + both-slot
+  A/A symmetry are the cheap gates now.
+- Card at close: BOTH slots = BP bytes (main = v1.0.1 set, prev =
+  original); user's fresh minimal disk as maclc.hda; games-image
+  pristine copies parked on card; Settings clean.
+
+(previous header below)
 # RESUME — MacLC Pocket (2026-08-16: ★★★ v1.0.0 RELEASED)
 
 ## -3. ★★★ 08-16 EVENING STATE: BW falsified the SDC theory; BX in flight
