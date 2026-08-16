@@ -1008,8 +1008,12 @@ anchor_wrfb, anchor_flp0/1/2 verbatim; anchor_psdt re-formed from the
 Pocket top's SDMA watchdog; cd_audio words not portable — module cut),
 seed 2 = pure A/B against BQ. The anchor is PERMANENT structural RTL
 from now on — same law as upstream: never remove, ifdef, or fold it.
-If BS's icons are clean, gate future netlists in the Finder on colour
-icons (MiSTer's icon_gate discipline) before trusting them.
+
+★★★ VALIDATED ON HARDWARE 2026-08-16: buildBS icons CLEAN at BQ's own
+seed — the anchor alone cured the garbling. Mechanism confirmed.
+**Released same day as v1.0.0** (buildBS, branch ladder/release-rebuild
+fc7efe9). Standing law for every future netlist: the anchor stays, and
+the fit is not trusted until the Finder shows clean colour icons.
 Prime netlist suspects (entered exactly at the good/bad boundary): the
 **mapper clock-domain crossing** (BF; re-fit "CDC slimmed + 128 sync
 flops" in BG) and the **launch scrub** (BG/BH). The last builds known

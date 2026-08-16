@@ -1,6 +1,28 @@
-# RESUME — MacLC Pocket (2026-08-16: REBUILD LADDER — release assembly)
+# RESUME — MacLC Pocket (2026-08-16: ★★★ v1.0.0 RELEASED)
 
-## -1. ★★★ CURRENT STATE (2026-08-16, supersedes everything below)
+## -2. ★★★ RELEASED: v1.0.0 (2026-08-16)
+
+https://github.com/danifunker/MacLC_pocket/releases/tag/v1.0.0
+Ships **buildBS** (sha1 43576712…, sof scratch/builds/2026-08-16-
+buildBS-anchor.sof): the ladder tree (BB base + colour graft + BF
+mapper + startup-input-mode + arrow menu) **+ the ported MiSTer
+marginality anchor** — HW-validated same-day: icons clean, mouse
+default at power-on, 6.0.8/7.1/7.5.5 boot. Branch of record:
+`ladder/release-rebuild` (fc7efe9). ANCHOR VALIDATION = the icon
+garbling (BQ/BR) cured by the anchor alone at BQ's own seed; the
+boot_problems ★★★ 08-16b mechanism is CONFIRMED ON HARDWARE. The
+anchor is permanent structural RTL — never remove/ifdef/fold; icon-
+gate every future netlist in the Finder.
+Post-1.0 queue: GCR floppy (the headline open defect), hang base-rate
+(serving-timing class; wait-at-menu mitigates), PRAM persistence
+(slot 220 + save bench), Special→Restart, merge/reconcile
+new-start-point with the ladder branch. ★ User's card still carries
+the pre-1.0 core.json (0.9.0 label) — sync the full 1.0.0 dist on the
+next card touch. ★ THIS MACHINE RETIRES — scratch/builds/ (A→BS sof
+chain) is copied to the card at D:\Backup\maclc-builds\ (through BS);
+verify before decommissioning.
+
+## -1. ★★★ LADDER STATE (2026-08-16, history of the release rebuild)
 
 Full story: docs/boot_problems.md ★★★ 2026-08-16 section (taxonomy,
 fit families, image wear, the ladder). Ladder branch:
