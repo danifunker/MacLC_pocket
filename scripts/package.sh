@@ -101,6 +101,21 @@ open(dst, 'wb').write(data.translate(table))
 print("bit-reversed %d bytes" % len(data))
 PY
 
+# info.txt: root is the source of truth; card wants CRLF + final newline.
+# (2026-08-16: the dist copy was a static leftover nothing regenerated — the
+# import-era "SCSI not implemented" text shipped in v1.0.0 because of it.)
+"$PY_BIN" - << 'PYEOF'
+s = open('info.txt', 'rb').read().replace(b'
+', b'
+')
+if not s.endswith(b'
+'): s += b'
+'
+open('dist/Cores/danifunker.MacLC/info.txt', 'wb').write(s.replace(b'
+', b'
+'))
+PYEOF
+
 echo "packaged $(du -h "$DEST/bitstream.rbf_r" | cut -f1) bitstream into $DEST"
 echo
 echo "Copy to the SD card root:"
