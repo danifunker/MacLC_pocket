@@ -14,18 +14,18 @@ Egret (HC05) system controller with its original firmware, SWIM, SCSI, and ADB.
 > black-and-white every launch, and you set 256 colours in Monitors after
 > boot.
 
-## Status (2026-08-14, beta)
+## Status (2026-08-16, beta)
 
 ### Working (verified on hardware)
 
-- **Boots to the desktop** from a cold start with no menu work:
+- **Boots to a 256-colour desktop** from a cold start with no menu work:
   `boot0.rom` and `maclc.hda` auto-load at launch, the machine POSTs, and
-  System comes up. The desktop starts black-and-white — open **Monitors**
-  and pick 256 Colors; the setting lasts until power-off (see Known
-  issues). Games like Prince of Persia run.
+  System comes up already in colour (a factory PRAM ships in the core).
+  System 6.0.8, 7.1 and 7.5.5 all boot. Games like Prince of Persia run.
 - **Controller setup menu** (new in this beta) — "Startup input mode"
-  (mouse mode is now the power-on default) and per-button key assignment
-  (dropdown choices plus raw-keycode sliders) in the core's Interact menu
+  (mouse mode is the power-on default) and per-button key assignment
+  (dropdown choices plus raw-keycode sliders, arrow keys included) in the
+  core's Interact menu
 - **SCSI hard disks** — two slots, reads and writes, hot-mount via the menu
 - **CD-ROM (ISO)** — read-only data discs on SCSI ID 3, `maclc.iso`
   auto-mounts
@@ -49,12 +49,14 @@ Egret (HC05) system controller with its original firmware, SWIM, SCSI, and ADB.
   four fails during startup (an error dialog, a bomb, or a hang at the
   extensions bar). Power the Pocket fully off and boot again — a full
   power cycle is more reliable than relaunching the core — and once the
-  Finder is up, the machine is stable for hours of use.
-- **PRAM does not save** — in-guest settings (colour depth, volume, mouse
-  speed, clock) reset every launch, and the machine always starts
-  black-and-white. Set 256 Colors in Monitors after boot (it sticks until
-  power-off), or drop a depth-switching utility into the Startup Items
-  folder of your boot disk to make it automatic.
+  Finder is up, the machine is stable for hours of use. **Tip:** after
+  inserting or rewriting the SD card, give the Pocket a minute at its
+  menu before launching the core; launching immediately while the OS is
+  still indexing the card makes the first boot noticeably less reliable.
+- **PRAM does not save** — in-guest control-panel changes (volume, mouse
+  speed, alternate colour depths, clock) reset every launch. The core
+  ships a factory PRAM with 256 colours preset, so the desktop is colour
+  by default; anything you change on top of it lasts until power-off.
 - **Rare video glitching** — a transient artifact inherited from the
   MiSTer lineage, under investigation.
 - **Floppies are read-only** (by design for now — the drive reports
@@ -159,7 +161,7 @@ Two modes, toggled with **Select**:
 The classic Mac mouse has one button, so nothing is missing from a single
 click button.
 
-**Remapping** (new in this beta, lightly tested): the core's Interact menu
+**Remapping** (new in this beta): the core's Interact menu
 has "Startup input mode" (which mode is active at power-on) and a
 "Button ... key" dropdown per button. Picking **Custom** in a dropdown
 makes that button send the raw keycode from its "... custom code" slider,
