@@ -63,30 +63,84 @@ Default assignments: **A** Return · **B** Space · **X** Shift · **Y** N ·
 **L** Esc · **R** Q · **Start** Command.
 
 Every button is remappable in the core's Interact menu. Pick a key from
-the button's dropdown, or pick **Custom** and enter a raw keycode in the
-button's slider (Y and Start are dropdown-only; the menu is at its
-16-entry limit). Sliders take PS/2 Scan Code Set 2 make codes **in
-decimal**; arrows are extended codes, entered as 256 + code:
+the button's dropdown, or pick **Custom** and enter a code from the
+tables below in the button's slider (Y and Start are dropdown-only; the
+menu is at its 16-entry limit).
 
-| Key | Hex | Dec | Key | Hex | Dec | Key | Hex | Dec |
-|-----|-----|-----|-----|-----|-----|-----|-----|-----|
-| A | 0x1C | 28 | N | 0x31 | 49 | 1 | 0x16 | 22 |
-| B | 0x32 | 50 | O | 0x44 | 68 | 2 | 0x1E | 30 |
-| C | 0x21 | 33 | P | 0x4D | 77 | 3 | 0x26 | 38 |
-| D | 0x23 | 35 | Q | 0x15 | 21 | 4 | 0x25 | 37 |
-| E | 0x24 | 36 | R | 0x2D | 45 | 5 | 0x2E | 46 |
-| F | 0x2B | 43 | S | 0x1B | 27 | 6 | 0x36 | 54 |
-| G | 0x34 | 52 | T | 0x2C | 44 | 7 | 0x3D | 61 |
-| H | 0x33 | 51 | U | 0x3C | 60 | 8 | 0x3E | 62 |
-| I | 0x43 | 67 | V | 0x2A | 42 | 9 | 0x46 | 70 |
-| J | 0x3B | 59 | W | 0x1D | 29 | 0 | 0x45 | 69 |
-| K | 0x42 | 66 | X | 0x22 | 34 | Up | — | 373 |
-| L | 0x4B | 75 | Y | 0x35 | 53 | Down | — | 370 |
-| M | 0x3A | 58 | Z | 0x1A | 26 | Left | — | 363 |
-| | | | | | | Right | — | 372 |
+Codes select key *positions* on a US keyboard; what a position types is
+decided by the keyboard layout of the System software you boot, so on a
+non-US System the symbol keys may differ from the US characters shown
+here. The extra `<>` key of ISO (international) keyboards has no code.
 
-Space 0x29 · Return 0x5A · Esc 0x76 · Tab 0x0D · Backspace 0x66 ·
-Shift 0x12 · Command 0x11 · Control 0x14 · period 0x49 · comma 0x41
+**Letters** (Shift types the capital):
+
+| Key | Code | Key | Code | Key | Code | Key | Code |
+|-----|------|-----|------|-----|------|-----|------|
+| a | 28 | h | 51 | o | 68 | v | 42 |
+| b | 50 | i | 67 | p | 77 | w | 29 |
+| c | 33 | j | 59 | q | 21 | x | 34 |
+| d | 35 | k | 66 | r | 45 | y | 53 |
+| e | 36 | l | 75 | s | 27 | z | 26 |
+| f | 43 | m | 58 | t | 44 | | |
+| g | 52 | n | 49 | u | 60 | | |
+
+**Numbers and symbols** (US layout):
+
+| Key | Shift | Code | Key | Shift | Code |
+|-----|-------|------|-----|-------|------|
+| 1 | ! | 22 | 0 | ) | 69 |
+| 2 | @ | 30 | ` | ~ | 14 |
+| 3 | # | 38 | - | _ | 78 |
+| 4 | $ | 37 | = | + | 85 |
+| 5 | % | 46 | [ | { | 84 |
+| 6 | ^ | 54 | ] | } | 91 |
+| 7 | & | 61 | \ | \| | 93 |
+| 8 | * | 62 | ; | : | 76 |
+| 9 | ( | 70 | ' | " | 82 |
+| , | < | 65 | . | > | 73 |
+| / | ? | 74 | | | |
+
+**Whitespace, editing, modifiers:**
+
+| Key | Code | Key | Code |
+|-----|------|-----|------|
+| Space | 41 | Shift (left) | 18 |
+| Return | 90 | Shift (right) | 89 |
+| Tab | 13 | Control | 20 |
+| Backspace (Mac Delete) | 102 | Command | 17 |
+| Esc | 118 | Command (right Alt) | 273 |
+| Caps Lock | 88 | Option (Windows key) | 287 |
+
+**Arrows and navigation:**
+
+| Key | Code | Key | Code |
+|-----|------|-----|------|
+| Up | 373 | Home | 364 |
+| Down | 370 | End | 361 |
+| Left | 363 | Page Up | 381 |
+| Right | 372 | Page Down | 378 |
+| Forward Delete | 369 | Help (Insert) | 368 |
+
+**Function keys** (F12 is not available):
+
+| Key | Code | Key | Code | Key | Code |
+|-----|------|-----|------|-----|------|
+| F1 | 5 | F6 | 11 | F11 | 120 |
+| F2 | 6 | F7 | 131 | F13 | 380 |
+| F3 | 4 | F8 | 10 | F15 | 382 |
+| F4 | 12 | F9 | 1 | | |
+| F5 | 3 | F10 | 9 | | |
+
+**Numeric keypad:**
+
+| Key | Code | Key | Code | Key | Code |
+|-----|------|-----|------|-----|------|
+| KP 0 | 112 | KP 5 | 115 | KP . | 113 |
+| KP 1 | 105 | KP 6 | 116 | KP + | 121 |
+| KP 2 | 114 | KP 7 | 108 | KP − | 123 |
+| KP 3 | 122 | KP 8 | 117 | KP × | 124 |
+| KP 4 | 107 | KP 9 | 125 | KP ÷ | 330 |
+| KP Enter | 346 | Clear (Num Lock) | 119 | | |
 
 ## Known limitations
 
