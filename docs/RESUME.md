@@ -1,4 +1,38 @@
-# RESUME — MacLC Pocket (2026-08-14d: buildAZ VALIDATED — games playable)
+# RESUME — MacLC Pocket (2026-08-16: REBUILD LADDER — release assembly)
+
+## -1. ★★★ CURRENT STATE (2026-08-16, supersedes everything below)
+
+Full story: docs/boot_problems.md ★★★ 2026-08-16 section (taxonomy,
+fit families, image wear, the ladder). Ladder branch:
+`ladder/release-rebuild` (worktree ../MacLC_BBcolor), base BB 02fb297.
+
+| rung | build | contents | HW verdict |
+|---|---|---|---|
+| 1 | BO | BB + colour graft seed (1a4844c pram) | **PASS** — colour desktop from seed, floppy OK |
+| 2 | BP | + BF mapper RTL (9f26625) | **PASS** — 6.0.8/7.1/7.5.5 boot; defaults+dropdown+custom(`a`,`` ` ``) typed |
+| 3 | BQ | + startup-input-mode (from bcf0302) + arrow codes in menu (max 388) | feature untallied; fit rolled GLITCHY (screen corruption) |
+| 3b | BR | same netlist, seed 4 re-roll | COMPILING at handoff |
+
+- Card: main core = BQ; `MacLCprev` second core = BP fallback (duplicate
+  750 MB image at Assets/maclcprev/ — suspect in a card-wide instability
+  bump; free-space check pending next card load).
+- ★ WAIT-AT-MENU CONFIRMED HELPING (user): power on → ~60 s at Pocket
+  menu → launch = fewer boot failures. Standing tally protocol + readme
+  note. (Pocket OS card-indexing contention.)
+- Arrow/nav keys: PS/2 Set-2 EXTENDED codes E0xx map to 0x100|xx in
+  adb_device (Up=373, Down=370, Left=363, Right=372, Home=364, End=367,
+  PgUp=375, PgDn=378, Del=369) — menu sliders now reach 388. UNTESTED
+  on HW until BR round.
+- Open questions for user: did BQ's mouse-at-power-on work before the
+  glitch? Which failure class was the residual instability (hang vs
+  F-line)?
+- Next: BR gates → card → rung-3 tally (mouse default, live-follow,
+  arrow custom code 373, glitch gone?) → rung-4 decision (scrub:
+  optional; power-cycle workaround documented) → release assembly
+  (readme Controls+beta notes, trim dist, release.sh re-zip, publish on
+  user's word). PRAM persistence stays post-release (gated on slot-220
+  re-add + save-flow bench; colour-at-boot is PROVEN fine on clean
+  fits).
 
 ## 0.0 ★★★ 08-14d: THE PORT WORKS. PROBES WERE THE POISON.
 

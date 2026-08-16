@@ -959,6 +959,13 @@ placements of the BF..BN-era netlist behave three ways: the BH/BI fit
 hangs at base rate + shows the video glitch CONSISTENTLY; the BJ/BM fit
 and the seed-5 BN fit F-line deterministically. All are STA-clean with
 healthy SDRAM-path slack — whatever this is, STA does not model it.
+★ 2026-08-16 corroboration from the CLEAN era: buildBQ (rung-3
+netlist, seed 2) rolled a glitch-expressing placement (screen
+corruption on HW; BP one rung down is clean) — re-rolled to seed 4 as
+buildBR. The video-glitch expression is placement-lottery even on
+good-era netlists; F-lines so far are not. Expect to re-roll any
+glitchy fit rather than debug the feature that triggered the
+recompile.
 Prime netlist suspects (entered exactly at the good/bad boundary): the
 **mapper clock-domain crossing** (BF; re-fit "CDC slimmed + 128 sync
 flops" in BG) and the **launch scrub** (BG/BH). The last builds known
@@ -1038,7 +1045,13 @@ the killer commit-family.
   single-instrument fit.
 - First-boot-after-card-insert failing disproportionately (5/5 during
   the bad-fit era, but BI's cold-1 hang says the effect may span
-  classes). The wait-90-seconds-at-menu discriminator was never run.
+  classes). ★ 2026-08-16: the wait-at-menu discriminator RAN and
+  SUPPORTS contention — user let the Pocket sit ~1 min at the menu
+  before launching and "that may have actually resolved some of the
+  issues". Now standing TALLY PROTOCOL (power on → wait ~60 s → launch)
+  and a readme beta note. Root-cause quantification (what the OS is
+  doing, how long it really needs, whether the second platform's
+  assets doubled it) still open.
 - The rare video glitch (shared with MiSTer; consistent expression was
   a bad-fit-family trait, rare expression is the AZ-era norm).
 - Soft reboot (Special→Restart) still broken — warm-path family.
