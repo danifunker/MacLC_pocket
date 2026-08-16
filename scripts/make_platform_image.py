@@ -2,6 +2,35 @@
 """Generate dist/platforms/_images/maclc.bin — the platform art the Pocket
 shows on the core's About / platform screen.
 
+★★★ DO NOT RUN THIS. IT WRITES THE WRONG PIXEL FORMAT. (2026-08-16)
+
+The colour part of what follows is WRONG, and it shipped broken art in v1.0.0
+and v1.0.1.  The platform image is **8-BIT INK**, not RGB565: one pixel per
+16-bit little-endian word, ONLY THE LOW BYTE used, high byte always 0x00 —
+and the Pocket displays luminance = 255 - ink, so ink 0x00 paints WHITE and
+ink 0xFF paints BLACK.  This script packs real RGB565 into both bytes, so the
+Pocket reads only the low half of each colour and renders grey mush — the
+"rainbow Apple logo" was displayed as a grey apple with a black band across it
+for two releases.
+
+Proof, if this ever needs re-settling: all 230 platform images on a real card
+have a zero high byte in every one of their 85,965 words, including
+photographic ones using all 256 low-byte values.  For the POLARITY, compare
+amstrad.bin against the amstrad.png shipped beside it: decoded as luminance
+the .bin is that .png's NEGATIVE — the "Amstrad CPC" lettering is dark in one
+and white in the other.  (Reading those two as matching is exactly how an
+inversion got shipped mid-session on 2026-08-16.  Check the LETTERING, not the
+overall brightness.)  Hardware-confirmed: the lettering is white on the
+Pocket.  Full write-up in scripts/convert_platform_image.py.
+
+The LAYOUT documentation below is CORRECT and is why this file is kept —
+521x165, column-major, 330-byte stride, and the rotation tell.  Only the
+"RGB565" claim and the rgb()/palette code are wrong.
+
+Shipping art is now produced by scripts/convert_platform_image.py, which
+writes the real format.  If you run this script by mistake, restore
+dist/Platforms/_images/maclc.bin from git.
+
 FORMAT — reverse-engineered from Pocket-Amiga's amiga.bin, because guessing at
 it produced garbage twice. 171,930 bytes factors as both 521*165*2 and
 521*110*3, and NEITHER of those layouts decodes to a picture. The real layout
@@ -20,7 +49,11 @@ Mapping, with (x, y) in display space (x across 521, y down 165):
     storage[r * 165 + c]  =  display(520 - r, c)
 
 The Amiga image's dominant pixel value is 0x0001 (essentially black), so a dark
-background is the house style.
+background is the house style.  [2026-08-16: WRONG, and doubly so. The value
+0x0001 does dominate, but it is INK, and the Pocket paints ink 0x00 as WHITE —
+so the house style is a WHITE background, not a dark one. The "essentially
+black" reading also helped hide the format error, since 0x0001 looks near-black
+under the mistaken RGB565 reading too.]
 
 Draws a Macintosh LC: the flat "pizza box" case with its 12" RGB monitor on
 top, in Apple's Platinum grey, with the six-colour stripe as an accent.
