@@ -8,11 +8,11 @@ which is based on the MacPlus MiSTer core by Sorgelig, originating from the
 Motorola 68020 CPU (via a modified TG68K core), the V8 gate array (video/glue), the
 Egret (HC05) system controller with its original firmware, SWIM, SCSI, and ADB.
 
-> **Beta** (v0.9.0, 2026-08-15). The core boots System 6.0.8 and System 7.1
-> to the desktop and plays games — with the known issues listed below, the
-> headline one being that **PRAM does not save**: the machine starts
-> black-and-white every launch, and you set 256 colours in Monitors after
-> boot.
+> **Beta** (v0.9.0, 2026-08-16). The core boots System 6.0.8, 7.1 and
+> 7.5.5 to a 256-colour desktop and plays games — with the known issues
+> listed below, the headline one being that **PRAM does not save**:
+> colour is preset by a factory PRAM baked into the core, but your own
+> in-guest control-panel changes reset every launch.
 
 ## Status (2026-08-16, beta)
 
