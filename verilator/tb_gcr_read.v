@@ -78,9 +78,10 @@ module tb_gcr_read;
 	localparam IMG_BYTES = 819200;
 	reg [7:0] img [0:IMG_BYTES-1];
 
-	wire [21:0] dskReadAddrInt, dskReadAddrExt;
+	// (dskReadAddrExt/dskReadAckExt dropped 2026-08-14: the second-floppy cut
+	// removed the external-drive port surface from swim.v.)
+	wire [21:0] dskReadAddrInt;
 	reg         dskReadAckInt = 0;
-	wire        dskReadAckExt = 1'b0;
 	wire [7:0]  dskReadData = (dskReadAddrInt < IMG_BYTES) ? img[dskReadAddrInt] : 8'hE5;
 	wire [6:0]  dbg_track;
 	wire        dbg_side;
@@ -121,8 +122,6 @@ module tb_gcr_read;
 		.diskMotor(), .diskAct(),
 		.dskReadAddrInt(dskReadAddrInt),
 		.dskReadAckInt(dskReadAckInt),
-		.dskReadAddrExt(dskReadAddrExt),
-		.dskReadAckExt(dskReadAckExt),
 		.dskReadData(dskReadData),
 		.dbg_ism_flpe(),
 		.dbg_flp_byte_cnt(), .dbg_flp_miss_cnt(), .dbg_flp_disk_data(),

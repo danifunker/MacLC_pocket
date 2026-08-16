@@ -910,3 +910,223 @@ hold caught before it could contaminate a capture).
 **Also fixed en route:** the SCSI write path (two root causes, on-card
 proof — see the 08-13 day-1 ★★★ above), the ISO CD-ROM ship (buildAB in
 dist), the C_IDLE one-hot ack, the qsf SEED-line mangling.
+
+## ★★★ 2026-08-15 (late morning) — THE F-LINE REGRESSION HUNT: failure taxonomy, fit
+## families, the image-wear cycle, and the rebuild ladder
+
+Everything below was established across 2026-08-15/16 (the BM→BN→AZ
+ladder day). Read this before interpreting ANY boot failure or planning
+any release work.
+
+### 1. The failure-class taxonomy (USER-established, load-bearing)
+
+Two distinct failure classes, historically conflated — never conflate
+them again. Every tally and bug report must record which class occurred:
+
+- **HANGS** (Finder-bar hang / blank never-filling dialog): the known
+  base-rate failure, ~1 boot in 4, present in EVERY era including the
+  gold builds (AZ 3/4, BB 4/6). Root cause unknown (serving-timing
+  class suspected). Runtime after a successful boot is rock-solid for
+  hours. This class is ACCEPTED for the beta (readme documents
+  power-cycle-and-retry).
+- **F-LINES** (bad F-Line bomb, also Unimplemented Trap): NEVER part of
+  normal operation. Historically appeared only with (a) probed/ISSP
+  fits (resolved by zero-probe AZ), (b) colour boot-at-depth on the
+  bad-era netlist, (c) the BM/BN fit family at MONO. An F-line means
+  something is genuinely wrong — executing garbage — not "the usual
+  flakiness".
+
+### 2. The hunt, compressed — what was eliminated and HOW
+
+Deterministic same-error F-lines at mono boot on BM (disarm, seed 3)
+and BN (no disarm, seed 5). Eliminated by direct measurement:
+
+- **Thermal/environment**: BM F-lined after a full night off.
+- **Disk image content**: F-lines identical on a SHA-verified pristine
+  maclc.hda (reseed from zip, hash checked ON the card after copy).
+- **The slot-220 disarm**: BN reverted it and F-lined anyway. (Also
+  retro-exonerates the disarm as BM's cause; it stays retired only
+  because every base-rate build shipped without it.)
+- **PRAM seed bytes**: BI seed == BM seed byte-identical (git diff
+  c54034f..1ee54b7 on egret.pram is empty), and BI only hung.
+- **Card JSONs / Settings / Pocket OS / card hardware**: buildAZ's
+  exact bitstream (sha D3C62CE1…) booted clean in the IDENTICAL
+  environment the same hour BN F-lined in it.
+- **Fitter seed alone**: BM (seed 3) and BN (seed 5) both F-line.
+
+What survived: **the fit itself, on the current-era netlist**. Three
+placements of the BF..BN-era netlist behave three ways: the BH/BI fit
+hangs at base rate + shows the video glitch CONSISTENTLY; the BJ/BM fit
+and the seed-5 BN fit F-line deterministically. All are STA-clean with
+healthy SDRAM-path slack — whatever this is, STA does not model it.
+★ 2026-08-16 corroboration from the CLEAN era: buildBQ (rung-3
+netlist, seed 2) rolled a glitch-expressing placement (screen
+corruption on HW; BP one rung down is clean) — re-rolled to seed 4 as
+buildBR. The video-glitch expression is placement-lottery even on
+good-era netlists; F-lines so far are not. Expect to re-roll any
+glitchy fit rather than debug the feature that triggered the
+recompile.
+
+### ★★★ 2026-08-16b — SOLVED (mechanism found): THE MISSING MARGINALITY
+### ANCHOR. Read this before ANY future stability work.
+
+The "screen corruption" was pinned down and it rewrote the story:
+
+1. User described it precisely: **Finder icons garbled and wrong-sized,
+   cascading** — not scanout artifacts. That is disk-READ corruption
+   being drawn (and then written back by the Finder = the cascade, and
+   = the fsck damage that "followed the builds").
+2. Conviction sequence, all on hardware, one session: identical
+   garbling on BQ (seed 2) AND BR (seed 4) = placement-independent;
+   survives the startup-mode feature DORMANT (keyboard persisted) =
+   not the feature's function; still there on a SHA-verified pristine
+   reseed = not the disk; **BP clean on the SAME pristine disk in the
+   same session** (both cores share one maclc.hda — the "prev core has
+   its own copy" note in earlier RESUME revisions was WRONG) = the
+   rung-3 NETLIST convicted. Identical expression across two
+   placements = decided at SYNTHESIS ALIGNMENT, not placement.
+3. Then the archaeology: **MiSTer already had this exact bug and this
+   exact fix.** MacLC.sv.reference:1238-1296 — the "always-on
+   marginality anchor": probes-OFF fits deterministically corrupt the
+   SCSI read path (verbatim symptom list: "Finder colour-icon noise →
+   error-11 / F-Line bombs"), STA green, fingerprint = RING-STALE
+   serving; cure = (* preserve, noprune *) sink registers on the ring
+   comparator/fill/look-ahead cones + write-path + floppy fetch cone.
+   **The Pocket port severed the anchor at import** (it rode with the
+   probe decks it fed; the witness nets themselves survived in shared
+   RTL, still marked "anchor feed"). Every Pocket netlist since import
+   has re-rolled dice MiSTer had already confiscated.
+4. This unifies the fit-family mystery: the same latent read-path race
+   lands differently per netlist — mis-read icon RESOURCES get drawn
+   (BQ/BR), mis-read CODE gets executed (the BM/BN deterministic
+   F-lines, and plausibly Mystery B's boot-blocks signature), clean
+   alignments show nothing (AZ, BB, BO, BP). The hang base-rate
+   remains a separate open (serving-timing class).
+
+FIX: buildBS = rung-3 netlist + the ported anchor (anchor_ring0/1,
+anchor_wrfb, anchor_flp0/1/2 verbatim; anchor_psdt re-formed from the
+Pocket top's SDMA watchdog; cd_audio words not portable — module cut),
+seed 2 = pure A/B against BQ. The anchor is PERMANENT structural RTL
+from now on — same law as upstream: never remove, ifdef, or fold it.
+
+★★★ VALIDATED ON HARDWARE 2026-08-16: buildBS icons CLEAN at BQ's own
+seed — the anchor alone cured the garbling. Mechanism confirmed.
+**Released same day as v1.0.0** (buildBS, branch ladder/release-rebuild
+fc7efe9). Standing law for every future netlist: the anchor stays, and
+the fit is not trusted until the Finder shows clean colour icons.
+Prime netlist suspects (entered exactly at the good/bad boundary): the
+**mapper clock-domain crossing** (BF; re-fit "CDC slimmed + 128 sync
+flops" in BG) and the **launch scrub** (BG/BH). The last builds known
+F-line-free at mono: **AZ** (marathon-proven) and **BB** (4/6,
+hang-class failures only).
+
+### 3. The image-wear cycle (why F-lines "followed" the builds)
+
+Hang-class crashes kill the guest MID-WRITE. Damage accumulates in file
+CONTENT (Desktop DB, resource forks) that rb-cli fsck cannot see —
+fsck walks structure only. Executing damaged content produces exactly
+an F-line, and it looks deterministic (same damaged file read every
+boot) and build-independent. After a week of crash-loop sessions the
+live image was a plausible co-conspirator in the BM/BI-era F-lines
+(never provable post-reseed; the BN-on-pristine F-line proved the fit
+class was real INDEPENDENT of wear).
+
+Consequences, now standing policy:
+- **Verify the SHA of any reference image before trusting it.** The
+  on-card "pristine extract" had silently DRIFTED (2478A8E5… vs
+  pristine DCD02C6C31335B87397AF2C1944EBBEA70CF4E26) — something had
+  written to it. It is parked as …-DRIFTED.hda on the card. The only
+  trusted source is Mac68KColorGames_v1.zip (extract → SHA → install
+  → re-SHA on the card).
+- Reseed SOP: park the live image first (maclc-saves-DATE.hda —
+  user saves recoverable via rb-cli get), never delete it.
+- Expect wear on any image that lives through crash loops; keep the
+  readme's "back up your .hda" advice forever.
+
+### 4. Colour-at-boot: the collapse evidence is CONTAMINATED
+
+The "boot-at-depth collapses ~100%" verdict (BH/BJ/BK 0/N) was measured
+ENTIRELY on bad-era fits — the same fits that later F-lined at MONO —
+and on the worn image. Colour-at-boot has NEVER been tested on a
+clean-era fit with a pristine image. It may be innocent. (8bpp RUNTIME
+was always rock-solid — the AZ marathon ran manual-Monitors 256
+colours for hours.) A PRAM seed is M10K INIT ONLY and does not perturb
+placement, so "known-good fit + colour seed" reproduces the blessed
+placement with colour in it — the cleanest possible test, now rung 1 of
+the ladder.
+
+### 5. The plan of record: the REBUILD LADDER (one variable per rung)
+
+User directive 2026-08-15 (late morning): too many half-baked pieces; re-assemble the
+release from the last solid ground, one feature per build, a hardware
+tally (2-3 power-off boots, class-scored, video noted) gating each
+rung. The ladder doubles as the bug hunt — the rung that F-lines names
+the killer commit-family.
+
+- **Base**: BB (02fb297) = AZ + UI cleanup/display modes (BA) + floppy
+  envelope fix. Seed 2. Last F-line-free-with-floppy state.
+- **Rung 1 (in flight)**: BB + minimal colour graft seed (import PRAM
+  base + the three video-record bytes 0x58=$83, 0x59=$AA, 0x5A=$0A —
+  the 1a4844c pram). Placement-identical to BB by the init-only
+  argument. Clean+colour → colour is IN the release. F-line → colour
+  collapse is real even on clean fits → ship mono seed, colour stays a
+  Monitors-per-session workflow.
+- **Rung 2**: + the BF mapper (registers/pocket_input/kresolve CDC),
+  seed stays 2. Tests suspect #1 in isolation. Include the never-run
+  input validation (defaults type; one dropdown remap; one custom-code
+  remap) in this rung's hardware check.
+- **Rung 3**: + startup-input-mode default (unbundled from BG).
+- **Rung 4 (optional for release)**: + launch scrub (BH form). Tests
+  suspect #2. The release does not need it (power-cycle workaround is
+  documented); take it only if it survives its tally.
+- **NEVER re-take silently**: seed 3 (the bad family), the slot-220
+  disarm, the BG bundling habit. One variable per rung, archive every
+  .sof, gate every rung on STA + sdram-paths + zero-probe + bench.
+- Dist JSONs at release time must match the SHIPPED fabric's variable
+  set (trim interact.json to implemented vars; video.json display
+  modes are scaler-side and fabric-independent — keep).
+
+### 6. Standing opens (post-release investigations)
+
+- Hang-class root cause (~1/4 base rate) — suspect serving-timing;
+  needs the Verilator harness (RESUME §1-NEXT) or a designed
+  single-instrument fit.
+- First-boot-after-card-insert failing disproportionately (5/5 during
+  the bad-fit era, but BI's cold-1 hang says the effect may span
+  classes). ★ 2026-08-16: the wait-at-menu discriminator RAN and
+  SUPPORTS contention — user let the Pocket sit ~1 min at the menu
+  before launching and "that may have actually resolved some of the
+  issues". Now standing TALLY PROTOCOL (power on → wait ~60 s → launch)
+  and a readme beta note. Root-cause quantification (what the OS is
+  doing, how long it really needs, whether the second platform's
+  assets doubled it) still open.
+- The rare video glitch (shared with MiSTer; consistent expression was
+  a bad-fit-family trait, rare expression is the AZ-era norm).
+- Soft reboot (Special→Restart) still broken — warm-path family.
+- The 4bpp question (BI's late-night F-line: manual Monitors set or
+  spontaneous 4bpp boot?) — user never answered; decides whether the
+  fabric's record-acceptance diverges from the MAME-verified model.
+- PRAM persistence (plumbing exists; needs slot 220 + save-flow bench +
+  a Reset-PRAM menu action; gated on colour-at-boot being resolved).
+
+### 7. Operational facts that outlive this machine
+
+- Bisect assets: scratch/builds .sof chain A→BN AND a full copy on
+  the SD card at D:\Backup\maclc-builds (72 files, 167 MB, includes
+  the exact staged rbf_r for AZ/BB/BI/BJ/BK). Exact shipped bitstreams
+  also recoverable from git dist commits; regenerate rbf from sof with
+  quartus_cpf -c -o bitstream_compression=on + the bit-reverse table
+  in scripts/package.sh.
+- rb-cli ("Rusty Backup", C:\Users\owner\AppData\Local\Programs\
+  Rusty Backup\bin\rb-cli.exe) is the image-inspection tool: fsck /
+  ls / get / cp, APM-aware. scripts/hfs_check.py cannot walk APM
+  images. rb-cli ls takes no -l/--long flag.
+- Card protocol: the agent checks for D:\ itself before card work
+  (no announcement needed); every copy is hash-verified; eject via
+  Shell.Application (retry once — first attempt sometimes reports
+  still-mounted).
+- The Pocket's clock stamps FAT mtimes and may be offset from the PC —
+  do not read card mtimes as PC-local time without checking.
+- Boot-tally protocol: full power-off between boots; score every boot
+  hang-vs-F-line-vs-clean + video note. Respect user fatigue: 2-3
+  boots per rung, not 6.

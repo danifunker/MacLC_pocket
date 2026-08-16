@@ -47,22 +47,6 @@ mkdir -p "$DEST" "dist/Platforms/_images" "dist/Assets/${PLATFORM}/common"
 # about line endings in principle, but the Pocket's parser is not ours to
 # assume about, and matching a known-good core costs nothing. The repo stays
 # LF; only the shipped copies are converted.
-for f in core.json video.json audio.json data.json input.json interact.json variants.json; do
-    sed 's/$/\r/' "$f" > "$DEST/$f"
-done
-[ -f dist/icon.bin ] && cp dist/icon.bin "$DEST/" || true
-
-# Bit-reverse every byte (see the header note — this is what _r means).
-# Git Bash on Windows often has `python` but not `python3`; WSL/Linux usually
-# the reverse. Pick whichever exists so this runs unchanged on both.
-#
-# ★ Must TEST each candidate, not just look it up. Windows ships App Execution
-# Alias stubs at %LOCALAPPDATA%\Microsoft\WindowsApps\python{,3}.exe that exist
-# on PATH, satisfy `command -v`, and do nothing but open the Microsoft Store.
-# On a machine with real Python installed, `command -v python3` can still hit
-# the stub while `python` resolves correctly -- so the old python3-first pick
-# selected the stub and the bit-reversal produced nothing. A silently missing
-# or stale bitstream.rbf_r is exactly the failure this script exists to avoid.
 PY_BIN=""
 for cand in python3 python py; do
     p="$(command -v "$cand" 2>/dev/null)" || continue
@@ -77,6 +61,36 @@ if [ -z "$PY_BIN" ]; then
     echo "        Store alias stubs in %LOCALAPPDATA%\\Microsoft\\WindowsApps.)"
     exit 1
 fi
+
+# ★ 2026-08-15: byte-DETERMINISTIC conversion, replacing `sed 's/$/\r/'`.
+# The sed form has two failure modes that cost a full evening of bisecting
+# "Load error in 'interact' general error": (1) on a file that already has
+# CRLF (Windows Python's text-mode json.dump writes them) it produced \r\r\n;
+# (2) on a file with no trailing newline (json.dump never writes one) GNU sed
+# preserves the missing terminator, shipping a final line ending in a lone
+# \r — which the Pocket's interact parser rejects outright. Normalize to LF,
+# force the final newline, then emit clean CRLF. Idempotent for any input.
+for f in core.json video.json audio.json data.json input.json interact.json variants.json; do
+    "$PY_BIN" -c "
+import sys
+d = open(sys.argv[1], 'rb').read().replace(b'\r\n', b'\n')
+if not d.endswith(b'\n'): d += b'\n'
+open(sys.argv[2], 'wb').write(d.replace(b'\n', b'\r\n'))
+" "$f" "$DEST/$f"
+done
+[ -f dist/icon.bin ] && cp dist/icon.bin "$DEST/" || true
+
+# Bit-reverse every byte (see the header note — this is what _r means).
+# Git Bash on Windows often has `python` but not `python3`; WSL/Linux usually
+# the reverse. Pick whichever exists so this runs unchanged on both.
+#
+# ★ Must TEST each candidate, not just look it up. Windows ships App Execution
+# Alias stubs at %LOCALAPPDATA%\Microsoft\WindowsApps\python{,3}.exe that exist
+# on PATH, satisfy `command -v`, and do nothing but open the Microsoft Store.
+# On a machine with real Python installed, `command -v python3` can still hit
+# the stub while `python` resolves correctly -- so the old python3-first pick
+# selected the stub and the bit-reversal produced nothing. A silently missing
+# or stale bitstream.rbf_r is exactly the failure this script exists to avoid.
 
 "$PY_BIN" - "$RBF" "$DEST/bitstream.rbf_r" <<'PY'
 import sys

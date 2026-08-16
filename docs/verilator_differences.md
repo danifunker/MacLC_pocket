@@ -130,13 +130,14 @@ These must stay identical; they were checked and match today.
 
 | Thing | Sim (`sim.v`) | FPGA (`MacLC.sv`) | Consequence |
 |---|---|---|---|
-| RAM size | `configRAMSize = 8'h24` (2 MB, hardwired) | `status[4] ? 8'hE4 : 8'h24` (2 MB / 10 MB) | **10 MB / SIMM path never exercised in sim** |
-| Monitor ID | `v8_monitor_id = 4'h6` (640×480, hardwired) | `status[11:10]`-selected | **Other resolutions are FPGA-only** |
+| RAM size | `configRAMSize = 8'hE4` (10 MB default; `+mem2` → 2 MB) | `opt_mem_size` (default 1 = 10 MB) | both configs covered; **the F730 boot oracle is calibrated for 2 MB — pass `+mem2`** (10 MB POST runs long past F730) |
+| Monitor ID | `v8_monitor_id = 4'h2` (512×384, hardwired — matches the shipping Pocket) | montype 2 presented | none (this fork has no other modes) |
 | `clk_sys` | 32 MHz from the testbench | PLL `outclk_1` | same frequency; no functional diff |
 | Debug HUD / ports | absent | Row-M overlay, `*_dbg_*`, `selectUnmapped`, `synthesis keep` taps | FPGA-only observability; harmless |
 | Framework | bespoke C++ harness (`sim_main.cpp`) | `sys/` (HPS I/O, HDMI/scaler, OSD, audio out) | sim has no HPS/HDMI/scaler |
-| PRAM NVRAM persistence | `dataController_top` `pram_*` ports tied off (`pram_load_wr=0`, `pram_save_addr=0`, outputs open) | FSM in `MacLC.sv` (SD slot 2 save image, load-on-mount / flush-on-OSD / Reset PRAM&Core) drives them | **PRAM save/restore is FPGA-only**; sim still boots with `egret.pram` (zeros). The Egret `pram[]` mirror + `pram_load_*/save_*` ports in `egret_wrapper.sv` are shared and identical. |
+| PRAM NVRAM persistence | `dataController_top` `pram_*` ports tied off (`pram_load_wr=0`, `pram_save_addr=0`, outputs open) | FSM in `MacLC.sv` (SD slot 2 save image, load-on-mount / flush-on-OSD / Reset PRAM&Core) drives them | **PRAM save/restore is FPGA-only**; sim boots with `egret.pram` (the 256K-patched colour seed — see docs/pram_video_record.md). The Egret `pram[]` mirror + `pram_load_*/save_*` ports in `egret_wrapper.sv` are shared and identical. buildBD (2026-08-14) adds an FPGA-only config-time seed loader in `mac_lc_pocket.sv` (M10K copy of `egret.pram` streamed through `pram_load_*`; MLAB power-up init distrusted) — the sim needs nothing: its `pram[]` readmemh works natively. |
 | CD-ROM (SCSI ID 3) block-device slot | sim block-device **slot 2** (`--cdrom <iso>`; `sd_*[2]`, `img_mounted[2]`), `cd_enable` hardwired 1 | hps_io **slot `VD_CDROM`=4** (`SC4` OSD entry), `cd_enable = ~status[18]` (OSD "CD-ROM Drive") | Same `dataController_top` `cd_*` ports both sides; only the slot index and the enable source differ. Sim boots with the disc-less CD target answering the ROM SCSI scan (regression for the 2026-06-10 empty-CD wedge class). |
+| Launch warm-signature scrub (buildBG/BH) | absent — `sim_ram` powers up zeroed, so a sim "launch" is always cold; nothing to scrub | `mac_lc_pocket.sv` scrub FSM: 8 zero words over bytes $CF8–$D07 (kills the ROM's 'WLSC' warm signature surviving in SDRAM across a core relaunch), started ~504 µs after `pll_locked` (past `pocket_sdram`'s ~126 µs init ladder, during which we/oe are IGNORED — buildBG fired at config and its writes were void), carried on a private `scrub_pend` flag so `ioctl_wait` never pulses (a wait fall is a `dio_ack` to a producer) | **Unverifiable in sim** (no `pocket_sdram`, no surviving-RAM relaunch); desk-check + hardware relaunch gauntlet only |
 
 ## 🔴 Inherent gap — keep in mind
 

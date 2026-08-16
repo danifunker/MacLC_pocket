@@ -100,6 +100,12 @@ echo "zip ready: $ZIP"
 if [ "${1:-}" = "--publish" ]; then
     command -v gh >/dev/null || { echo "ERROR: gh CLI not installed/on PATH"; exit 1; }
     BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+    # Policy (user, 2026-08-16): releases are cut from main ONLY.
+    [ "$BRANCH" = "main" ] || {
+        echo "ERROR: releases are published from main only; you are on '$BRANCH'."
+        echo "Merge to main first, then release."
+        exit 1
+    }
     echo "pushing $BRANCH to origin..."
     git push origin "$BRANCH"
     NOTES="output/release-notes-${VERSION}.md"
