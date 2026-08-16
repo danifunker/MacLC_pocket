@@ -1,5 +1,30 @@
 # RESUME — MacLC Pocket (2026-08-16: ★★★ v1.0.0 RELEASED)
 
+## -3. ★★★ 08-16 EVENING STATE: BW falsified the SDC theory; BX in flight
+
+Scoreboard of the evening's builds (all on CLEAN card state - pristine
+image, parked Settings):
+- buildBW (timed interface, all gates + witness +2.0 ns): cold = F-line
+  + screen corruption, warm = corruption only. THE SDC FIX IS REAL
+  ENGINEERING BUT WAS NOT THE MECHANISM - prediction falsified as
+  stated. KEEP the merged clock groups regardless (the interface must
+  be timed; "green" is now honest).
+- ★ ALERT-SOUND BUG FIXED on BW (user-verified: alert plays and
+  stops). The ASC FIFO status cone pin (anchor_asc0 + dbg_asc) and/or
+  the timed interface cured it. Carry forward forever.
+- Settings poisoning discovered: a corrupt-fit session made Analogue OS
+  persist garbage interact readbacks (all button dropdowns = 0).
+  PROTOCOL: park Settings\danifunker.MacLC on every bad-fit recovery.
+- Empirical read that drives BX: every rung-3-family netlist except BS
+  produced corrupt fits (BQ/BR/BU/BW = 1 good roll in 5); every
+  pre-rung-3 netlist clean on its day. Two RTL audits of rung 3 found
+  nothing - withdrawn on the record, not a mechanism.
+- buildBX (compiling at write time) = BW minus rung 3: colour + floppy
+  + mapper + full anchor + ASC pin + timed SDC; power-on = keyboard
+  mode. BX clean => ship as v1.0.1 (trim interact id-130 from dist
+  first); BX corrupt => the curse is not rung 3, prime suspect becomes
+  what BX still shares with the bad family (the anchor deck itself).
+
 ## -2. ★★★ RELEASED: v1.0.0 (2026-08-16)
 
 https://github.com/danifunker/MacLC_pocket/releases/tag/v1.0.0
