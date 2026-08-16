@@ -24,6 +24,18 @@ image, parked Settings):
   mode. BX clean => ship as v1.0.1 (trim interact id-130 from dist
   first); BX corrupt => the curse is not rung 3, prime suspect becomes
   what BX still shares with the bad family (the anchor deck itself).
+- ★★ LATE 08-16, user-driven LOCALIZATION of the bad-fit failure (BX
+  corrupted too; v1.0.1 retreated to BP): on a bad fit, the diskless
+  "?" screen (1bpp idle) is CLEAN and "Welcome to Macintosh" at FULL
+  8bpp depth is CLEAN — corruption begins only once the FINDER is up.
+  So depth alone is insufficient and base fabric operation is fine;
+  the failure needs Finder-grade activity: QuickDraw byte-masked RMW
+  VRAM traffic concurrent with disk serving through pocket_sdram.
+  TARGET for the fix build: explicitly constrain/harden the CPU-side
+  VRAM-shadow RMW cone (address + byte-enable paths into pocket_sdram)
+  — set_max_delay the cone or register the shadow path — so every
+  future fit must close what the bad fits fumble. Test = a condemned
+  netlist (BX) + the constraint: corruption gone => mechanism proven.
 
 ## -2. ★★★ RELEASED: v1.0.0 (2026-08-16)
 
