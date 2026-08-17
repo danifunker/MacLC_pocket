@@ -1,0 +1,69 @@
+# interact.json — the load envelope, measured
+
+The Pocket's interact parser rejects some valid JSON files with
+`Load error in 'interact' general error`. The 2026-08-15 investigation found a
+file that loads by shrinking **every** axis at once, and recorded that "the
+killer axis was never isolated (one of: 16-opt lists / 16th var / 22 KB size /
+slider max 511 / numeric slider defaultval)".
+
+2026-08-16 isolated it, by accident of having changed two axes and then
+trimming only one of them.
+
+## The three data points that matter
+
+| file | vars | options/list | bytes | result |
+|---|---|---|---|---|
+| shipped v1.0.2 | 14 | 5 | 7,793 | **loads** |
+| NMI + arrows (08-16) | 15 | **9** | 10,407 | **Load error** |
+| ABXY trim (08-16) | 10 | **9** | 6,383 | **loads** |
+| Amiga reference core | 15 | 8 | 6,271 | loads (other author) |
+| `interact_full16.json` | 16 | 16 | 21,809 | Load error |
+
+## What that proves
+
+- **9-option lists are fine.** The failing file and the passing trim both have
+  them. Option count is eliminated — it was the leading suspect and it is
+  innocent up to at least 9.
+- **15 variables are fine.** The Amiga core ships 15 and loads.
+- **The killer is FILE SIZE**, and it is bounded:
+  **> 7,793 bytes fails somewhere at or below 10,407.**
+
+Everything else on the 08-15 suspect list (slider max, numeric slider
+defaultval, the 16th variable) is unnecessary to explain any observation.
+
+## The practical budget
+
+Stay under ~7.8 KB. From the current 6,383-byte menu that is roughly **1.4 KB
+of headroom** — about two more 9-option button lists, or the Memory variable
+(~250 B) plus one list. Restoring everything at once (L/R/Start + Memory +
+arrows on all seven) is what overflowed.
+
+If a tighter bound is ever wanted, bisect between 7,793 and 10,407 by padding
+a loading file with option entries — but the number above is already enough to
+budget against.
+
+## defaultval semantics — NOT settled, and one theory is disproven
+
+A list's `defaultval` looked like a 0-based **index** (the Amiga core's
+`Memory: Slow` uses `0` with 4 options, and its other list defaults only land
+on sensible options when read as indices). Ours carry the option's **value**
+as a hex string, e.g. `"0x5a"`.
+
+The card's persist files disprove the index reading for our core:
+
+```
+Settings/danifunker.MacLC/Interact/_core/interact_persist.json
+  id 110 val 90   (= 0x5A Return)   id 111 val 41  (= 0x29 Space)
+  id 112 val 18   (= 0x12 Shift)    id 113 val 49  (= 0x31 N)
+  id 114 val 118  (= 0x76 Esc)      id 115 val 21  (= 0x15 Q)
+  id 116 val 17   (= 0x11 Command)
+```
+
+Those are the correct scancodes, i.e. the hex-string defaults are parsed as
+VALUES and delivered correctly. **Do not "fix" these to indices** — writing 0
+would send scancode 0 to all seven buttons and kill every one of them.
+
+Unexplained: a fresh test slot persisted `id 110 val 0` while all six other
+buttons held correct values. Something set Button A alone to 0. The clean
+experiment is to delete `Interact/_core/interact_persist.json`, launch without
+touching the menu, and read back what APF writes from defaults alone.
