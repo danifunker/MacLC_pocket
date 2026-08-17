@@ -53,6 +53,10 @@ module pocket_hid (
 	input  wire [31:0] cont4_joy,
 	input  wire [15:0] cont4_trig,
 
+	// Mouse sensitivity, already synchronised by core_top: 0 = 1:1, 1 = 1/2,
+	// 2 = 1/4, 3 = 1/8.
+	input  wire [1:0]  speed_sel,
+
 	output reg  [10:0] ps2_key,
 	output reg  [24:0] ps2_mouse,
 
@@ -112,10 +116,36 @@ module pocket_hid (
 	// needs about four.
 	reg [15:0] m_cnt_prev;
 
-	wire signed [15:0] hid_dx = $signed(k4_joy_s2[15:0]);
-	wire signed [15:0] hid_dy = $signed(k4_trg_s2[15:0]);
+	// ★★ BYTE POSITION, CORRECTED ON HARDWARE 2026-08-16. The relative delta is
+	// an 8-bit SIGNED value at bits [15:8] — NOT a 16-bit value at [15:0].
+	// ../Analogue-Amiga src/MPUBIOS/drivers/KMIO/inputs.cpp:93-96 is the
+	// working reference:
+	//     signed short x = (short)((CONTROLLER_JOY_REG(4) & 0x0000FF00));
+	//     x = x / (speed << 5);
+	// It masks 0xFF00 and keeps the value scaled by 256 so the divide holds
+	// precision. Reading [15:0] instead yields delta*256 plus whatever occupies
+	// the low byte, which the +/-63 ADB clamp turns into near-permanent
+	// saturation (reported as uniformly far too fast) and, on Y, lets low-byte
+	// junk corrupt the sign (reported as Y not tracking).
+	wire signed [7:0] hid_dx = $signed(k4_joy_s2[15:8]);
+	wire signed [7:0] hid_dy = $signed(k4_trg_s2[15:8]);
 	// The Mac mouse has ONE button, so any physical button is that button.
 	wire hid_btn = |k4_joy_s2[18:16];
+
+	// ---- Sensitivity ------------------------------------------------------
+	// speed_sel: 0 = 1:1, 1 = half, 2 = quarter, 3 = eighth.
+	// The residual carries the FRACTION the shift discards, so slow movement
+	// still travels: at 1/4, four single-unit reports produce one unit of
+	// motion instead of four rounded-down zeros. This is not the accumulation
+	// that made the cursor too fast — the event RATE is unchanged, only the
+	// magnitude is scaled, and the residual never exceeds (1<<shift)-1.
+	reg signed [11:0] res_x, res_y;
+
+	wire [1:0] shift = speed_sel;
+	wire signed [11:0] sum_x = res_x + $signed({{4{hid_dx[7]}}, hid_dx});
+	wire signed [11:0] sum_y = res_y + $signed({{4{hid_dy[7]}}, hid_dy});
+	wire signed [11:0] step_x = sum_x >>> shift;
+	wire signed [11:0] step_y = sum_y >>> shift;
 
 	// Clamp to what ADB can actually carry. adb_device clamps as well, but
 	// doing it here keeps the emitted PS/2 value honest rather than relying on
@@ -124,20 +154,20 @@ module pocket_hid (
 	// status bit is simply bit 8 — NOT sign-and-magnitude (pocket_input.v
 	// documents this; getting it wrong moves the cursor 256-n the wrong way).
 	function signed [8:0] clamp_adb;
-		input signed [15:0] v;
+		input signed [11:0] v;
 		begin
-			if (v > 16'sd63)      clamp_adb = 9'sd63;
-			else if (v < -16'sd64) clamp_adb = -9'sd64;
+			if (v > 12'sd63)       clamp_adb = 9'sd63;
+			else if (v < -12'sd64) clamp_adb = -9'sd64;
 			else                   clamp_adb = v[8:0];
 		end
 	endfunction
 
-	wire signed [8:0] dx_out = clamp_adb(hid_dx);
+	wire signed [8:0] dx_out = clamp_adb(step_x);
 	// ★ Y SIGN: USB HID counts Y POSITIVE DOWNWARD; adb_device takes the PS/2
 	// convention where POSITIVE dy is UP. The negation is required. Hardware
 	// already caught this once on the gamepad path — do not "simplify" it away
 	// without testing on a real Mac desktop.
-	wire signed [8:0] dy_out = clamp_adb(-hid_dy);
+	wire signed [8:0] dy_out = clamp_adb(-step_y);
 
 	function [7:0] status_byte;
 		input ysign, xsign, btn;
@@ -150,6 +180,8 @@ module pocket_hid (
 		if (reset) begin
 			ps2_mouse  <= 25'd0;
 			m_cnt_prev <= 16'd0;
+			res_x      <= 12'sd0;
+			res_y      <= 12'sd0;
 		end else begin
 			// A new report is a CHANGE in the counter — never equality, and
 			// never an assumption that it increments by one (reports can be
@@ -160,6 +192,9 @@ module pocket_hid (
 				m_cnt_prev <= k4_key_s2[15:0];
 				ps2_mouse  <= { ~ps2_mouse[24], dy_out[7:0], dx_out[7:0],
 				                status_byte(dy_out[8], dx_out[8], hid_btn) };
+				// Keep only what the shift discarded.
+				res_x <= sum_x - (step_x <<< shift);
+				res_y <= sum_y - (step_y <<< shift);
 			end
 		end
 	end

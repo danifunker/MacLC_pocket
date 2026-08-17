@@ -375,6 +375,7 @@ always @(*) begin
     32'hF0000048: bridge_rd_data <= {23'd0, opt_code_r};
     32'hF000004C: bridge_rd_data <= {23'd0, opt_code_start};
     32'hF0000050: bridge_rd_data <= {31'd0, opt_ptr_default};
+    32'hF0000054: bridge_rd_data <= {30'd0, opt_mouse_speed};
     32'hF0xxxxxx: bridge_rd_data <= 32'd0;   // actions read back as 0
     32'hF8xxxxxx: begin
         bridge_rd_data <= cmd_bridge_rd_data;
@@ -431,6 +432,7 @@ reg [8:0] opt_code_start = 9'h000;
 // sample happens after the OS has written this value (see the instantiation).
 // The power-on constant is the fallback when no Core Settings value is sent.
 reg       opt_ptr_default = 1'b1;
+reg [1:0] opt_mouse_speed = 2'd0;   // Dock mouse: 0 = 1:1, 1 = 1/2, 2 = 1/4, 3 = 1/8
 
 always @(posedge clk_74a) begin
     // Actions are one-shot: they self-clear once the core side has seen them.
@@ -459,6 +461,7 @@ always @(posedge clk_74a) begin
         32'hF0000048: opt_code_r     <= bridge_wr_data[8:0];
         32'hF000004C: opt_code_start <= bridge_wr_data[8:0];
         32'hF0000050: opt_ptr_default <= bridge_wr_data[0];
+        32'hF0000054: opt_mouse_speed <= bridge_wr_data[1:0];
         default: ;
         endcase
     end
@@ -1330,9 +1333,13 @@ always @(posedge clk_sys) pi_rstn_s <= {pi_rstn_s[0], reset_n};
 // Startup input mode into clk_sys. Quasi-static (written once at core load,
 // then only by a human in the menu), so a 2FF sync is sufficient.
 reg  ptrdef_s1 = 1'b1, ptrdef_s2 = 1'b1;
+// Quasi-static (human-paced menu writes), so a plain 2FF is enough.
+reg [1:0] mspd_s1 = 2'd0, mspd_s2 = 2'd0;
 always @(posedge clk_sys) begin
     ptrdef_s1 <= opt_ptr_default;
     ptrdef_s2 <= ptrdef_s1;
+    mspd_s1   <= opt_mouse_speed;
+    mspd_s2   <= mspd_s1;
 end
 
 pocket_input #(
@@ -1367,6 +1374,7 @@ pocket_hid hid_bridge (
     .cont4_key     ( cont4_key ),
     .cont4_joy     ( cont4_joy ),
     .cont4_trig    ( cont4_trig ),
+    .speed_sel     ( mspd_s2 ),
     .ps2_key       ( ph_ps2_key ),
     .ps2_mouse     ( ph_ps2_mouse ),
     .kbd_present   ( hid_kbd_present ),
