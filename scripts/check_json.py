@@ -222,9 +222,17 @@ SCHEMA = {
                               'deferload', 'secondary'},
     },
     'video.json': {
-        'video': {'magic', 'scaler_modes'},
+        # display_modes added 2026-08-16. It was flagged as undocumented since
+        # 6400f1a declared it, but v1.0.1 and v1.0.2 both LOAD ON HARDWARE with
+        # all four ids present — and this checker's whole premise is that the
+        # Pocket rejects the entire descriptor on an unknown key. A core that
+        # loads is proof the key is accepted, so the schema was stale, not the
+        # JSON. Left as the single false positive it was, it made the checker
+        # useless as a release gate (one permanent FAIL trains you to ignore it).
+        'video': {'magic', 'scaler_modes', 'display_modes'},
         'video.scaler_modes[]': {'width', 'height', 'aspect_w', 'aspect_h',
                                  'rotation', 'mirror'},
+        'video.display_modes[]': {'id'},
     },
     'audio.json': {'audio': {'magic'}},
     'variants.json': {'variants': {'magic', 'variant_list'}},

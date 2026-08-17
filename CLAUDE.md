@@ -447,7 +447,8 @@ Re-verify boot (the screenshot check above) after ANY SR change.
   `maclc.iso` auto-mounts), blockdev slot 2, read-only (sd_wr[2] tied).
   cd_enable is hardwired 1 in mac_lc_pocket.sv — rebuild with 0 as the A/B
   lever if ID-3 bus presence ever misbehaves. CDA1 probe = the CD target's
-  command/sense story. HW-UNVALIDATED until the next card trip.
+  command/sense story. **HW-VALIDATED 2026-08-16** (user: ISO mounts and
+  works) — the ISO-only CD target is real, working functionality now.
 - ~~"Original" aspect 256:171~~ moot here: the Pocket declares a single
   512x384 4:3 scaler mode in video.json and Analogue's scaler handles fitting.
   `sys/video_freak.sv` and `scripts/aspect_check.py` do not exist in this fork.
