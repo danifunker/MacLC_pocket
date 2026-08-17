@@ -141,27 +141,6 @@ module pocket_hid (
 	// magnitude is scaled, and the residual never exceeds (1<<shift)-1.
 	reg signed [11:0] res_x, res_y;
 
-	// ---- Button ------------------------------------------------------------
-	// ★ THE BUTTON NEEDS ITS OWN PATH (hardware 2026-08-16). buildCB folded it
-	// into the motion report on the reasoning that HID emits a report whenever
-	// a button changes — true of the DEVICE, but what this module can see is
-	// APF's report COUNTER, and a press or release with the mouse held still
-	// does not necessarily advance it. Symptom on hardware: click a menu title
-	// and it opens, release does nothing, and the release only lands on the
-	// next mouse MOVEMENT — a menu that will not close, plus an apparent delay.
-	// So button changes are watched directly and forwarded immediately.
-	//
-	// Debounced first: the button bits share a 32-bit word with X, so a sample
-	// taken mid-update could momentarily show a mixed value and inject a
-	// phantom click. Requiring the synchronised value to hold for BTN_STABLE
-	// clocks (~0.25 us) removes that risk and is imperceptible next to a human
-	// click of tens of milliseconds.
-	localparam integer BTN_STABLE = 8;
-	reg        btn_cand;                 // last value seen
-	reg [3:0]  btn_cnt;                  // how long it has held
-	reg        btn_stable;               // debounced button state
-	reg        btn_reported;             // what the Mac was last told
-
 	wire [1:0] shift = speed_sel;
 	wire signed [11:0] sum_x = res_x + $signed({{4{hid_dx[7]}}, hid_dx});
 	wire signed [11:0] sum_y = res_y + $signed({{4{hid_dy[7]}}, hid_dy});
@@ -197,47 +176,22 @@ module pocket_hid (
 		end
 	endfunction
 
-	wire btn_raw = mouse_present & hid_btn;
-
-	always @(posedge clk) begin
-		if (reset) begin
-			btn_cand   <= 1'b0;
-			btn_cnt    <= 4'd0;
-			btn_stable <= 1'b0;
-		end else if (btn_raw != btn_cand) begin
-			btn_cand <= btn_raw;
-			btn_cnt  <= 4'd0;
-		end else if (btn_cnt == BTN_STABLE-1) begin
-			btn_stable <= btn_cand;
-		end else begin
-			btn_cnt <= btn_cnt + 4'd1;
-		end
-	end
-
 	always @(posedge clk) begin
 		if (reset) begin
 			ps2_mouse  <= 25'd0;
 			m_cnt_prev <= 16'd0;
-			res_x        <= 12'sd0;
-			res_y        <= 12'sd0;
-			btn_reported <= 1'b0;
+			res_x      <= 12'sd0;
+			res_y      <= 12'sd0;
 		end else begin
-			// A button change goes out on its own, with ZERO deltas so no
-			// motion is applied twice. If a report carries motion AND a button
-			// change, this fires first and the motion follows on the next
-			// clock — m_cnt_prev is not consumed here, so nothing is lost.
-			if (btn_stable != btn_reported) begin
-				btn_reported <= btn_stable;
-				ps2_mouse    <= { ~ps2_mouse[24], 8'd0, 8'd0,
-				                  status_byte(1'b0, 1'b0, btn_stable) };
-			end
 			// A new report is a CHANGE in the counter — never equality, and
 			// never an assumption that it increments by one (reports can be
-			// missed and the counter wraps).
-			else if (mouse_present && (k4_key_s2[15:0] != m_cnt_prev)) begin
+			// missed and the counter wraps). Buttons ride the same report:
+			// HID emits one on a button change, so no separate click path is
+			// needed to keep a click from waiting.
+			if (mouse_present && (k4_key_s2[15:0] != m_cnt_prev)) begin
 				m_cnt_prev <= k4_key_s2[15:0];
 				ps2_mouse  <= { ~ps2_mouse[24], dy_out[7:0], dx_out[7:0],
-				                status_byte(dy_out[8], dx_out[8], btn_reported) };
+				                status_byte(dy_out[8], dx_out[8], hid_btn) };
 				// Keep only what the shift discarded.
 				res_x <= sum_x - (step_x <<< shift);
 				res_y <= sum_y - (step_y <<< shift);
