@@ -336,6 +336,17 @@ Re-verify boot (the screenshot check above) after ANY SR change.
   pulse, VIA1 PA7, and the VIA timer half-rate fix (`33ebdd1` — the driver's
   install-time drive-speed check is timer-paced, so a 2x timer error would
   also have corrupted it).
+- ★★★ **ALL FLOPPY FORMATS WORK (re-confirmed on hardware 2026-08-17).**
+  Supported and classified in `mac_lc_pocket.sv:1753-66`: **400K and 800K
+  GCR, 720K and 1.44 MB MFM** (sizes 409600 / 819200 / 737280 / 1474560,
+  plus the DiskCopy 4.2 variants). 800K GCR and 1.44 MB MFM are HW-verified;
+  400K and 720K ride the same paths but have not been run.
+  ★ The 08-14 reports of GCR bombing or hanging on hardware were **BAD-FIT
+  ARTIFACTS**, not a floppy defect — user re-tested on buildCG and 800K
+  works fine, with no change ever made to the floppy path. GCR was called
+  "the headline open defect" for weeks; it was the fit, like the icon
+  garbling, the F-lines and the stuck alert before it. Do not reopen it
+  without a fresh reproduction on a known-good fit.
 - **800K GCR disks WORK END-TO-END as of 2026-08-05** — mount, catalog, and
   **file reads**: on a cold boot a 482K application was launched off an 800K
   GCR floppy and copied to a SCSI disk with zero driver errors (head seeking,

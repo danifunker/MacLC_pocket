@@ -17,7 +17,8 @@ Version 1.0.0. Boots System 6.0.8, 7.1, and 7.5.5 to a 256-colour desktop.
 - 512×384 video at 1/2/4/8 bpp, 4:3, with Analogue Display Modes
   (the CRT Trinitron profile suits this machine)
 - Two SCSI hard disks, readable and writable, plus a read-only ISO CD-ROM
-- 1.44 MB MFM floppy images (`.dsk`/`.img`, raw or DiskCopy 4.2), read-only
+- Floppy images, read-only: **400K and 800K GCR, 720K and 1.44 MB MFM**
+  (`.dsk`/`.img`, raw or DiskCopy 4.2)
 - Sound, ADB keyboard and mouse via the Pocket's controls, remappable
 - RTC set from the Pocket's clock at every launch
 - Boots in 256 colours out of the box (a factory PRAM ships in the core)
@@ -199,9 +200,6 @@ here. The extra `<>` key of ISO (international) keyboards has no code.
 
 ## Known limitations
 
-- **800K GCR floppy images** can crash or hang the system. Mounting works;
-  sustained use can end in a bomb or a freeze. Use 1.44 MB MFM images or
-  the hard disk instead. This is the main open defect.
 - **PRAM does not persist.** The factory PRAM boots the machine in 256
   colours; changes you make in control panels (volume, mouse speed, depth)
   last until power-off and then reset.

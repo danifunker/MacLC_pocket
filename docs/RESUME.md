@@ -112,8 +112,15 @@ buttons.
 
 1. Soak buildCG (power-off boots, Finder work, icon gate), then **ship
    v1.0.3**: mouse default, NMI, arrow keys, Dock HID + speed, no alert bug.
-2. **Retest GCR 800K on a good fit** — every measurement of it predates the
-   good-fit era; it may be smaller than believed. Cheapest high-value test.
+2. ~~Retest GCR 800K~~ **DONE 2026-08-17 — GCR WORKS.** User: 800K disks are
+   fine on buildCG. No floppy-path change was made; the old F-line/hang
+   reports were bad-fit artifacts. That closes what the postmortem called the
+   headline open defect, and it is the fourth symptom (after icon garbling,
+   F-lines and the stuck alert) that turned out to be the fit rather than a
+   defect. **Supported floppy formats: 400K/800K GCR and 720K/1.44 MB MFM**
+   (`mac_lc_pocket.sv:1753-66` classifies 409600/819200/737280/1474560 plus
+   the DiskCopy 4.2 variants). 800K and 1.44 MB are HW-verified; 400K and
+   720K share those paths but nobody has run one.
 3. Then either the Verilator harness or the marginal-cone constraint work
    (postmortem step 2, still unrun; nine labelled builds with databases are
    archived to aim it).
@@ -362,7 +369,13 @@ Open items (user list 08-14d), status end-of-day:
   ONLY computer-CRT profile Analogue ships. video.json trimmed to
   0x10/0x20/0x30/0x40 (Trinitron + the three real LCD technologies).
   User leaning Trinitron-only — one further JSON trim if decided.
-- ★ 08-14e GCR floppy (open, HW): 800K GCR use → nondeterministic
+- ★★★ 2026-08-17: **GCR IS RESOLVED — user reports 800K working fine on a
+  good fit.** Nothing was changed in the floppy path to fix it; the failures
+  below were bad-fit-era artifacts, exactly like the icon garbling, the
+  F-lines and the stuck alert. The "headline open defect" is closed. The
+  entry below is kept as history — do NOT reopen it without a fresh
+  reproduction on a known-good fit.
+- ~~★ 08-14e GCR floppy (open, HW)~~ (HISTORY): 800K GCR use → nondeterministic
   F-line bomb OR hard hang; eject attempts crash the Finder. MFM 1.44M
   fully working (envelope fix validated). Offline sweep so far: byte
   demux == MiSTer ✓, bulk-copy content-exact in bench (22/22) ✓.

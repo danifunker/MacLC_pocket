@@ -4,6 +4,28 @@ Things known to be missing or imperfect that are **not** being worked on right
 now, with the reasoning for the deferral. `docs/RESUME.md` carries live state;
 this file is the parking lot.
 
+## Closed 2026-08-17
+
+Four long-standing "defects" turned out to be **bad-fit artifacts** — they
+vanished on a good fit with no code change ever made to the subsystem blamed:
+
+| symptom | was believed to be | actually |
+|---|---|---|
+| Finder colour-icon garbling | a missing marginality anchor | the fit |
+| F-line bombs / freezes | boot-at-depth, then rung 3 | the fit |
+| alert sound never stops | an ASC FIFO status bug | the fit |
+| **800K GCR floppies crash or hang** | **the headline open defect** | **the fit** |
+
+GCR is the expensive one: it was the project's top open item for weeks and
+carried a whole offline toolchain built to chase it (`tb_gcr_read`,
+`gcr_census.py`, `gcr_data_census.py`). Those tools stay — they proved the
+data path was correct, which was true and useful — but the bug they were
+hunting was never in the floppy path.
+
+**Lesson for this list: before investigating any hardware symptom, reproduce
+it on a fit that is known good.** A symptom measured during a bad-fit era is
+not evidence about the subsystem it appears in.
+
 ## Deferred by decision
 
 ### OSD unload announcement
@@ -20,8 +42,7 @@ Deferred because the practical flow already works — eject from inside the Mac
 (or let the installer eject), then mount the next image. Swapping under a live
 volume is hostile on real hardware too; MAME bombs the same way.
 
-Worth doing alongside the GCR floppy work, since both live in the same media
-path.
+Nobody has hit it in normal use. Revisit only if a real workflow needs it.
 
 ### PRAM persistence
 The plumbing exists — the `apf_blockdev` PRAM FSM, `pram_save_req`, and a
