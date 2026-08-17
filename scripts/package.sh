@@ -105,15 +105,18 @@ PY
 # (2026-08-16: the dist copy was a static leftover nothing regenerated — the
 # import-era "SCSI not implemented" text shipped in v1.0.0 because of it.)
 "$PY_BIN" - << 'PYEOF'
-s = open('info.txt', 'rb').read().replace(b'
-', b'
-')
-if not s.endswith(b'
-'): s += b'
-'
-open('dist/Cores/danifunker.MacLC/info.txt', 'wb').write(s.replace(b'
-', b'
-'))
+# Built from byte values, NOT escape sequences: an earlier version of this
+# block ended up with literal CR/LF inside its string literals, which is a
+# Python syntax error, so info.txt propagation silently never ran between
+# 2026-08-16 and 08-17. bytes([13,10]) cannot suffer that.
+CRLF = bytes([13, 10])
+LF   = bytes([10])
+text = open("info.txt", "rb").read().replace(CRLF, LF)
+if not text.endswith(LF):
+    text += LF
+out = text.replace(LF, CRLF)
+open("dist/Cores/danifunker.MacLC/info.txt", "wb").write(out)
+print("info.txt -> dist (%d bytes, CRLF)" % len(out))
 PYEOF
 
 echo "packaged $(du -h "$DEST/bitstream.rbf_r" | cut -f1) bitstream into $DEST"

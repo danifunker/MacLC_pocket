@@ -8,9 +8,10 @@ Boots System 6.0.8, 7.1 and 7.5.5 to a 256-colour desktop. Requires a Mac
 LC ROM as boot0.rom and a bootable disk image as maclc.hda (auto-mounts at
 launch, along with maclc2.hda and maclc.iso if present).
 
-Features: 2/10 MB RAM, 512x384 at up to 256 colours, two read/write SCSI
+Features: 10 MB RAM, 512x384 at up to 256 colours, two read/write SCSI
 hard disks, ISO CD-ROM, 1.44 MB MFM floppy images, remappable controls
-with mouse mode on the D-Pad.
+with mouse mode on the D-Pad, and USB keyboard and mouse through the
+Analogue Dock (Alt acts as Command, the Windows key as Option).
 
 Known limitations: 800K GCR floppy images can crash the system; PRAM does
 not persist across power cycles; floppies are read-only.

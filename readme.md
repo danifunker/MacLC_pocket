@@ -11,7 +11,9 @@ Version 1.0.0. Boots System 6.0.8, 7.1, and 7.5.5 to a 256-colour desktop.
 
 ## Features
 
-- 2 MB or 10 MB RAM (10 MB default; "Memory" + "Reset & Apply" in the core menu)
+- 10 MB RAM
+- **USB keyboard and mouse via the Analogue Dock** — plug them in and they
+  work, with Alt as Command and the Windows key as Option
 - 512×384 video at 1/2/4/8 bpp, 4:3, with Analogue Display Modes
   (the CRT Trinitron profile suits this machine)
 - Two SCSI hard disks, readable and writable, plus a read-only ISO CD-ROM

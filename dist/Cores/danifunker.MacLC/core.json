@@ -9,8 +9,8 @@
             "description": "Apple Macintosh LC. 68020, 512x384, 256 colours.",
             "author": "danifunker",
             "url": "https://github.com/danifunker/MacLC_pocket",
-            "version": "1.0.2",
-            "date_release": "2026-08-16"
+            "version": "1.0.3",
+            "date_release": "2026-08-17"
         },
         "framework": {
             "target_product": "Analogue Pocket",
