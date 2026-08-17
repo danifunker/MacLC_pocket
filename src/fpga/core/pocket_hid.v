@@ -53,9 +53,17 @@ module pocket_hid (
 	input  wire [31:0] cont4_joy,
 	input  wire [15:0] cont4_trig,
 
-	// Mouse sensitivity, already synchronised by core_top: 0 = 1:1, 1 = 1/2,
-	// 2 = 1/4, 3 = 1/8.
-	input  wire [1:0]  speed_sel,
+	// [1:0] sensitivity: 0 = 1:1, 1 = 1/2, 2 = 1/4, 3 = 1/8.
+	// [2]   DIAGNOSTIC: 1 disables the button's own report trigger.
+	//       ★ The point is that the NETLIST IS IDENTICAL either way — the
+	//       registers, the comparators and the emit path all still exist and
+	//       still toggle. Only whether btn_edge can fire changes. So one
+	//       bitstream tests both hypotheses for why every button-carrying
+	//       build has been unstable: if it misbehaves with clicks OFF too,
+	//       the extra LOGIC/placement is responsible; if it is stable with
+	//       clicks off and unstable with them on, the extra ps2_mouse EVENTS
+	//       are. Four builds and four seeds could not separate those.
+	input  wire [2:0]  speed_sel,
 
 	output reg  [10:0] ps2_key,
 	output reg  [24:0] ps2_mouse,
@@ -116,6 +124,28 @@ module pocket_hid (
 	// needs about four.
 	reg [15:0] m_cnt_prev;
 
+
+	// ★★ BYTE POSITION, CORRECTED ON HARDWARE 2026-08-16. The relative delta is
+	// an 8-bit SIGNED value at bits [15:8] — NOT a 16-bit value at [15:0].
+	// ../Analogue-Amiga src/MPUBIOS/drivers/KMIO/inputs.cpp:93-96 is the
+	// working reference:
+	//     signed short x = (short)((CONTROLLER_JOY_REG(4) & 0x0000FF00));
+	//     x = x / (speed << 5);
+	// It masks 0xFF00 and keeps the value scaled by 256 so the divide holds
+	// precision. Reading [15:0] instead yields delta*256 plus whatever occupies
+	// the low byte, which the +/-63 ADB clamp turns into near-permanent
+	// saturation (reported as uniformly far too fast) and, on Y, lets low-byte
+	// junk corrupt the sign (reported as Y not tracking).
+	wire signed [7:0] hid_dx = $signed(k4_joy_s2[15:8]);
+	wire signed [7:0] hid_dy = $signed(k4_trg_s2[15:8]);
+	// The Mac mouse has ONE button, so any physical button is that button.
+	wire hid_btn = |k4_joy_s2[18:16];
+
+	// ★ DECLARED AFTER hid_btn ON PURPOSE. This block used to sit above it,
+	// a forward reference that Quartus accepted silently and ModelSim
+	// rejected outright (vlog-2730 undefined, then vlog-2388 redeclared).
+	// Under `default_nettype none` that should never have compiled at all.
+	// Keep declarations below what they use.
 	// ---- Button trigger ----------------------------------------------------
 	// The button must be able to send a report BY ITSELF. APF's report counter
 	// does not necessarily advance for a press or release with the mouse held
@@ -139,23 +169,7 @@ module pocket_hid (
 	//   change holds for far more than one clock; a glitch does not.
 	reg btn_prev, btn_d;
 	wire btn_now = mouse_present & hid_btn;
-	wire btn_edge = (btn_now == btn_d) && (btn_now != btn_prev);
-
-	// ★★ BYTE POSITION, CORRECTED ON HARDWARE 2026-08-16. The relative delta is
-	// an 8-bit SIGNED value at bits [15:8] — NOT a 16-bit value at [15:0].
-	// ../Analogue-Amiga src/MPUBIOS/drivers/KMIO/inputs.cpp:93-96 is the
-	// working reference:
-	//     signed short x = (short)((CONTROLLER_JOY_REG(4) & 0x0000FF00));
-	//     x = x / (speed << 5);
-	// It masks 0xFF00 and keeps the value scaled by 256 so the divide holds
-	// precision. Reading [15:0] instead yields delta*256 plus whatever occupies
-	// the low byte, which the +/-63 ADB clamp turns into near-permanent
-	// saturation (reported as uniformly far too fast) and, on Y, lets low-byte
-	// junk corrupt the sign (reported as Y not tracking).
-	wire signed [7:0] hid_dx = $signed(k4_joy_s2[15:8]);
-	wire signed [7:0] hid_dy = $signed(k4_trg_s2[15:8]);
-	// The Mac mouse has ONE button, so any physical button is that button.
-	wire hid_btn = |k4_joy_s2[18:16];
+	wire btn_edge = ~speed_sel[2] && (btn_now == btn_d) && (btn_now != btn_prev);
 
 	// ---- Sensitivity ------------------------------------------------------
 	// speed_sel: 0 = 1:1, 1 = half, 2 = quarter, 3 = eighth.
@@ -166,7 +180,7 @@ module pocket_hid (
 	// magnitude is scaled, and the residual never exceeds (1<<shift)-1.
 	reg signed [11:0] res_x, res_y;
 
-	wire [1:0] shift = speed_sel;
+	wire [1:0] shift = speed_sel[1:0];
 	wire signed [11:0] sum_x = res_x + $signed({{4{hid_dx[7]}}, hid_dx});
 	wire signed [11:0] sum_y = res_y + $signed({{4{hid_dy[7]}}, hid_dy});
 	wire signed [11:0] step_x = sum_x >>> shift;
