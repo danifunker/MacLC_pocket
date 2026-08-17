@@ -374,6 +374,7 @@ always @(*) begin
     32'hF0000044: bridge_rd_data <= {23'd0, opt_code_l};
     32'hF0000048: bridge_rd_data <= {23'd0, opt_code_r};
     32'hF000004C: bridge_rd_data <= {23'd0, opt_code_start};
+    32'hF0000050: bridge_rd_data <= {31'd0, opt_ptr_default};
     32'hF0xxxxxx: bridge_rd_data <= 32'd0;   // actions read back as 0
     32'hF8xxxxxx: begin
         bridge_rd_data <= cmd_bridge_rd_data;
@@ -425,6 +426,12 @@ reg [8:0] opt_code_l     = 9'h000;
 reg [8:0] opt_code_r     = 9'h000;
 reg [8:0] opt_code_start = 9'h000;
 
+// Startup input mode: 1 = pointer/mouse at power-on, 0 = keyboard. Sampled by
+// pocket_input at ITS reset release, which core_top gates on reset_n so the
+// sample happens after the OS has written this value (see the instantiation).
+// The power-on constant is the fallback when no Core Settings value is sent.
+reg       opt_ptr_default = 1'b1;
+
 always @(posedge clk_74a) begin
     // Actions are one-shot: they self-clear once the core side has seen them.
     opt_reset_apply <= 1'b0;
@@ -451,6 +458,7 @@ always @(posedge clk_74a) begin
         32'hF0000044: opt_code_l     <= bridge_wr_data[8:0];
         32'hF0000048: opt_code_r     <= bridge_wr_data[8:0];
         32'hF000004C: opt_code_start <= bridge_wr_data[8:0];
+        32'hF0000050: opt_ptr_default <= bridge_wr_data[0];
         default: ;
         endcase
     end
@@ -1286,11 +1294,31 @@ apf_bridge_loader #(
     wire [8:0] rmap_r     = (kmap_s2[45 +: 9] == 9'h1FF) ? kcode_s2[45 +: 9] : kmap_s2[45 +: 9];
     wire [8:0] rmap_start = (kmap_s2[54 +: 9] == 9'h1FF) ? kcode_s2[54 +: 9] : kmap_s2[54 +: 9];
 
+// ★ pocket_input's reset is NOT PLL lock alone. The startup input mode is
+// sampled at this reset's release, and the OS holds reset_n LOW while it
+// loads data slots and writes the interact values (see the reset_n_sys note
+// further down). PLL lock happens long before that write lands, so a reset on
+// lock alone would sample opt_ptr_default while it still held its power-on
+// constant and the user's Core Settings choice would never take effect.
+// reset_n releases after the write, which makes its edge the correct — and
+// only — safe sampling point. Its own 2FF sync is local because reset_n_sys
+// is declared below this instantiation.
+reg  [1:0] pi_rstn_s = 2'b00;
+always @(posedge clk_sys) pi_rstn_s <= {pi_rstn_s[0], reset_n};
+
+// Startup input mode into clk_sys. Quasi-static (written once at core load,
+// then only by a human in the menu), so a 2FF sync is sufficient.
+reg  ptrdef_s1 = 1'b1, ptrdef_s2 = 1'b1;
+always @(posedge clk_sys) begin
+    ptrdef_s1 <= opt_ptr_default;
+    ptrdef_s2 <= ptrdef_s1;
+end
+
 pocket_input #(
     .CLK_HZ ( 32_500_000 )
 ) input_bridge (
     .clk        ( clk_sys ),
-    .reset      ( ~pll_core_locked_sys ),
+    .reset      ( ~pll_core_locked_sys | ~pi_rstn_s[1] ),
     .cont1_key  ( cont1_key[15:0] ),
     .map_a      ( rmap_a ),
     .map_b      ( rmap_b ),
@@ -1299,6 +1327,7 @@ pocket_input #(
     .map_l      ( rmap_l ),
     .map_r      ( rmap_r ),
     .map_start  ( rmap_start ),
+    .ptr_default( ptrdef_s2 ),
     .ps2_key    ( ps2_key ),
     .ps2_mouse  ( ps2_mouse ),
     .ptr_mode   ( ptr_mode )

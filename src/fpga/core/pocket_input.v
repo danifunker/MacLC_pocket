@@ -83,6 +83,11 @@ module pocket_input #(
 	output reg  [10:0] ps2_key,
 	output reg  [24:0] ps2_mouse,
 
+	// Startup input mode, sampled at reset release: 1 = pointer (mouse),
+	// 0 = keyboard. See the mode-toggle block for why the RELEASE EDGE is the
+	// only safe sampling point.
+	input  wire        ptr_default,
+
 	// 1 = pointer mode, 0 = keyboard mode. Exposed for debug/LED only.
 	output wire        ptr_mode
 );
@@ -179,13 +184,28 @@ module pocket_input #(
 	// ---- Mode toggle on Select -------------------------------------------
 	// Rising edge only, so press-and-hold does not oscillate. Select is used
 	// (not A/B) so the toggle never collides with click or action.
+	//
+	// STARTUP MODE IS SAMPLED AT RESET RELEASE, and the reset this module is
+	// given is load-bearing. buildBQ implemented this as a LIVE FOLLOW of the
+	// menu value until the first Select press; that whole family of netlists
+	// was withdrawn in buildBX, so the feature returns in the simplest form
+	// that can work.
+	//
+	// "Simplest" nearly meant sampling at PLL lock, which would have shipped
+	// broken: core_top holds `reset_n` LOW while the OS loads data slots AND
+	// WRITES THE INTERACT VALUES, and PLL lock happens long before that. A
+	// module reset on PLL lock alone latches this register while ptr_default
+	// is still the power-on constant, so the user's Core Settings choice
+	// would be read too early and silently ignored on every launch. core_top
+	// therefore resets this module on (~pll_locked | ~reset_n), which
+	// releases AFTER the interact write — see the pocket_input instantiation.
 	reg mode_ptr = 1'b0;
 	reg sel_d    = 1'b0;
 	reg mode_flip;                     // 1-cycle pulse: mode just changed
 	always @(posedge clk) begin
 		mode_flip <= 1'b0;
 		if (reset) begin
-			mode_ptr <= 1'b0;
+			mode_ptr <= ptr_default;
 			sel_d    <= 1'b0;
 		end else begin
 			sel_d <= keys[B_SELECT];
