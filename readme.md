@@ -50,8 +50,26 @@ writing can damage its filesystem.
 
 ## Controls
 
-Two input modes, toggled with **Select**. The core powers on in keyboard
-mode; press Select once for mouse mode.
+### USB keyboard and mouse (Dock)
+
+Plug a USB keyboard and/or mouse into the Analogue Dock and they work
+directly — no setting to change. The keyboard's modifiers land in the
+positions a Mac expects: **Alt** acts as **Command** and the **Windows**
+key as **Option**, so they sit where your thumbs already are. Arrow keys,
+Return, Backspace, Tab and the function keys all work.
+
+**Dock mouse speed** in the Interact menu offers Normal / Half / Quarter /
+Eighth if your mouse or trackpad tracks faster than you like. Normal
+matches a period mouse.
+
+The Pocket's own controls stay live while docked, so a gamepad and a real
+keyboard can be used together.
+
+### Handheld
+
+Two input modes, toggled with **Select**. The core powers on in **mouse**
+mode; press Select for keyboard mode. (The startup mode is selectable in
+the Interact menu — change it, then use **Reset & Apply**.)
 
 - **Mouse mode**: D-Pad moves the cursor, **A** clicks. Only the D-Pad and
   A are re-purposed — every other button still types its key, so Command
@@ -62,10 +80,45 @@ mode; press Select once for mouse mode.
 Default assignments: **A** Return · **B** Space · **X** Shift · **Y** N ·
 **L** Esc · **R** Q · **Start** Command.
 
-Every button is remappable in the core's Interact menu. Pick a key from
-the button's dropdown, or pick **Custom** and enter a code from the
-tables below in the button's slider (Y and Start are dropdown-only; the
-menu is at its 16-entry limit).
+**A, B, X and Y** are remappable in the core's Interact menu. Pick a key
+from the button's dropdown, or pick **Custom** and enter a code from the
+tables below in the button's slider.
+
+**L, R and Start** are fixed at Esc, Q and Command. This is a Pocket menu
+limitation, not a core one: the Interact descriptor has a size ceiling
+(somewhere above 7,793 bytes and at or below 10,407 — a file over it
+fails to load with "Load error in interact"), and seven remappable
+buttons plus their sliders does not fit under it. The RTL supports all
+seven.
+
+<details>
+<summary><b>Advanced: remapping L, R or Start by editing interact.json</b></summary>
+
+The core reads whatever the menu sends, so you can trade which buttons are
+adjustable. In `Cores/danifunker.MacLC/interact.json`, each button is one
+entry in `interact.variables`. To make **L** adjustable instead of **Y**,
+change the Y entry's `name` and `address`:
+
+| button | address      | custom-code slider |
+|--------|--------------|--------------------|
+| A      | `0xf0000018` | `0xf0000034`       |
+| B      | `0xf000001c` | `0xf0000038`       |
+| X      | `0xf0000020` | `0xf000003c`       |
+| Y      | `0xf0000024` | `0xf0000040`       |
+| L      | `0xf0000028` | `0xf0000044`       |
+| R      | `0xf000002c` | `0xf0000048`       |
+| Start  | `0xf0000030` | `0xf000004c`       |
+
+Give the edited entry a unique `id` (any unused number), keep its
+`defaultval` equal to one of its `options` values, and **keep the file
+under ~7.7 KB** — that is the real constraint. Adding an entry without
+removing one will push it over and the menu will stop loading; delete the
+entry for a button you don't need first.
+
+A button with no menu entry keeps its built-in default, so removing an
+entry never leaves a button dead.
+
+</details>
 
 Codes select key *positions* on a US keyboard; what a position types is
 decided by the keyboard layout of the System software you boot, so on a
@@ -155,6 +208,8 @@ here. The extra `<>` key of ISO (international) keyboards has no code.
   card, give the Pocket a minute at its menu before launching. Once the
   Finder is up, the machine is stable for long sessions.
 - **Special → Restart does not come back.** Power-cycle instead.
+- Unplugging a Dock mouse while its button is held leaves the Mac thinking
+  the button is still down; click once after reconnecting to clear it.
 - **Floppies are read-only** (the drive reports write-protected, so the
   OS never attempts a write).
 - Not present, by resource budget: 16bpp video, 640×480, the external

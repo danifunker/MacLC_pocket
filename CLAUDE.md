@@ -428,7 +428,13 @@ Re-verify boot (the screenshot check above) after ANY SR change.
   `scripts/grab_fresh.sh` (stock grab.sh serves STALE frames when video is
   dead), plus a >=2-boot Finder soak (see the probes-off anchor comment in
   MacLC.sv).
-- Floppy won't read at 16 MHz CPU speed
+- ~~Floppy won't read at 16 MHz CPU speed~~ **DOES NOT APPLY TO THIS FORK**
+  (corrected 2026-08-17). That is inherited MacPlus/MiSTer lore about a
+  selectable 8/16 MHz CPU. This core has no speed selector — there is no
+  `turbo`/`cpu_speed` signal anywhere and no menu entry — and the Mac LC
+  always runs at C15M, ~15.67 MHz (`mac_lc_pocket.sv:188`). Floppy reads
+  work at that speed: 1.44 MB MFM is HW-validated end to end, including a
+  full System 6.0.8 install from two floppies.
 - Bus retry via HALT signal not implemented
 - ~~"Original" aspect was 256:171~~ FIXED 2026-08-08: that was the Mac Plus
   512x342 screen, inherited at import — it drew ~12% wide and OVERFLOWED

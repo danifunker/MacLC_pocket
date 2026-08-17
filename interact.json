@@ -47,7 +47,7 @@
         "enabled": true,
         "address": "0xf0000054",
         "defaultval": "0x0",
-        "mask": "0xFFFFFFF8",
+        "mask": "0xFFFFFFFC",
         "options": [
           {
             "value": "0x0",
@@ -64,10 +64,6 @@
           {
             "value": "0x3",
             "name": "Eighth"
-          },
-          {
-            "value": "0x4",
-            "name": "Normal - clicks OFF"
           }
         ],
         "persist": true

@@ -1,3 +1,126 @@
+# RESUME — MacLC Pocket (2026-08-17: USB HID WORKS · the fit lottery PROVEN)
+
+## -5. ★★★ 08-17: Dock keyboard+mouse shipped, and the instability explained
+
+**Card at close:** `MacLCtest` = **buildCG** (5fbb203a) — HW-validated:
+Dock USB keyboard and mouse working, clicks correct, stable session.
+`MacLC` = v1.0.2 (BP bytes), `MacLCprev` = same. CG is the **v1.0.3
+candidate** pending a soak (buildBS ran clean for two days then failed a
+retest — one good session is not proof).
+
+### ★★★ THE FIT LOTTERY IS PROVEN (and so is its inverse)
+
+**buildBY (seed 2) F-lined; buildBY2 (seed 11) worked. RTL byte-identical.**
+First clean isolation of placement in the whole arc — every earlier
+experiment moved netlist and placement together. Full write-up:
+`docs/BUILD_INSTABILITY_MEASUREMENTS.md` §8.
+
+Permanently exonerated, because the netlist did not change between them:
+the marginality anchor · rung 3 / startup input mode · the SDC clock-group
+change · the ASC pin · design density · any specific RTL edit. STA cannot
+predict it either — BP, BY and BY2 had near-identical green gates.
+
+**★ THE ASC ALERT FIX WAS NEVER NEEDED.** buildCG plays and stops the alert
+with `rtl/asc.sv` byte-identical to BP and no `dbg_asc`/`anchor_asc0`. The
+stuck alert — v1.0.1's headline known issue — was fit-expressed, like the
+icon garbling and the F-lines. The queued "BP + ASC fix" build is dropped.
+
+**★★ BUT: repeated failure of ONE netlist is NOT the dice.** buildCD failed
+at seeds 11, 23 AND 37; buildCF at 41; while CC was good at 11 and CE (CC's
+exact RTL) good at 41. Four card trips were spent re-rolling because
+"a bad fit is not evidence about your change" was applied past its range.
+Both halves of the rule now live in the measurements doc. Cost: two wasted
+card trips and a false conviction of the fitter.
+
+### USB keyboard + mouse (buildCA → CG) — the wire format, learned the hard way
+
+Nothing in `src/fpga/apf/` changed and `core.json` needed no edit —
+`core_top` already declared `cont3_*`/`cont4_*` and ignored them.
+`src/fpga/core/pocket_hid.v` decodes them into the existing
+`ps2_key`/`ps2_mouse` buses, so adb_device → Egret → Mac is untouched.
+
+Three facts that cost builds to learn — **read before touching the mouse**:
+
+1. **The delta is an 8-bit SIGNED value at bits [15:8], not 16 bits at
+   [15:0].** Reference: `../Analogue-Amiga`
+   `src/MPUBIOS/drivers/KMIO/inputs.cpp:93-96` masks `0x0000FF00` and keeps
+   the value scaled by 256 so its divide holds precision. Reading [15:0]
+   gives delta*256 plus low-byte junk: saturation on nearly every report
+   (uniformly far too fast) and a corrupted sign on Y (Y not tracking).
+2. **`adb_device` OVERWRITES its mouse register and never accumulates**
+   (`adb_device.sv:680-692`), and the ADB register is 7-bit signed
+   (-64..+63). MiSTer forwards each PS/2 report and so silently DISCARDS
+   intermediate motion — that lossiness is the feel users are calibrated to.
+   Accumulating loses nothing and therefore over-delivers by a CONSTANT
+   factor (report_rate/tick_rate). Forward one event per report.
+3. **The button needs its own trigger.** APF's report counter does not
+   necessarily advance for a press or release on a still mouse, so a button
+   riding only the motion report arrives late — a menu that opens on click
+   and will not close until the mouse moves.
+
+Menu: **Dock mouse speed** (Normal/Half/Quarter/Eighth, id 131 @0xF0000054).
+Modifiers land in Mac positions: Alt → Command, GUI → Option.
+
+### ★ NEW INSTRUMENT: verilator/tb_pocket_hid.v (ModelSim, no Quartus)
+
+There is no Verilator on the build machine; ModelSim ships with Quartus Lite
+and needs none of the broken full-machine harness. `run_tb_pocket_hid.sh`
+takes any DUT path, so old commits can be benched.
+
+It found two real defects offline that four card trips had missed: a
+**forward reference** (`btn_now` used `hid_btn` 17 lines before its
+declaration — Quartus accepted it silently, ModelSim rejected it, and under
+`` `default_nettype none `` it should never have compiled) and the wire-format
+error above. It also REFUTED the event-storm theory by measurement.
+
+★ It also shows buildCD's module was FUNCTIONALLY CLEAN — identical to CG on
+every test both support. **So why CD failed three times is still unknown.**
+Left labelled rather than explained.
+
+### interact.json — the size ceiling, bisected at last
+
+The 08-15 note said the killer axis "was never isolated". It is **FILE
+SIZE**: >7,793 bytes fails, ≤10,407 fails, and the shipped v1.0.2 menu at
+7,793 loads. **9-option lists are fine** and **15 variables are fine** (the
+Amiga core ships 15) — both were suspects and both are innocent.
+Full data: `docs/interact_envelope.md`.
+
+Current menu: 12 vars, **7,471 bytes, 322 to spare**. Memory stays removed
+(10 MB hardwired), Reset PRAM stays out (no value), the clicks-OFF
+diagnostic option is removed. L/R/Start are fixed; the readme documents how
+an advanced user can trade an entry to remap them.
+
+★ **defaultval semantics stay OPEN.** The card's persist files prove the
+hex-string defaults are delivered as VALUES (id 110 = 90 = 0x5A Return), so
+do NOT "fix" them to indices — that would send scancode 0 and kill all seven
+buttons.
+
+### Process rules this day earned
+
+- **Commit as you go.** `git checkout interact.json` destroyed the only
+  load-verified menu, which existed solely in the working tree and on the
+  card. Recovered from `scratch/staging`. Load-verified config belongs in git.
+- **Never chain commits into a backgrounded compile** (`... && git commit &&
+  ... &` ). One failed commit aborted the chain and the build never started,
+  invisibly.
+- **Re-serialising JSON is not editing it.** `json.dumps(indent=4)` rewrote
+  6,848 bytes to 10,591 and blew the ceiling. Insert as text.
+- Archive **output_files AND db** per build — the db is the post-fit netlist
+  and the only path to a placement comparison later.
+
+### Next
+
+1. Soak buildCG (power-off boots, Finder work, icon gate), then **ship
+   v1.0.3**: mouse default, NMI, arrow keys, Dock HID + speed, no alert bug.
+2. **Retest GCR 800K on a good fit** — every measurement of it predates the
+   good-fit era; it may be smaller than believed. Cheapest high-value test.
+3. Then either the Verilator harness or the marginal-cone constraint work
+   (postmortem step 2, still unrun; nine labelled builds with databases are
+   archived to aim it).
+
+Deferred by decision, with reasoning: `TODO.md`.
+
+(previous header below)
 # RESUME — MacLC Pocket (2026-08-17: ★★★ v1.0.1 RELEASED — BP bytes)
 
 ## -4. ★★★ v1.0.1 SHIPPED (2026-08-17, morning after the all-nighter)

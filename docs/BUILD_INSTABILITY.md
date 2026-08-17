@@ -1,3 +1,40 @@
+> ## ★★★ RESOLVED 2026-08-17 — read this first
+>
+> **The placement theory was right, and it is now proven.** buildBY (fitter
+> seed 2) F-lined on hardware; **buildBY2, byte-identical RTL at seed 11,
+> worked.** One variable, opposite outcomes. Everything below that this
+> document lists as a live suspect — the anchor, rung 3, the SDC change,
+> density — is exonerated, because the netlist did not change between those
+> two builds.
+>
+> Consequences, all confirmed on hardware:
+>
+> - **The stuck-alert bug was fit-expressed too.** buildCG plays and stops
+>   the alert with `rtl/asc.sv` byte-identical to BP. The "ASC alert fix" was
+>   credited on buildBW, which was a bad fit in every other respect. Step 1
+>   of the plan below is therefore **cancelled** — there was nothing to fix.
+> - **Step 2 (the VRAM-shadow constraint experiment) was never run**, and it
+>   is still the only thing that would END the lottery rather than manage it.
+>   Nine builds are now archived with full compilation databases and known
+>   hardware verdicts, which is the labelled data that experiment wanted.
+> - **The build artifacts cannot predict a bad fit.** ALMs, registers, worst
+>   settling time, synchronizer-chain count and peak interconnect all overlap
+>   between good and bad; the largest build is good and the smallest is bad.
+>   A bit-level analysis of the `.sof` files found *fewer* regions separating
+>   good from bad than chance would produce.
+>
+> **★ And the rule has a second half, learned expensively the same day.** A
+> single bad fit is not evidence about your change — but **repeated failure
+> of ONE netlist is not the dice either.** buildCD failed at seeds 11, 23 and
+> 37 and buildCF at 41, while buildCC was good at 11 and buildCE (CC's exact
+> RTL) good at 41. Two card trips were spent re-rolling a netlist that was
+> trying to tell us something. Threshold: **two failures of one netlist, stop
+> rolling and build a control** — the same RTL as the last known-good build,
+> fresh seed. That is what finally settled it.
+>
+> Running process, measurements and the full scoreboard:
+> `docs/BUILD_INSTABILITY_MEASUREMENTS.md` §8. Live state: `docs/RESUME.md`.
+
 # What happened with the builds — and how we proceed
 
 Written 2026-08-17, the morning after. This is the plain-language record
