@@ -1266,11 +1266,18 @@ apf_bridge_loader #(
 
 
 // ---------------------------------------------------------------------------
-// Input: gamepad -> ps2_key / ps2_mouse
+// Input: gamepad AND Dock USB keyboard/mouse -> ps2_key / ps2_mouse
 // ---------------------------------------------------------------------------
-    wire [10:0] ps2_key;
-    wire [24:0] ps2_mouse;
+    wire [10:0] pi_ps2_key,  ph_ps2_key;    // pi = gamepad, ph = Dock HID
+    wire [24:0] pi_ps2_mouse, ph_ps2_mouse;
     wire        ptr_mode;
+    wire        hid_kbd_present, hid_mouse_present;
+
+    // The merged buses the machine actually sees. Both sources are still
+    // live when a Dock is attached — the gamepad is NOT disabled, so pad
+    // controls and a real keyboard can be used together.
+    reg  [10:0] ps2_key   = 11'd0;
+    reg  [24:0] ps2_mouse = 25'd0;
 
 // buildBF: bring the 14 mapper registers (clk_74a) into clk_sys as one packed
 // quasi-static bus, then resolve the Custom indirection (map value 9'h1FF =
@@ -1328,10 +1335,81 @@ pocket_input #(
     .map_r      ( rmap_r ),
     .map_start  ( rmap_start ),
     .ptr_default( ptrdef_s2 ),
-    .ps2_key    ( ps2_key ),
-    .ps2_mouse  ( ps2_mouse ),
+    .ps2_key    ( pi_ps2_key ),
+    .ps2_mouse  ( pi_ps2_mouse ),
     .ptr_mode   ( ptr_mode )
 );
+
+// ---- Dock USB keyboard / mouse ------------------------------------------
+// APF publishes a Dock keyboard on controller 3 and a Dock mouse on
+// controller 4 — the SAME ports the gamepad arrives on, so nothing in
+// src/fpga/apf/ changes. Scope and wire format: docs/usb_hid_scope.md.
+pocket_hid #(
+    .CLK_HZ ( 32_500_000 )
+) hid_bridge (
+    .clk           ( clk_sys ),
+    .reset         ( ~pll_core_locked_sys | ~pi_rstn_s[1] ),
+    .cont3_key     ( cont3_key ),
+    .cont3_joy     ( cont3_joy ),
+    .cont3_trig    ( cont3_trig ),
+    .cont4_key     ( cont4_key ),
+    .cont4_joy     ( cont4_joy ),
+    .cont4_trig    ( cont4_trig ),
+    .ps2_key       ( ph_ps2_key ),
+    .ps2_mouse     ( ph_ps2_mouse ),
+    .kbd_present   ( hid_kbd_present ),
+    .mouse_present ( hid_mouse_present )
+);
+
+// ---- Input merge ---------------------------------------------------------
+// Both sources emit TOGGLE strobes and either may fire on any cycle. Each
+// gets a one-deep pending slot and the arbiter alternates priority, so a
+// simultaneous pair is serialised rather than dropped. ★ A dropped key-UP
+// would leave that key held down on the Mac forever, which is why this is an
+// arbiter and not a mux.
+//
+// Known bound: each source can emit at most one event per clock while walking
+// its own change list (11 slots for the gamepad, 20 for HID). If BOTH burst
+// continuously the arbiter drains one per cycle and the loser's pending slot
+// can be overwritten. That needs a full gamepad chord and a full keyboard
+// chord changing on the same clock — human input is many orders of magnitude
+// slower — but it is the failure mode to look at if a key ever sticks.
+reg pi_k_d, ph_k_d, pi_m_d, ph_m_d;
+reg pi_k_pq, ph_k_pq, pi_m_pq, ph_m_pq;
+reg [9:0]  pi_k_pd, ph_k_pd;
+reg [23:0] pi_m_pd, ph_m_pd;
+reg        k_turn, m_turn;               // 0 = gamepad first, 1 = HID first
+
+always @(posedge clk_sys) begin
+    if (~pll_core_locked_sys) begin
+        pi_k_d <= 1'b0; ph_k_d <= 1'b0; pi_m_d <= 1'b0; ph_m_d <= 1'b0;
+        pi_k_pq <= 1'b0; ph_k_pq <= 1'b0; pi_m_pq <= 1'b0; ph_m_pq <= 1'b0;
+        k_turn <= 1'b0; m_turn <= 1'b0;
+    end else begin
+        pi_k_d <= pi_ps2_key[10];   ph_k_d <= ph_ps2_key[10];
+        pi_m_d <= pi_ps2_mouse[24]; ph_m_d <= ph_ps2_mouse[24];
+
+        // --- keyboard: forward one, alternating who goes first
+        if (pi_k_pq && (!ph_k_pq || !k_turn)) begin
+            ps2_key <= { ~ps2_key[10], pi_k_pd }; pi_k_pq <= 1'b0; k_turn <= 1'b1;
+        end else if (ph_k_pq) begin
+            ps2_key <= { ~ps2_key[10], ph_k_pd }; ph_k_pq <= 1'b0; k_turn <= 1'b0;
+        end
+        // Capture AFTER the forward so an event landing on the same cycle as a
+        // drain sets the flag again instead of being cleared away.
+        if (pi_ps2_key[10] != pi_k_d) begin pi_k_pq <= 1'b1; pi_k_pd <= pi_ps2_key[9:0]; end
+        if (ph_ps2_key[10] != ph_k_d) begin ph_k_pq <= 1'b1; ph_k_pd <= ph_ps2_key[9:0]; end
+
+        // --- mouse: same shape
+        if (pi_m_pq && (!ph_m_pq || !m_turn)) begin
+            ps2_mouse <= { ~ps2_mouse[24], pi_m_pd }; pi_m_pq <= 1'b0; m_turn <= 1'b1;
+        end else if (ph_m_pq) begin
+            ps2_mouse <= { ~ps2_mouse[24], ph_m_pd }; ph_m_pq <= 1'b0; m_turn <= 1'b0;
+        end
+        if (pi_ps2_mouse[24] != pi_m_d) begin pi_m_pq <= 1'b1; pi_m_pd <= pi_ps2_mouse[23:0]; end
+        if (ph_ps2_mouse[24] != ph_m_d) begin ph_m_pq <= 1'b1; ph_m_pd <= ph_ps2_mouse[23:0]; end
+    end
+end
 
 
 // ---------------------------------------------------------------------------
