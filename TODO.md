@@ -51,6 +51,22 @@ device is gone before that can happen. One click after reconnecting clears it.
 **Not worth fixing.** Noted in the readme as a one-line limitation. Any fix
 means touching the button path, which cost four hardware builds in one session.
 
+### ASC FIFO playback mode
+Rescued from the MiSTer-era `BACKLOG.md` before that file was deleted
+(2026-08-17), because it is the one item in it that still applies here.
+
+The Apple Sound Chip supports a FIFO mode where the CPU streams samples into a
+1 KB buffer; this core implements only wavetable synthesis. Alert sounds and
+system beeps work (HW-validated on buildCG), but software that streams digital
+audio will not sound right.
+
+Would need a 1 KB FIFO in `rtl/asc.sv` with read/write pointers and
+half-empty/full interrupts, and the DAC reading from it at the configured
+sample rate instead of the wavetable oscillators. Note `rtl/sdp_ram.sv`
+already provides `cd_sdp` for ASC FIFO A.
+
+Not scheduled. Nobody has reported a title that needs it.
+
 ## Still cut by resource budget
 
 Second floppy drive · 16bpp video · 640×480 · BlueSCSI Toolbox · CD changer ·

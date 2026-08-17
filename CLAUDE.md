@@ -424,10 +424,12 @@ Re-verify boot (the screenshot check above) after ANY SR change.
   read-ring words after the 11-word anchor proved insufficient on the
   post-floppy netlist) pins the SCSI capture + ring-serve cones; do
   not remove it (comment block explains), and gate every new fit in the
-  FINDER on colour icons — `scripts/icon_gate.py` on frames captured with
-  `scripts/grab_fresh.sh` (stock grab.sh serves STALE frames when video is
-  dead), plus a >=2-boot Finder soak (see the probes-off anchor comment in
-  MacLC.sv).
+  FINDER on colour icons plus a >=2-boot Finder soak.
+  ★ The icon gate is a VISUAL check on the Pocket's own screen. The MiSTer
+  capture path it used to describe (`grab_fresh.sh` over the MiSTer's
+  websocket, frames fed to `scripts/icon_gate.py`) does not exist here —
+  there is no HPS to grab frames from. Those scripts were removed
+  2026-08-17. `icon_gate.py` remains and still works on any PNG you have.
 - ~~Floppy won't read at 16 MHz CPU speed~~ **DOES NOT APPLY TO THIS FORK**
   (corrected 2026-08-17). That is inherited MacPlus/MiSTer lore about a
   selectable 8/16 MHz CPU. This core has no speed selector — there is no
