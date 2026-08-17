@@ -873,5 +873,5 @@ set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to dram_we_n
 set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to dram_ras_n
 set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to dram_cas_n
 
-set_global_assignment -name SEED 23
+set_global_assignment -name SEED 37
 
