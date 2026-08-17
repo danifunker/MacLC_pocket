@@ -40,6 +40,18 @@ RBF="${1:-src/fpga/output_files/ap_core.rbf}"
 LABEL="${2:-test}"
 
 [ -f "$RBF" ] || { echo "ERROR: no such rbf: $RBF" >&2; exit 1; }
+
+# Refuse an ALREADY bit-reversed bitstream. This script reverses what it is
+# given, so handing it a .rbf_r double-reverses back to the raw stream and the
+# core fails to load. Done by accident on 2026-08-17 while refreshing the card
+# from dist/ — caught only because the sha was checked afterwards.
+case "$RBF" in
+    *.rbf_r)
+        echo "ERROR: $RBF is already bit-reversed (.rbf_r)." >&2
+        echo "       Pass the RAW .rbf from output_files, or if you just want to" >&2
+        echo "       re-stage an existing slot, copy the .rbf_r directly." >&2
+        exit 1 ;;
+esac
 [ -d "$SRC_DIR" ] || { echo "ERROR: no source core at $SRC_DIR" >&2; exit 1; }
 
 # Pick a working python (Git Bash has `python`, WSL usually `python3`; the
