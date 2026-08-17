@@ -1310,6 +1310,14 @@ apf_bridge_loader #(
 // reset_n releases after the write, which makes its edge the correct — and
 // only — safe sampling point. Its own 2FF sync is local because reset_n_sys
 // is declared below this instantiation.
+//
+// ★ VERIFIED ON HARDWARE 2026-08-16: the menu's "Reset & Apply" action also
+// re-samples this, so a Startup-input-mode change takes effect immediately
+// — set it, hit Reset & Apply, done. APF evidently drops reset_n as part of
+// applying settings, even though opt_reset_apply_sys itself only feeds
+// mac_lc_pocket's reset and not this one. Do NOT add opt_reset_apply_sys to
+// the term below "to make the menu responsive": it already is, and that
+// change would buy a fresh fit roll for nothing.
 reg  [1:0] pi_rstn_s = 2'b00;
 always @(posedge clk_sys) pi_rstn_s <= {pi_rstn_s[0], reset_n};
 
