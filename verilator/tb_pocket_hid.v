@@ -32,7 +32,7 @@ module tb_pocket_hid;
     reg [15:0] cont3_trig = 16'd0;
     reg [31:0] cont4_key = 32'd0, cont4_joy = 32'd0;
     reg [15:0] cont4_trig = 16'd0;
-    reg [1:0]  speed_sel = 2'd0;
+    reg [2:0]  speed_sel = 3'd0;   // [2] = disable the button trigger
 
     wire [10:0] ps2_key;
     wire [24:0] ps2_mouse;
@@ -162,6 +162,20 @@ module tb_pocket_hid;
         cont4_key = {4'h5, 12'd0, ctr};
         idle(20000);
         $display("  info  device returns: %0d events", m_events);
+
+        // ---- 9. CLICKS OFF: same netlist, button trigger gated ------------
+        // This is the diagnostic mode. The registers and comparators still
+        // exist and still toggle; only btn_edge is suppressed. If hardware is
+        // unstable HERE too, the extra logic/placement is to blame; if it is
+        // stable here and unstable with clicks on, the extra events are.
+        speed_sel = 3'b100;
+        idle(100);
+        arm; button_only(1'b1); idle(200);
+        expect_m(0, "clicks OFF: press produces no event");
+        arm; button_only(1'b0); idle(200);
+        expect_m(0, "clicks OFF: release produces no event");
+        arm; report(8'sd4, 8'sd1, 1'b0); idle(200);
+        expect_m(1, "clicks OFF: motion still reports");
 
         $display("");
         if (fails == 0) $display("RESULT: PASS (no storm, no missed edge)");
