@@ -1358,9 +1358,7 @@ pocket_input #(
 // APF publishes a Dock keyboard on controller 3 and a Dock mouse on
 // controller 4 — the SAME ports the gamepad arrives on, so nothing in
 // src/fpga/apf/ changes. Scope and wire format: docs/usb_hid_scope.md.
-pocket_hid #(
-    .CLK_HZ ( 32_500_000 )
-) hid_bridge (
+pocket_hid hid_bridge (
     .clk           ( clk_sys ),
     .reset         ( ~pll_core_locked_sys | ~pi_rstn_s[1] | opt_reset_apply_sys ),
     .cont3_key     ( cont3_key ),

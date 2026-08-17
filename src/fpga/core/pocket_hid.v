@@ -41,13 +41,7 @@
 
 `default_nettype none
 
-module pocket_hid #(
-	parameter integer CLK_HZ      = 32_500_000,
-	// Mouse reports per second toward the Mac. A real ADB mouse reports at
-	// ~90 Hz; a USB gaming mouse can produce 1000 reports/s, so motion is
-	// ACCUMULATED between ticks rather than dropped (see mouse section).
-	parameter integer PTR_RATE_HZ = 100
-)(
+module pocket_hid (
 	input  wire        clk,            // clk_sys (32.5 MHz)
 	input  wire        reset,
 
@@ -93,46 +87,57 @@ module pocket_hid #(
 	assign mouse_present = (k4_key_s2[31:28] == TYPE_MOUSE);
 
 	// ======================================================================
-	// MOUSE
+	// MOUSE — ONE ps2_mouse event per HID report, deliberately NOT accumulated
 	// ======================================================================
-	// A new report is a CHANGE in the counter — never equality, and never an
-	// assumption that it increments by one (reports can be missed and the
-	// counter wraps).
-	localparam integer TICK_DIV = CLK_HZ / PTR_RATE_HZ;
-
+	// ★ HARDWARE-CORRECTED 2026-08-16. The first version summed HID reports
+	// between 100 Hz ticks and sent the total. On a Dock trackpad that was
+	// "uniformly too fast", and the reason is downstream:
+	//
+	//   adb_device.sv:680-692 OVERWRITES its mouse register on every event and
+	//   NEVER accumulates, and the ADB register is 7-bit signed (-64..+63).
+	//
+	// So between ADB polls only the LAST event survives. MiSTer forwards each
+	// PS/2 report as the HPS produces it and therefore silently DISCARDS the
+	// intermediate motion — that lossiness is the feel every Mac user of this
+	// core is calibrated to. Accumulating loses nothing and so delivered
+	// (report_rate / tick_rate) times more cursor travel for the same hand
+	// movement. That ratio is a CONSTANT, which is exactly why the report was
+	// "uniformly too fast" rather than "wild only when moving quickly".
+	//
+	// Forwarding one event per report reproduces MiSTer's behaviour exactly.
+	// Do NOT reintroduce accumulation without a matching divisor.
+	//
+	// No rate limiting is needed: HID tops out around 1 kHz, which is ~32,500
+	// clk_sys cycles between events, and adb_device's strobe edge detector
+	// needs about four.
 	reg [15:0] m_cnt_prev;
-	reg signed [15:0] dx_acc, dy_acc;   // accumulate between ADB-rate ticks
-	reg        btn_state, btn_reported;
-	reg [23:0] tick_cnt;
-	reg        tick;
 
 	wire signed [15:0] hid_dx = $signed(k4_joy_s2[15:0]);
 	wire signed [15:0] hid_dy = $signed(k4_trg_s2[15:0]);
 	// The Mac mouse has ONE button, so any physical button is that button.
 	wire hid_btn = |k4_joy_s2[18:16];
 
-	// Drain the accumulator into one 9-bit two's complement delta, saturating.
-	// ps2_mouse[15:8] is the LOW BYTE of a 9-bit signed value and the status
-	// bit is simply bit 8 — NOT sign-and-magnitude (pocket_input.v documents
-	// this at length; getting it wrong moves the cursor by 256-n backwards).
-	function signed [8:0] sat9;
+	// Clamp to what ADB can actually carry. adb_device clamps as well, but
+	// doing it here keeps the emitted PS/2 value honest rather than relying on
+	// a downstream module to clean up an out-of-range delta.
+	// ps2_mouse[15:8] is the LOW BYTE of a 9-bit two's complement value and the
+	// status bit is simply bit 8 — NOT sign-and-magnitude (pocket_input.v
+	// documents this; getting it wrong moves the cursor 256-n the wrong way).
+	function signed [8:0] clamp_adb;
 		input signed [15:0] v;
 		begin
-			// -256 must be written as the literal bit pattern: 9'sd256 does
-			// not fit in 9 signed bits, so `-9'sd256` overflows and Quartus
-			// warns (10259). 9'sb1_0000_0000 IS -256 in two's complement.
-			if (v > 16'sd255)       sat9 = 9'sd255;
-			else if (v < -16'sd256) sat9 = 9'sb1_0000_0000;
-			else                    sat9 = v[8:0];
+			if (v > 16'sd63)      clamp_adb = 9'sd63;
+			else if (v < -16'sd64) clamp_adb = -9'sd64;
+			else                   clamp_adb = v[8:0];
 		end
 	endfunction
 
-	wire signed [8:0] dx_out = sat9(dx_acc);
+	wire signed [8:0] dx_out = clamp_adb(hid_dx);
 	// ★ Y SIGN: USB HID counts Y POSITIVE DOWNWARD; adb_device takes the PS/2
 	// convention where POSITIVE dy is UP. The negation is required. Hardware
 	// already caught this once on the gamepad path — do not "simplify" it away
 	// without testing on a real Mac desktop.
-	wire signed [8:0] dy_out = sat9(-dy_acc);
+	wire signed [8:0] dy_out = clamp_adb(-hid_dy);
 
 	function [7:0] status_byte;
 		input ysign, xsign, btn;
@@ -143,40 +148,18 @@ module pocket_hid #(
 
 	always @(posedge clk) begin
 		if (reset) begin
-			ps2_mouse    <= 25'd0;
-			m_cnt_prev   <= 16'd0;
-			dx_acc       <= 16'sd0;
-			dy_acc       <= 16'sd0;
-			btn_state    <= 1'b0;
-			btn_reported <= 1'b0;
-			tick_cnt     <= 24'd0;
-			tick         <= 1'b0;
+			ps2_mouse  <= 25'd0;
+			m_cnt_prev <= 16'd0;
 		end else begin
-			tick <= 1'b0;
-			if (tick_cnt == TICK_DIV-1) begin tick_cnt <= 24'd0; tick <= 1'b1; end
-			else                              tick_cnt <= tick_cnt + 24'd1;
-
-			// New report -> accumulate. Never drop motion: a 1000 Hz mouse
-			// produces ~10 reports per 100 Hz tick and all of them count.
+			// A new report is a CHANGE in the counter — never equality, and
+			// never an assumption that it increments by one (reports can be
+			// missed and the counter wraps). Buttons ride the same report:
+			// HID emits one on a button change, so no separate click path is
+			// needed to keep a click from waiting.
 			if (mouse_present && (k4_key_s2[15:0] != m_cnt_prev)) begin
 				m_cnt_prev <= k4_key_s2[15:0];
-				dx_acc     <= dx_acc + hid_dx;
-				dy_acc     <= dy_acc + hid_dy;
-				btn_state  <= hid_btn;
-			end
-
-			// A click must not wait for the next tick.
-			if (btn_state != btn_reported) begin
-				btn_reported <= btn_state;
-				ps2_mouse <= { ~ps2_mouse[24], 8'd0, 8'd0,
-				               status_byte(1'b0, 1'b0, btn_state) };
-			end else if (tick && (dx_acc != 0 || dy_acc != 0)) begin
-				ps2_mouse <= { ~ps2_mouse[24], dy_out[7:0], dx_out[7:0],
-				               status_byte(dy_out[8], dx_out[8], btn_reported) };
-				// Subtract exactly what was sent so saturated motion is
-				// carried into the next report instead of being discarded.
-				dx_acc <= dx_acc - $signed({{7{dx_out[8]}}, dx_out});
-				dy_acc <= dy_acc + $signed({{7{dy_out[8]}}, dy_out});
+				ps2_mouse  <= { ~ps2_mouse[24], dy_out[7:0], dx_out[7:0],
+				                status_byte(dy_out[8], dx_out[8], hid_btn) };
 			end
 		end
 	end
