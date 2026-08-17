@@ -1311,13 +1311,19 @@ apf_bridge_loader #(
 // only — safe sampling point. Its own 2FF sync is local because reset_n_sys
 // is declared below this instantiation.
 //
-// ★ VERIFIED ON HARDWARE 2026-08-16: the menu's "Reset & Apply" action also
-// re-samples this, so a Startup-input-mode change takes effect immediately
-// — set it, hit Reset & Apply, done. APF evidently drops reset_n as part of
-// applying settings, even though opt_reset_apply_sys itself only feeds
-// mac_lc_pocket's reset and not this one. Do NOT add opt_reset_apply_sys to
-// the term below "to make the menu responsive": it already is, and that
-// change would buy a fresh fit roll for nothing.
+// ★ opt_reset_apply_sys IS IN THE TERM DELIBERATELY (2026-08-16). Whether APF
+// also drops reset_n when it applies settings was never established: the one
+// hardware trial that seemed to confirm it set the mode to MOUSE, which is
+// the power-on default — so a mode that never re-sampled and a mode that
+// re-sampled correctly produce the SAME result. That test could not
+// discriminate, and the KEYBOARD direction (the one that can) was
+// inconclusive. Rather than depend on undocumented APF reset behaviour,
+// Reset & Apply is wired to re-sample explicitly. It is one OR term, it is
+// idempotent if reset_n drops anyway, and it also gives Reset & Apply a
+// clean input state (held keys released, mouse button cleared).
+// Forward declaration: the pulse itself is built ~280 lines below, but the
+// input modules above need it in their reset term.
+wire opt_reset_apply_sys;
 reg  [1:0] pi_rstn_s = 2'b00;
 always @(posedge clk_sys) pi_rstn_s <= {pi_rstn_s[0], reset_n};
 
@@ -1333,7 +1339,7 @@ pocket_input #(
     .CLK_HZ ( 32_500_000 )
 ) input_bridge (
     .clk        ( clk_sys ),
-    .reset      ( ~pll_core_locked_sys | ~pi_rstn_s[1] ),
+    .reset      ( ~pll_core_locked_sys | ~pi_rstn_s[1] | opt_reset_apply_sys ),
     .cont1_key  ( cont1_key[15:0] ),
     .map_a      ( rmap_a ),
     .map_b      ( rmap_b ),
@@ -1356,7 +1362,7 @@ pocket_hid #(
     .CLK_HZ ( 32_500_000 )
 ) hid_bridge (
     .clk           ( clk_sys ),
-    .reset         ( ~pll_core_locked_sys | ~pi_rstn_s[1] ),
+    .reset         ( ~pll_core_locked_sys | ~pi_rstn_s[1] | opt_reset_apply_sys ),
     .cont3_key     ( cont3_key ),
     .cont3_joy     ( cont3_joy ),
     .cont3_trig    ( cont3_trig ),
@@ -1606,7 +1612,7 @@ always @(posedge clk_sys) begin
     if (opt_reset_pram_edge)  pram_hold <= 5'd16; else if (pram_hold) pram_hold <= pram_hold - 5'd1;
     if (opt_nmi_edge)         nmi_hold  <= 5'd16; else if (nmi_hold)  nmi_hold  <= nmi_hold  - 5'd1;
 end
-    wire opt_reset_apply_sys = |rst_hold;
+    assign opt_reset_apply_sys = |rst_hold;   // declared above the input modules
     wire opt_reset_pram_sys  = |pram_hold;
     wire opt_nmi_sys         = |nmi_hold;
 
