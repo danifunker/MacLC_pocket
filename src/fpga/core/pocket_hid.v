@@ -116,6 +116,31 @@ module pocket_hid (
 	// needs about four.
 	reg [15:0] m_cnt_prev;
 
+	// ---- Button trigger ----------------------------------------------------
+	// The button must be able to send a report BY ITSELF. APF's report counter
+	// does not necessarily advance for a press or release with the mouse held
+	// still, so a button riding only the motion report arrives late — on
+	// hardware that was a menu that opened on click and would not close until
+	// the mouse moved.
+	//
+	// ★ buildCD solved this with a second always block, a 4-bit debounce
+	// counter and a press/motion priority chain. That netlist then failed on
+	// hardware at seeds 11, 23 AND 37 (freeze, video distortion, F-line) while
+	// buildCC's netlist was good at 11 and again at 41. Three independent
+	// placements condemn the CHANGE, not the dice. No mechanism was ever found
+	// connecting a mouse button to video — and that argument is exactly what
+	// kept the wrong diagnosis alive for three builds, so it is not repeated
+	// here. Keep this path structurally minimal.
+	//
+	// Two flops and one extra OR term in the existing condition. No second
+	// always block, no counter, no priority chain.
+	//   btn_d filters a one-clock CDC glitch: the button bits share a 32-bit
+	//   word with X, and a 2FF sync can briefly present a mixed sample. A real
+	//   change holds for far more than one clock; a glitch does not.
+	reg btn_prev, btn_d;
+	wire btn_now = mouse_present & hid_btn;
+	wire btn_edge = (btn_now == btn_d) && (btn_now != btn_prev);
+
 	// ★★ BYTE POSITION, CORRECTED ON HARDWARE 2026-08-16. The relative delta is
 	// an 8-bit SIGNED value at bits [15:8] — NOT a 16-bit value at [15:0].
 	// ../Analogue-Amiga src/MPUBIOS/drivers/KMIO/inputs.cpp:93-96 is the
@@ -180,18 +205,22 @@ module pocket_hid (
 		if (reset) begin
 			ps2_mouse  <= 25'd0;
 			m_cnt_prev <= 16'd0;
+			btn_prev   <= 1'b0;
+			btn_d      <= 1'b0;
 			res_x      <= 12'sd0;
 			res_y      <= 12'sd0;
 		end else begin
+			btn_d <= btn_now;
+
 			// A new report is a CHANGE in the counter — never equality, and
 			// never an assumption that it increments by one (reports can be
-			// missed and the counter wraps). Buttons ride the same report:
-			// HID emits one on a button change, so no separate click path is
-			// needed to keep a click from waiting.
-			if (mouse_present && (k4_key_s2[15:0] != m_cnt_prev)) begin
+			// missed and the counter wraps). btn_edge adds the button's own
+			// trigger to the SAME path: one emit site, one always block.
+			if (mouse_present && ((k4_key_s2[15:0] != m_cnt_prev) || btn_edge)) begin
 				m_cnt_prev <= k4_key_s2[15:0];
+				btn_prev   <= btn_now;
 				ps2_mouse  <= { ~ps2_mouse[24], dy_out[7:0], dx_out[7:0],
-				                status_byte(dy_out[8], dx_out[8], hid_btn) };
+				                status_byte(dy_out[8], dx_out[8], btn_now) };
 				// Keep only what the shift discarded.
 				res_x <= sum_x - (step_x <<< shift);
 				res_y <= sum_y - (step_y <<< shift);
