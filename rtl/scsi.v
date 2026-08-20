@@ -132,14 +132,13 @@ parameter  RING_LOG    = 5;             // log2(sectors); 5 => 32-sector / 16KB 
                                         // the ring faster than the HPS refills -> pseudo-DMA
                                         // stall -> driver I/O fail. 32 sectors hides more HPS
                                         // latency. ★ The old "RING_LOG=6 needs 600 M10K" note
-                                        // died with the 2026-07-17 pdma-prefetch redesign; the
-                                        // real cost is LINEAR, 8 M10K per buffer per step. BUT
-                                        // RING_LOG=6 on one Pocket disk was TRIED 2026-08-19
-                                        // and REVERTED: +16 M10K -> 275/308 (89%) fits and
-                                        // meets STA, then loses the PLACEMENT lottery — 2/2
-                                        // seeds bad in different ways (black video; F-line on
-                                        // boot). ~84% M10K is this design's placement ceiling.
-                                        // docs/F-Line_Build_Errors.md Case 4 before retrying.)
+                                        // died with the 2026-07-17 pdma-prefetch redesign — the
+                                        // 3-mirror-copy buffers it priced are gone. Measured on
+                                        // the Pocket fit: cost is LINEAR now, 8 M10K per buffer
+                                        // per RING_LOG step (16 M10K per disk doubled). Per-
+                                        // instance overrides live at the ncr5380.sv
+                                        // instantiations; parameterization is clean through
+                                        // BUF_AW/rd_hps_slot/rd_ring_space/scsi_dpram/pf_*.)
 localparam RING_BLOCKS = 1 << RING_LOG; // sectors buffered for reads
 localparam BUF_AW      = 8 + RING_LOG;  // dpram word-address width (256 words/sector)
 
