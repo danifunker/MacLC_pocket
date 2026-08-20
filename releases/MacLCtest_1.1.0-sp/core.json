@@ -1,0 +1,36 @@
+{
+    "core": {
+        "magic": "APF_VER_1",
+        "metadata": {
+            "platform_ids": [
+                "maclc"
+            ],
+            "shortname": "MacLCtest",
+            "description": "Apple Macintosh LC. 68020, 512x384, 256 colours.",
+            "author": "danifunker",
+            "url": "https://github.com/danifunker/MacLC_pocket",
+            "version": "1.1.0-sp",
+            "date_release": "2026-08-17"
+        },
+        "framework": {
+            "target_product": "Analogue Pocket",
+            "version_required": "2.1",
+            "sleep_supported": false,
+            "dock": {
+                "supported": true,
+                "analog_output": false
+            },
+            "hardware": {
+                "link_port": false,
+                "cartridge_adapter": 0
+            }
+        },
+        "cores": [
+            {
+                "name": "default",
+                "id": 0,
+                "filename": "bitstream.rbf_r"
+            }
+        ]
+    }
+}

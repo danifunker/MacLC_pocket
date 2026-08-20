@@ -157,12 +157,18 @@ treated the same way, even though it lives outside `apf/`.
 ### Pocket glue (`src/fpga/core/`)
 - `pocket_sdram.v` — SDRAM controller, adapted from `rtl/sdram.v`. As of
   2026-08-19 it carries the MiSTer `cpu-icache` **demand-start engine**
-  (Phase C): accesses start at any idle clk_64 edge (the command schedule
-  itself is unchanged), CPU completion via the `cpu_done`/`cpu_dout`
-  handshake, dedicated `dl_*` download port, `flp_win`/`flp_guard` floppy
-  windows, explicit refresh. Its port comments are the specification — and
-  the seven laws in `../MacLC_MiSTer/docs/Pocket_Port_CPU_Perf_Prompt.md`
-  are the risk list for ANY edit near it.
+  (Phase C) with CPU completion via the `cpu_done`/`cpu_dout` handshake,
+  dedicated `dl_*` download port, `flp_win`/`flp_guard` floppy windows,
+  explicit refresh. ★★★ **CPU starts are quantized to `t == 3'd1` — ONE
+  command phase per clk_8 period. This is load-bearing on hardware:**
+  any-phase starts (`t[0]` parity, the MiSTer form) F-line-bomb at Finder
+  load on THIS board even though the RTL is proven correct — a pin-level
+  phase-statistics margin STA cannot see. **Read
+  `docs/F-Line_Build_Errors.md` before touching start gating, refresh
+  scheduling, or anything else that changes WHEN commands hit the pins**
+  — the seven laws in `../MacLC_MiSTer/docs/Pocket_Port_CPU_Perf_Prompt.md`
+  are the risk list for the digital side; the F-line doc is the risk list
+  for the physical side.
 - `pocket_input.v` — gamepad → `ps2_key`/`ps2_mouse`. This is the whole input
   port: everything right of those two buses is platform-independent.
 - `apf_bridge_loader.v` — bridge writes → the MiSTer-shaped `dio_*` stream.
