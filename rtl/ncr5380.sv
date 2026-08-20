@@ -794,13 +794,7 @@ module ncr5380
 			// and drops the oversized Toolbox transfer buffer on target 0:
 			// TB_ADDRW 12 -> 8 turns two 4 KB dpram halves (32,768 bits each,
 			// ~8 M10K) into two 256-byte ones.
-			// RING_LOG: boot disk (i==0, "Hard Disk 1") gets a 64-sector/32 KB
-			// read ring — deepened 2026-08-19 after the CPU-perf port raised
-			// the guest's drain rate ~30%; disk 2 stays at 32 sectors/16 KB.
-			// Post-prefetch-redesign cost is linear: +16 M10K for the doubling
-			// (measured 8+8 -> 16+16 on the two byte-lane buffers).
 			scsi #(.ID(i[2:0]), .TOOLBOX_ENABLE(0),
-			       .RING_LOG(i == 0 ? 6 : 5),
 			       .TB_ADDRW(8)) target
 			(
 				.clk    ( clk ),

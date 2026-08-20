@@ -105,6 +105,30 @@ read-only, snoop-free, and mostly cache-resident.
   any-phase freedom was carrying far less benchmark value than designed —
   the slot-phase build keeps effectively all of the measured win.
 
+### Case 4 — Pocket, 2026-08-19 (late): the M10K placement ceiling
+
+- **Symptom:** one-line netlist change on top of the clean `v1.1.0-sp`
+  (SCSI disk 1 read ring 16 KB → 32 KB, +16 M10K → **275/308 = 89%**):
+  seed 4 = **black screen with working sound** (machine alive, video path
+  dead); seed 11 = **video fine, F-line on boot**. Both fits met STA at
+  all corners; anchors preserved; the rbf was content-verified onto the
+  card each time.
+- **The discriminator that named it:** two seeds, two **different**
+  failures. Case 3 (a systematic defect) failed *identically* across
+  placements; a placement lottery fails *differently* each roll. The ring
+  logic itself shares nothing with video, and RING_LOG=1/3/5 all have
+  hardware history — the only physical novelty was RAM pressure.
+- **Mechanism:** at 89% M10K the fitter's placement freedom for ~190
+  blocks of load-bearing RAM (framebuffer, line buffers, SCSI rings,
+  I-cache) degrades enough that *marginal placements become the norm* —
+  each seed breaks a different subsystem. The known-good tree at 259/308
+  (84%) placed clean on its first seed.
+- **Resolution:** experiment reverted (it was speculative — no
+  measurement ever showed the 32-sector ring limiting), card restored to
+  `v1.1.0-sp` **byte-exact from the archived .sof, verified against the
+  snapshot manifest** — the snapshot discipline paid for itself the same
+  day it was created.
+
 ---
 
 ## 3. The laws (the "build better next time" list)
@@ -138,6 +162,21 @@ read-only, snoop-free, and mostly cache-resident.
    `initial` (bitstream-identical on Cyclone V).
 6. **F-line at Finder load ⇒ suspect the write→fetch seam first**, and
    test it offline with self-modifying-code patterns (tb_mem_seam does).
+7. **~84% M10K is this design's placement ceiling, not 100%.** 259/308
+   places reliably; 275/308 rolled 2/2 bad seeds with *different*
+   failures (Case 4). Corollary of Law 2: same-failure-across-seeds =
+   systematic defect; different-failure-across-seeds = placement
+   lottery, and the netlist's resource pressure is the suspect. Fitting
+   and meeting STA proves nothing about placement robustness. Any future
+   RAM-adding change must first free blocks elsewhere or pin the
+   load-bearing RAMs (LogicLock), and must budget ≥2 seed rolls as part
+   of its acceptance cost.
+8. **Symptom triage by what still works:** sound-but-black-screen =
+   machine alive, video cone lost the roll; F-line-on-boot vs
+   deterministic F-line-at-one-place separates random placement
+   marginality from a systematic mechanism. The user's chime table
+   (death chime / happy-chime-then-nothing / silence) remains the first
+   decode for anything earlier.
 
 ---
 
