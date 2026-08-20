@@ -64,10 +64,15 @@ only automated check that runs without Quartus or Verilator.
 
 ### Verilator Simulation
 
-> **BROKEN in this fork as of 2026-08-09.** `verilator/sim.v` still wires the
-> `dataController_top` ports the CD/Toolbox and second-floppy cuts removed
-> (`cd_snd_*`, `dbg_cda*`, `cdtb_*`, `cd_io_*`, `tb_lba`, `dskReadAddrExt` —
-> 11 references). It will not build until sim.v is updated.
+> **BROKEN in this fork as of 2026-08-19** (was revived 2026-08-14 on the
+> macOS box, then re-broken by the CPU-perf port): the Phase B/C + I-cache
+> port (docs/RESUME.md §-6) changed `addrController_top`/`dataController_top`
+> ports and the whole memory glue, and `verilator/sim.v` was deliberately
+> NOT ported — user directive 2026-08-19: the sim is stale, validate on
+> hardware. To revive it, port the `verilator/sim.v` + `verilator/sim_ram.v`
+> changes from `../MacLC_MiSTer` branch `cpu-icache` (they are the worked
+> example in this top's own `ram_*` naming), then bring over
+> tb_fetch_cache/tb_icache_seam/tb_dl_cpu_seam as gates.
 >
 > Fixing it is high value: this harness is the only functional verification
 > the project has (boot check, screenshot oracle, `tb_disk_swap`, the GCR/MFM
@@ -150,9 +155,14 @@ treated the same way, even though it lives outside `apf/`.
   top kept verbatim for exactly this purpose.
 
 ### Pocket glue (`src/fpga/core/`)
-- `pocket_sdram.v` — SDRAM controller, adapted from `rtl/sdram.v`. The state
-  machine is deliberately byte-for-byte identical; only the chip and the clock
-  output changed.
+- `pocket_sdram.v` — SDRAM controller, adapted from `rtl/sdram.v`. As of
+  2026-08-19 it carries the MiSTer `cpu-icache` **demand-start engine**
+  (Phase C): accesses start at any idle clk_64 edge (the command schedule
+  itself is unchanged), CPU completion via the `cpu_done`/`cpu_dout`
+  handshake, dedicated `dl_*` download port, `flp_win`/`flp_guard` floppy
+  windows, explicit refresh. Its port comments are the specification — and
+  the seven laws in `../MacLC_MiSTer/docs/Pocket_Port_CPU_Perf_Prompt.md`
+  are the risk list for ANY edit near it.
 - `pocket_input.v` — gamepad → `ps2_key`/`ps2_mouse`. This is the whole input
   port: everything right of those two buses is platform-independent.
 - `apf_bridge_loader.v` — bridge writes → the MiSTer-shaped `dio_*` stream.
@@ -160,7 +170,12 @@ treated the same way, even though it lives outside `apf/`.
 ### RTL Structure (`/rtl`)
 
 **CPU Core:**
-- `tg68k/` - TG68K CPU core (68000)
+- `tg68k/` - TG68K CPU core (68000). `tg68k.v` is the Phase-B collapsed bus
+  FSM (2026-08-19, verbatim from MiSTer `cpu-icache`) — four load-bearing
+  invariants documented in the file; `addr_early` feeds the fetch cache.
+- `fetch_cache.sv` - 1 KB direct-mapped instruction cache (2026-08-19, from
+  MiSTer `cpu-icache`, HW-validated there). Always on. RDW-immune by
+  construction; `hit_now` gates the SDRAM request (Law 7).
 
 **Memory & Storage:**
 - `sdram.v` - MiSTer SDRAM controller. **Not built in this fork** — kept as the

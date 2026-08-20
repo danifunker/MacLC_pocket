@@ -220,6 +220,10 @@ always @(posedge clk_sys) begin
                                      data_in, data_in[2:0],
                                      (data_in[2:0] > 3'd3) ? " CLAMPED->3" : "", addr, $time);
                             `endif
+                            `ifdef ARIEL_TRACE
+                            // mode-write trace (level-repeats per commit tick)
+                            $display("PVIA VIDMODE=%02x @%0t", data_in, $time);
+                            `endif
                         end
 
                         3'b101: ;  // $11: unused

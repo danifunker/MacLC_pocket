@@ -145,14 +145,37 @@ set_multicycle_path -hold  -end 1 -from [get_keepers {*TG68KdotC_Kernel*}] -to [
 # -- upstream's "dice-roll boot": bit6/scsi_bsy read wrong while bit1/scsi_sel
 # read right, depending on placement.
 #
-# Peripheral reads are E-paced: the kernel stalls at s_state 4 for xVma and
-# latches read data at s_state 6, ALWAYS >= 5 clk_sys after address/select
-# settle. Crediting a conservative 2x (61.5 ns @ 32.5 MHz) is well inside that
-# window and makes STA report the real margin instead of over-constraining an
-# E-paced read to a single 30.8 ns period. Its fan-OUT toward the CPU stays a
-# normal single-cycle path and is deliberately NOT relaxed.
+# Peripheral reads are E-paced: the Phase-B kernel wrapper stalls at S_WAIT
+# for the E-paced (phi2 && xVma) exit and latches read data two ticks later
+# at S_TAIL2, ALWAYS >= 5 clk_sys after address/select settle
+# (rtl/tg68k/tg68k.v). Crediting a conservative 2x (61.5 ns @ 32.5 MHz) is
+# well inside that window and makes STA report the real margin instead of
+# over-constraining an E-paced read to a single 30.8 ns period. Its fan-OUT
+# toward the CPU stays a normal single-cycle path and is deliberately NOT
+# relaxed.
 set_multicycle_path -setup -end 2 -to [get_keepers {*periph_din_reg*}]
 set_multicycle_path -hold  -end 1 -to [get_keepers {*periph_din_reg*}]
+
+# ----------------------------------------------------------------------------
+# ★ Phase C: clk_sys -> SDRAM demand sequencer — NO multicycle. Deliberate.
+# ----------------------------------------------------------------------------
+# (Reasoning ported from MiSTer MacLC.sdc, cpu-icache, 2026-08-19.) A MiSTer
+# attempt credited these paths 2 destination periods on the theory that the
+# t[0] start gate made the request data "a full clk_sys old" at capture. STA
+# on the post-fit netlist DISPROVED it:
+#   slack -6.710 ns, WINDOW 15.381 ns, tg68k|addr[16] -> sdram|sd_addr[12]
+# i.e. the capture window is ONE clk_64 period, and the V8 address-translation
+# cone needs ~22 ns. The constraint was hiding a 6.7 ns violation; the SDRAM
+# was being handed a half-settled row/column address, which corrupted memory
+# and bombed the guest (F-line class).
+#
+# The fix is structural instead: mac_lc_pocket.sv registers the whole SDRAM
+# request bundle (ram_*_q) in clk_sys before it reaches the sequencer, so the
+# deep cone terminates at a clk_sys flop with a full 30.76 ns period, and the
+# sequencer captures from an adjacent register over a short route. Both legs
+# are then honest single-cycle paths that STA checks for real (the 2026-08-16
+# same-group clocking above is what makes that check real on this fork).
+# DO NOT add a multicycle here — if these paths fail, fix the pipelining.
 
 # ---- CDC synchronizer heads ------------------------------------------------
 # The clk_sys (general[2]) and clk_pix (general[3]) groups above already declare

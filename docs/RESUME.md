@@ -1,4 +1,52 @@
-# RESUME — MacLC Pocket (2026-08-17: USB HID WORKS · the fit lottery PROVEN)
+# RESUME — MacLC Pocket (2026-08-19: CPU-performance port staged as v1.1.0-test)
+
+## -6. ★★ 08-19: the MiSTer CPU-perf mission ported (Phase B + C + I-cache)
+
+**What:** the full three-layer CPU-performance stack from
+`../MacLC_MiSTer` branch `cpu-icache` (which measured **97.0% of a real
+Mac LC** on Speedometer 3.23, mix 2.771 → 3.591, HW-validated there
+2026-08-19) is ported onto this tree in one pass. Mission spec:
+`../MacLC_MiSTer/docs/Pocket_Port_CPU_Perf_Prompt.md`; running log with
+every mechanism and defect: `../MacLC_MiSTer/docs/CPU_Perf_Log.md`.
+
+| Layer | What | Files here |
+|:--|:--|:--|
+| B | collapsed bus FSM (S_IDLE/S_WAIT/S_TAIL1/S_TAIL2/S_ENDC), `addr_early` | `rtl/tg68k/tg68k.v` (verbatim copy from cpu-icache) |
+| C | demand-start SDRAM service + dedicated `dl_*` download port + explicit refresh + `flp_win`/`flp_guard` floppy windows + `flp_present` gate | `src/fpga/core/pocket_sdram.v` (engine), `rtl/addrController_top.v`, `rtl/dataController_top.sv` (dskReadDataIn), `src/fpga/core/mac_lc_pocket.sv` (glue: DTACK via `~sdram_cpu_done`, ROM-write ack-and-discard, clk_sys request-bundle registration `ram_*_q`) |
+| I-cache | 1 KB direct-mapped word-granular fetch cache, RDW-immune, gen-flush, `hit_now` request gate, **always on** | `rtl/fetch_cache.sv` (verbatim) + 4 glue points in the top |
+
+All **seven laws** and **five traps** from the mission doc were applied
+(single-owner completion signals; every unserved access class terminated;
+no CPU-vs-non-CPU shared muxes — the `download_cycle` mux and the ROMV
+oracle's request legs are GONE; no ack-rate "optimizations"; RDW immunity
+by construction; done-birth guard `&& oe`; `hit_now` per-access snapshot).
+SDC: kernel/periph multicycle justifications rewritten for the Phase-B
+gating; explicit DO-NOT-ADD note on the clk_sys→sequencer request paths
+(core_constraints.sdc) — the registration exists instead.
+
+**Retired with this port:** the ROMV retention oracle (romv_* + its
+cp_romv/cp_rvsu/cp_rvax probes + `dout_stb`) — JTAG is retired, its lever
+was tied 0, and its free-run-oe protocol is meaningless under demand-start.
+The buildT one-shot-accept survives, re-keyed to the new `dl_ack`
+handshake; the buildR/S row-crossing-tear protections carry over by
+construction (latched dio_a/dio_data + freeze-at-ACTIVE in the controller).
+
+**★ verilator/sim.v is NOT ported** (user directive 2026-08-19: sim is
+stale, go hardware-first). It still instantiates the old-shape
+addrController/dataController ports and will not compile until the MiSTer
+`verilator/sim.v` changes are ported. The MiSTer TBs
+(tb_fetch_cache/tb_icache_seam/tb_dl_cpu_seam) remain the reference gates.
+
+**HW gates owed** (in order): reload-to-"?" acceptance first, then boot to
+Finder desktop, cursor liveness, colour icons, floppy mount + read
+(Fetch GCR800K-class), SCSI soak, Speedometer 3.23 vs
+`../MacLC_MiSTer/docs/Speedometer_3-23_Benchmarks.md` (expect ≈ MiSTer:
+mix ~3.59). **If FP tests regress while tight loops improve → Law 7
+(request gate). If it hangs on floppy mount → Law 3/6 seams.** A bad fit
+is not evidence about the port (fit lottery, §-5) — but repeated failure
+across seeds IS evidence about the netlist.
+
+**Card:** staged as **v1.1.0** into the `MacLCtest` third slot.
 
 ## -5. ★★★ 08-17: Dock keyboard+mouse shipped, and the instability explained
 

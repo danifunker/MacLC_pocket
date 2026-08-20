@@ -17,14 +17,18 @@
 # TG68 kernel multicycle — REQUIRED for reliable timing closure.
 # ----------------------------------------------------------------------------
 # The TG68 kernel (TG68KdotC_Kernel) is a clock-enabled CPU: it advances ONLY on
-# clkena = phi1 && (s_state==7 || busstate==01)  (see rtl/tg68k/tg68k.v:43), and
-# phi1 = clk16_en_p = !busPhase[0] (addrController_top.v) is high only on EVEN
-# clk_sys phases. So clkena can never pulse on two consecutive clk_sys cycles —
-# consecutive kernel updates are always >= 2 clk_sys periods apart. Every kernel
-# register (including the inferred register-file RAM regfile_rtl_0/1 and its
-# read-during-write bypass) takes its meaningful input from, and feeds, other
-# clkena-gated kernel logic. So kernel-internal reg->reg paths genuinely have TWO
-# clk_sys periods to settle, not one.
+# tg68_clkena (rtl/tg68k/tg68k.v). The Phase-B bus FSM (ported from MiSTer
+# cpu-icache 2026-08-19) pulses clkena once per bus cycle at S_ENDC — always
+# >= 5 ticks after the previous pulse — and for internal (busstate==01) steps
+# gates it with !clkena_d (clkena delayed one tick), so clkena can never pulse
+# on two consecutive clk_sys cycles — consecutive kernel updates are always
+# >= 2 clk_sys periods apart. (The pre-Phase-B walker got the same guarantee
+# from clocking only at phi1.) Every kernel register (including the inferred
+# register-file RAM regfile_rtl_0/1 and its read-during-write bypass) takes its
+# meaningful input from, and feeds, other clkena-gated kernel logic. So
+# kernel-internal reg->reg paths genuinely have TWO clk_sys periods to settle,
+# not one. If the FSM's clkena gating is ever changed, re-verify this
+# invariant before trusting any fit.
 #
 # Without this, STA over-constrains the kernel to a single clk_sys period
 # (~30.8 ns @ 32.5 MHz) and the ~33 ns decode/datapath/regfile-bypass paths
@@ -52,13 +56,14 @@ set_multicycle_path -hold  -end 1 -from [get_keepers {*TG68KdotC_Kernel*}] -to [
 # read fail on some MiSTer builds (bit6/scsi_bsy read wrong, bit1/scsi_sel read
 # right), i.e. a dice-roll boot.
 #
-# Peripheral reads are E-paced: the kernel stalls at s_state 4 for xVma (near
-# E-fall) and latches read data at s_state 6, ALWAYS >= 5 clk_sys after the
-# address/select settle (rtl/tg68k/tg68k.v:107,115,135). Credit a CONSERVATIVE
-# 2x — well inside the >=5-cycle window — so STA reports the real margin instead
-# of over-constraining this E-paced read to one 30.8 ns period (the "STA passes
-# but HW fails" trap). Its fan-OUT (-> tg68_din_r) stays single-cycle and is
-# deliberately NOT relaxed.
+# Peripheral reads are E-paced: the kernel stalls at S_WAIT for the E-paced
+# (phi2 && xVma) exit (near E-fall) and latches read data two ticks later at
+# S_TAIL2, ALWAYS >= 5 clk_sys after the address/select settle (the VMA/E
+# handshake takes at least one E quantum; rtl/tg68k/tg68k.v). Credit a
+# CONSERVATIVE 2x — well inside the >=5-cycle window — so STA reports the real
+# margin instead of over-constraining this E-paced read to one 30.8 ns period
+# (the "STA passes but HW fails" trap). Its fan-OUT (-> tg68_din_r) stays
+# single-cycle and is deliberately NOT relaxed.
 set_multicycle_path -setup -end 2 -to [get_keepers {*periph_din_reg*}]
 set_multicycle_path -hold  -end 1 -to [get_keepers {*periph_din_reg*}]
 

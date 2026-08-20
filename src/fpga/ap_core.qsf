@@ -772,6 +772,7 @@ set_global_assignment -name VERILOG_FILE core/apf_blockdev.v
 #   sys/pll_cfg.qip       MiSTer PLL reconfig        -- no pixel-clock retuning
 # ---------------------------------------------------------------------------
 set_global_assignment -name QIP_FILE ../../rtl/tg68k/TG68K.qip
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/fetch_cache.sv
 set_global_assignment -name VERILOG_FILE ../../rtl/scsi.v
 set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/ncr5380.sv
 set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/cd_toc_stub.sv

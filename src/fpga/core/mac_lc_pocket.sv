@@ -364,7 +364,7 @@ module mac_lc_pocket
 			// dispatch (opt-in via IIOP source[1]) — the fault-time RAM and
 			// stack are frozen before SysError's dialog redraw can scribble
 			// them. Same reset-hold as ext_freeze; release via IIOP rearm.
-			if(~pll_locked || !rom_loaded || reset || jboot_rst || romv_run ||
+			if(~pll_locked || !rom_loaded || reset || jboot_rst ||
 			   ext_freeze || iiop_mfreeze || (dio_download && dio_index == 8'd0)) begin
 				rst_cnt <= '1;
 				n_reset <= 0;
@@ -554,6 +554,7 @@ module mac_lc_pocket
 	wire _memoryUDS, _memoryLDS;
 	wire dioBusControl;
 	wire cpuBusControl;
+	wire flp_guard;
 	wire [22:0] memoryAddr;  // 23-bit SDRAM word address from address controller
 	wire [15:0] memoryDataOut;
 	wire memoryLatch;
@@ -572,28 +573,32 @@ module mac_lc_pocket
 	// POCKET CUT: the external drive's fetch channel is gone (one drive).
 
 	// dtack generation for 16 MHz mode
-	reg  dtack_en, mem_latch_d;
+	// Phase C (ported from MiSTer cpu-icache): RAM/ROM/VRAM DTACK comes
+	// straight from the SDRAM controller's demand handshake (sdram_cpu_done)
+	// — the old slot-aligned grant (cpuBusControl & mem_latch_d strobe at
+	// each cpu-slot start) is gone, and with it the mod-4 quantization that
+	// pinned every memory access to >=8 clk_sys. dtack_en now serves ONLY
+	// the immediate paths the demand engine never serves:
+	//   - peripheral/unmapped space (as before), and
+	//   - ROM-region WRITES (ack-and-discard, 68000/V8 style). A ROM write
+	//     asserts neither oe nor we, so the engine never answers it — but
+	//     the boot ROM's device-probe code WRITES into ROM space behind a
+	//     temporary vector-$8 handler and requires the cycle to complete
+	//     (ack or bus-error; the old slot glue acked every mem-region
+	//     access regardless of oe/we). Without this the diskless ?-icon
+	//     phase deadlocks at a byte write to $A6C3xx — the MiSTer
+	//     2026-08-17 magenta-screen boot stall. (MAME confirms hardware
+	//     discards ROM writes silently: v8.cpp maps $000000-$0FFFFF
+	//     read-only with no bus error.)
+	reg  dtack_en;
 	always @(posedge clk_sys) begin
 		if (!_cpuReset) begin
 			dtack_en <= 0;
 		end
 		else begin
-			// mem_latch_d = registered memoryLatch: high at busPhase 0, i.e. the
-			// START of each busCycle. (cpuBusControl & mem_latch_d) therefore
-			// strobes once at the start of EVERY cpu slot.
-			mem_latch_d <= memoryLatch;
 			if (_cpuAS) dtack_en <= 0;
-			// VRAM is SDRAM-backed and reads via the same cpu-slot as RAM,
-			// so it must take the slot-aligned DTACK path (a cpu-slot start),
-			// NOT the immediate !ROM&!RAM peripheral path. Excluding selectVRAM
-			// here stops DTACK asserting before the SDRAM cpu-slot commits the
-			// read/write (was truncating longword writes / sampling stale data).
-			// H1: this was `!cpuBusControl_d & cpuBusControl` (rising edge), which
-			// gave each ISOLATED cpu slot one DTACK opportunity. With slot 00 now
-			// also a cpu slot the three slots are contiguous (one rising edge per
-			// round), so we strobe at each cpu-slot start instead — same busPhase-0
-			// timing as the old edge, but for all 3 slots (3 acks/round = +50%).
-			if (!_cpuAS & ((cpuBusControl & mem_latch_d) | (!selectROM & !selectRAM & !selectVRAM))) dtack_en <= 1;
+			if (!_cpuAS & ( (!selectROM & !selectRAM & !selectVRAM)
+			              | (selectROM & !_cpuRW) )) dtack_en <= 1;
 		end
 	end
 
@@ -623,9 +628,18 @@ module mac_lc_pocket
 	// instead of the 6800-style VPA path the rest of $F0xxxx uses — see MacLC.sv.
 	assign      _cpuVPA = fc7_iack ? 1'b0 : ((fc7_berr || slot_space) ? 1'b1 : ~(!_cpuAS && cpuAddr[23:21] == 3'b111 && !selectVRAM && !selectSCSIDMA));
 	assign      _cpuDTACK = fc7_berr ? 1'b1 :
+	                        icache_hit ? 1'b0 :        // fetch-cache hit answers now
 	                        (slot_space && !_cpuAS) ? 1'b0 :
 	                        selectSCSIDMA ? ~scsiDREQ :
-	                        (~(!_cpuAS && (cpuAddr[23:21] != 3'b111 || selectVRAM)) | !dtack_en);
+	                        // Phase C: SDRAM-backed targets ack via the demand
+	                        // handshake (early-done: data is in cpu_dout before
+	                        // the FSM's exit+2 din_r latch; writes post at ACTIVE).
+	                        // ROM WRITES are excluded: the engine never serves
+	                        // them (no oe/we) — they ack-and-discard via dtack_en.
+	                        (!_cpuAS && (selectRAM || selectVRAM || (selectROM && _cpuRW))) ? ~sdram_cpu_done :
+	                        // $Fxxxxx VPA peripherals stay un-acked here (E/VMA
+	                        // paced); everything else non-mem = immediate ack
+	                        (~(!_cpuAS && cpuAddr[23:21] != 3'b111) | !dtack_en);
 
 	// Programmer's switch / Level-7 NMI — mirror of MacLC.sv (there the trigger is
 	// the "R5" OSD button status[5]; in sim it is the nmi_pulse input driven by
@@ -678,6 +692,7 @@ module mac_lc_pocket
 	wire        tg68_fc2;
 	wire [15:0] tg68_dout;
 	wire [31:0] tg68_a;
+	wire [31:0] tg68_a_early;   // pre-AS address for the fetch cache
 	wire        tg68_reset_n;
 	wire        tg68_longword;   // 32-bit access flag — drives SCSI pseudo-DMA byte packing
 	wire [1:0]  tg68_busstate;
@@ -766,6 +781,42 @@ module mac_lc_pocket
 
 	wire cpu_berr = (fc7_berr && !_cpuAS) || sdma_berr;
 
+	// ── Fetch cache (ported from MiSTer cpu-icache, HW-validated there
+	// 2026-08-19) ───────────────────────────────────────────────────────────
+	// ★ Fed the EARLY address (tg68_a_early = the kernel's combinational
+	// output): the Phase-B FSM registers cpuAddr on the same edge AS falls, so
+	// the module's correspondence guard rejects every fetch on the registered
+	// address — 100% miss, silently. See rtl/fetch_cache.sv.
+	// ★ The MiSTer "cache corrupts / hangs" history is CLOSED — it was TWO
+	// independent silicon-only defects, both fixed and both still required:
+	//   1. M10K read-during-write (rdw_collide in fetch_cache.sv);
+	//   2. abandoned-transaction stale-done in the SDRAM controller (a hit
+	//      lets the CPU abandon its demand transaction; the orphan early-done
+	//      could falsely complete the NEXT cycle — the done-birth `&& oe`
+	//      guard in pocket_sdram.v).
+	// Any new agent that can abandon a bus request re-opens class 2.
+	// ★ ALWAYS ON (MiSTer user ruling 2026-08-19, after HW validation): no
+	// menu toggle — .enable is hardwired.
+	wire        icache_hit;
+	wire [15:0] icache_data;
+	wire        icache_hit_now;   // per-access request-suppression verdict
+	fetch_cache #(.LOG2_WORDS(9)) icache (
+		.clk        ( clk_sys ),
+		.reset      ( ~_cpuReset ),
+		.flush_bits ( {memoryOverlayOn, dio_download} ),
+		.enable     ( 1'b1 ),
+		.cpuAddr    ( tg68_a_early[23:0] ),
+		.as_n       ( _cpuAS ),
+		.rw         ( _cpuRW ),
+		.fc         ( cpuFC ),
+		.cacheable  ( selectRAM || selectROM ),
+		.snoopable  ( selectRAM ),
+		.mem_din    ( dataControllerDataOut ),
+		.hit        ( icache_hit ),
+		.hit_data   ( icache_data ),
+		.hit_now    ( icache_hit_now )
+	);
+
 	// ---- VPA peripheral read: register the data one clk_sys stage ----------
 	// ★ PORTED FROM MacLC.sv.reference:985-999 on 2026-08-11. This fix existed
 	// upstream and mac_lc_pocket dropped it at import -- neither vpa_periph_read
@@ -797,6 +848,7 @@ module mac_lc_pocket
 	reg [15:0] periph_din_reg;
 	always @(posedge clk_sys) periph_din_reg <= dataControllerDataOut;
 	wire [15:0] cpu_din_muxed = slot_space      ? 16'hFFFF :
+	                            icache_hit      ? icache_data :
 	                            vpa_periph_read ? periph_din_reg :
 	                                              dataControllerDataOut;
 `ifdef SIMULATION
@@ -844,6 +896,7 @@ module mac_lc_pocket
 		.dout       ( tg68_dout ),
 		.longword   ( tg68_longword ),
 		.addr       ( tg68_a ),
+		.addr_early ( tg68_a_early ),
 		.busstate   ( tg68_busstate )
 	);
 
@@ -1132,6 +1185,10 @@ module mac_lc_pocket
 		._ramWE(_ramWE),
 		.dioBusControl(dioBusControl),
 		.cpuBusControl(cpuBusControl),
+		.flp_guard(flp_guard),
+		.cpu_wr_ack(sdram_cpu_done),
+		.flp_present(dsk_int_ins),
+		.dio_download(dio_download),
 		.selectSCSI(selectSCSI),
 		.selectSCSIDMA(selectSCSIDMA),
 		.selectSCC(selectSCC),
@@ -1510,6 +1567,9 @@ module mac_lc_pocket
 		.cpuBusControl(cpuBusControl),
 		.memoryDataOut(memoryDataOut),
 		.memoryDataIn(ram_do),
+		// Floppy fetch byte on its own wire (Phase C — see the port note in
+		// dataController_top.sv; ram_do is the CPU's private read data now).
+		.dskReadDataIn(extra_rom_data_demux[7:0]),
 		.memoryLatch(memoryLatch),
 		.selectAriel(selectAriel),
 		.ariel_data_in(ariel_reg_dout),
@@ -1783,9 +1843,14 @@ module mac_lc_pocket
 	// POCKET CUT: the $700000 second-floppy region is unused now.
 	reg [22:0] dio_a;
 	reg [15:0] dio_data;
-	reg        dio_write;
-	reg        dio_old_cyc = 0;
 	reg        dio_just_retired = 1'b0;
+
+	// Download request into the SDRAM controller's dedicated port (Phase C —
+	// see the root-cause note on the dl_* port in pocket_sdram.v). One word
+	// per dioBusControl slot (the pre-Phase-C rate); dl_ack, not the slot
+	// edge, releases the loader. Declared here because the handshake below
+	// consumes sdram_dl_ack.
+	wire       sdram_dl_ack;
 
 	// DC42 write offset: active from the word after the magic (word 41)
 	wire [19:0] dio_flp_a = dc42_skip ? (dio_addr[19:0] - 20'd42) : dio_addr[19:0];
@@ -1804,10 +1869,16 @@ module mac_lc_pocket
 		// UNWRITTEN (masked because every reload rewrites the same file).
 		// Accept exactly once per word — only with no word pending and not in
 		// the one-cycle post-retire shadow — and ioctl_wait becomes honest:
-		// no ghost slots, no spurious acks, and dio_a cannot change while any
-		// dio_write=1 slot is in flight. MiSTer never needed this because HPS
-		// ioctl_wr was a one-cycle strobe, not a held level.
-		if(ioctl_wr && !ioctl_wait && !dio_just_retired) begin
+		// no ghost slots, no spurious acks, and dio_a cannot change while a
+		// word is in flight. MiSTer never needed this because HPS ioctl_wr
+		// was a one-cycle strobe, not a held level.
+		// ★ Phase C re-key (2026-08-19): the retire event is now the SDRAM
+		// controller's own dl_ack (see below), so the shadow keys on that;
+		// !sdram_dl_ack additionally blocks re-accepting a new word until the
+		// previous ack has fully drained (dl_ack is a LEVEL held until the
+		// controller samples dl_req low — ~2 clk_sys after the clear; the
+		// loader is far slower, so this can never deadlock).
+		if(ioctl_wr && !ioctl_wait && !dio_just_retired && !sdram_dl_ack) begin
 			if (dio_index[1:0] != 2'b00) begin
 				// accept either byte lane order for the sim stream
 				if (dio_addr[19:0] == 20'd0) begin
@@ -1829,15 +1900,21 @@ module mac_lc_pocket
 			ioctl_wait <= 1;
 		end
 
-		dio_old_cyc <= dioBusControl;
-		if(~dioBusControl) dio_write <= ioctl_wait;
-		// ★ Hold the download word until SDRAM can actually store it. While the
-		// init ladder runs, pocket_sdram ignores we/oe, so retiring here would
-		// throw the word away. The loader keeps dio_wr asserted and its 512-word
-		// FIFO absorbs the ~126 us wait, so nothing is lost -- the words are
-		// simply written once memory is live.
-		dio_just_retired <= (dio_old_cyc & ~dioBusControl & dio_write);
-		if(dio_old_cyc & ~dioBusControl & dio_write) ioctl_wait <= 0;
+		// ★ Release the loader on the SDRAM controller's OWN acknowledgement
+		// (dl_ack), not on the bus-slot edge. The old edge protocol assumed
+		// the write had certainly been issued by the time the slot ended;
+		// under demand-start the sequencer can still be busy with a CPU
+		// access, and a word that missed its slot would be silently dropped
+		// from the image. dl_ack is a level (clk_64 is 2x clk_sys — a
+		// one-tick pulse is not sampleable), so this is a clean two-phase
+		// handshake: ioctl_wait 0->1 requests, dl_ack 0->1 acknowledges, and
+		// the word simply waits for the next window if this one was taken.
+		// ★ The hold-during-init property is preserved: while the init ladder
+		// runs, pocket_sdram holds dl_ack at 0, so ioctl_wait stays up and
+		// the loader's 512-word FIFO absorbs the ~126 us wait — nothing is
+		// lost, the words land once memory is live.
+		dio_just_retired <= (sdram_dl_ack && ioctl_wait);
+		if (sdram_dl_ack) ioctl_wait <= 0;
 	end
 
 	// ---- Boot forensics: words actually RETIRED into SDRAM ------------------
@@ -1895,182 +1972,148 @@ module mac_lc_pocket
 
 	////////////////////////// RAM /////////////////////////////////
 
-	// ★ 2026-08-11 — RESTORED TO MacLC.sv's FORM. Do not "simplify" this again.
+	// ★★★ 2026-08-19 — the `download_cycle` MUX IS GONE (Phase C port from
+	// MiSTer cpu-icache). It used to steal the CPU's addr/din/ds/we/oe nets
+	// for the dioBusControl slot; see the long root-cause note on the dl_*
+	// port in pocket_sdram.v. Downloads now reach the controller through
+	// their own request, so a mount can no longer hijack a CPU access (or
+	// its DTACK) mid-flight. The window is still exactly one word per
+	// dioBusControl slot, so the download rate and the CPU/download
+	// bandwidth split are unchanged.
 	//
-	// This block arrived from verilator/sim.v (see the file header for why sim.v
-	// was the base) and carried sim.v's SHORTCUT with it, comment and all:
-	//
-	//     // For simulation with synchronous RAM, use simplified direct download path
-	//     wire download_cycle = dio_download && ioctl_wr;
-	//     wire ram_din = download_cycle ? ioctl_dout : ...   // live, not latched
-	//     wire ram_we  = download_cycle ? 1'b1      : ...    // held, not one-shot
-	//
-	// That is correct against sim.v's IDEAL memory (accepts a write any cycle)
-	// and wrong against a real SDRAM behind an arbiter:
-	//
-	//   * ioctl_wr is a LEVEL held until the loader's ack, not a strobe. So
-	//     download_cycle stayed asserted for many cycles per word, and with it
-	//     ram_addr / ram_din / ram_ds / ram_we / ram_oe ALL stayed switched to
-	//     the download. Every one of those muxes is shared with the CPU, so for
-	//     the whole of a download the CPU could not reach memory at all.
-	//   * During the ROM load that is invisible: the 68020 is held in reset, so
-	//     nothing else wants the bus. That is why the ROM checksums verify
-	//     perfectly and this survived so long.
-	//   * During a FLOPPY load the CPU IS running -- which is the documented
-	//     "mounting a floppy crashes the core" symptom in PORT_STATUS.
-	//   * It also ignored dioBusControl entirely, i.e. it wrote outside the
-	//     arbiter's download slot.
-	//
-	// MacLC.sv:2185-2206 latches the word (dio_data/dio_a, above) and writes it
-	// only in the granted slot, with a one-shot dio_write. That is what this is
-	// now. dio_a_comb is retired: it recomputed the address combinationally from
-	// ioctl_addr instead of using the latched dio_a, so it was a second copy of
-	// the same mapping that could disagree with it.
-	//
-	// ★★ 2026-08-12 — RE-APPLIED, and this time it is a MEASURED ROOT CAUSE,
-	// not just MiSTer parity. The ROMV v3 oracle (completion-paired SDRAM
-	// read-back) proved the sim form scatter-corrupts the ROM AS IT LANDS:
-	//
-	//   * pocket_sdram samples row/bank from the LIVE addr at t=0 (ACT) and
-	//     column+data at t=2 (CAS), ~31 ns apart.
-	//   * In the sim form, ram_addr switches to the download mux the moment
-	//     ioctl_wr (a level) rises — but dio_a latches the new word's address
-	//     one clk_sys LATER. For that one cycle: ram_we=1, addr = OLD word's
-	//     dio_a, din = NEW word's ioctl_dout (live).
-	//   * If the controller's t=0 lands in that window, the access tears:
-	//     ACT opens the OLD row, CAS writes the NEW column with NEW data.
-	//     Mid-row that is invisible (old row == new row, and the torn write
-	//     lands exactly where the next word belongs anyway). At a ROW CROSSING
-	//     (every 256 words) it writes (row R, col 0) <= value(row R+1, col 0).
-	//   * Measured on hardware (buildR survey): every corrupt word sat at
-	//     addr xx00 and held exactly content(addr+0x100) — 16/16 clean matches
-	//     against boot0.rom, ~20% of row boundaries hit (1-in-4 t-phase odds).
-	//
-	// The stream-side accumulators (rom_sum/rom_axsum) can NEVER see this:
-	// they hash the words as sent, not as landed. Every "ROM verified
-	// byte-perfect" claim before ROMV was measuring the stream.
-	//
-	// This is the mechanism behind the per-reload boot lottery: each OSD
-	// reload re-rolls which row-start words are scarred, so boots fail (or
-	// don't) at random depths on identical checksums. jboot re-executes the
-	// SAME scarred content, hence its deterministic early wedge.
-	//
-	// The arbiter form alone is NOT quite tear-proof against a LEVEL-held
-	// ioctl_wr: buildS (arbiter form only) still tore 5.4% of row boundaries
-	// via stale-ioctl_wait GHOST slots — see the one-shot-accept block above
-	// (buildT), which closes that hole. The pair together is the fix.
-	// Do NOT revert either half to the ioctl_wr sim form.
-	//   MiSTer form: dio_download && dioBusControl, ram_din=dio_data, ram_we=dio_write
-	wire download_cycle = dio_download && dioBusControl;
+	// The two hard-won Pocket properties of the OLD path are PRESERVED by
+	// construction in the new one (do not weaken either):
+	//   * ROW-CROSSING TEAR (buildR/buildS, 2026-08-12): the download
+	//     address/data must never change while an SDRAM access is in flight.
+	//     The dl_* port uses the LATCHED dio_a/dio_data, and pocket_sdram
+	//     additionally freezes them into its own registers at ACTIVE
+	//     (din_q/ds_q/col_q) — a delayed access cannot see its inputs move.
+	//   * GHOST SLOTS (buildT): the one-shot accept above still admits
+	//     exactly one word per ioctl_wait cycle, and the dl_served marker in
+	//     pocket_sdram issues at most one write per request level — no
+	//     spurious re-writes, no phantom acks. (The full tear/ghost history
+	//     is in git at 9a2d50d/f21fd75.)
 
 	// SDRAM word address mapping:
 	// memoryAddr[22:0] is already the SDRAM word address from addrController
 	// Download path uses the LATCHED dio_a[22:0] (set when ioctl_wr arrived).
-	// ---- ROM RETENTION VERIFIER (2026-08-12) ------------------------------
-	// Reads the 512 KB ROM region back OUT of SDRAM and computes the same two
-	// sums the download path computes. Every prior "ROM verified" measured the
-	// arriving stream; this measures what the cells still hold — the missing
-	// oracle for the refresh-gap/decay hypothesis. Trigger: ROMV source rising
-	// edge. Holds the machine in reset for the ~32 ms scan (clk8-paced).
-	// v2: RANGE scans. Source = {go(rising edge), start[17:0], log2len[4:0]}:
-	// sums words [start, start + 2^log2len). log2len=18 with start=0 = the
-	// full-ROM scan. Binary search over ranges localizes every corrupt word
-	// over JTAG in seconds. romv_sum doubles as the WORD PEEK for len=1.
-	// ★ v4 (2026-08-13, buildAC): ARBITRARY SDRAM ranges. The v3 source
-	// hardwired the {5'b10100} ROM segment; the +59 crash hunt needs to scan
-	// the RAM the System landed in and diff it against the file offline —
-	// the exact technique that cracked the ROM download tears, aimed at RAM.
-	// Source is now 32-bit: [31]=go, [27:5]=base (23-bit SDRAM WORD address,
-	// full 16 MB space — the ROM region starts at word 23'h500000), [4:0]=
-	// log2len (words; >23 clamps to 8M = the whole part). A full-SDRAM scan
-	// is ~2.5 s. Decoders: scripts/romv.tcl / romv_survey.tcl / romv_peek.tcl
-	// (all updated to the v4 encoding — v3 command words are NOT compatible).
-	wire [31:0] romv_src;   // [31] go, [27:5] base, [4:0] log2len
-	reg         romv_d   = 1'b0;
-	reg  [1:0]  romv_st  = 2'd0;    // 0 idle, 1 scanning, 2 done
-	reg  [23:0] romv_idx = 24'd0;   // counts 0..len inclusive tail
-	reg  [22:0] romv_base = 23'd0;
-	reg  [23:0] romv_len  = 24'd0;
-	reg  [31:0] romv_sum = 32'd0;
-	reg  [31:0] romv_axs = 32'd0;
-	reg  [2:0]  romv_settle = 3'd0;
-	reg         romv_stb_d  = 1'b0;
-	wire        ram_do_stb;
-	wire        romv_run = (romv_st == 2'd1);
-	always @(posedge clk_sys) begin
-		romv_d <= romv_src[31];
-		if (!romv_d && romv_src[31] && romv_st != 2'd1) begin
-			romv_st   <= 2'd1;
-			romv_idx  <= 24'd0;
-			romv_base <= romv_src[27:5];
-			romv_len  <= (romv_src[4:0] > 5'd23) ? 24'h800000 : (24'd1 << romv_src[4:0]);
-			romv_sum  <= 32'd0;
-			romv_axs  <= 32'd0;
-			romv_settle <= 3'd7;   // absorb any machine-era read still in flight
-		end else if (romv_run) begin
-			// ★ v3: COMPLETION-PAIRED. v2/v2.1 free-ran on clk8 ticks and
-			// trusted dout timing; reads that never issued left stale dout in
-			// the sums (the "8% corruption" mirage — mostly the machine's own
-			// post-reset word-0 fetch reflected back). Now: hold one address,
-			// accumulate ONLY when the controller's dout_stb confirms a served
-			// read, then advance. Slower (~0.5 s full scan), airtight.
-			// Settle: skip strobes for the first 8 clk_sys after an address
-			// change so a just-completing older read can't be mis-paired.
-			if (romv_settle != 3'd0) begin
-				romv_settle <= romv_settle - 3'd1;
-				romv_stb_d  <= ram_do_stb;
-			end else begin
-				romv_stb_d <= ram_do_stb;
-				if (romv_stb_d != ram_do_stb) begin
-					romv_sum <= romv_sum + {16'd0, ram_do_raw};
-					romv_axs <= romv_axs + ({9'd0, romv_base + romv_idx[22:0]} ^ {16'd0, ram_do_raw});
-					romv_settle <= 3'd7;
-					if (romv_idx == romv_len - 24'd1) romv_st <= 2'd2;
-					else romv_idx <= romv_idx + 24'd1;
-				end
-			end
-		end
-	end
+	// ---- ROM RETENTION VERIFIER: RETIRED (2026-08-19, Phase C port) -------
+	// The ROMV v4 oracle (JTAG-fed SDRAM range scanner, 2026-08-12..13) is
+	// deleted with this port: JTAG bring-up is retired, its romv_src lever
+	// was permanently tied 0, and its protocol (free-running oe paired with
+	// dout_stb completion toggles) is structurally meaningless under the
+	// demand engine, where CPU-class reads complete via cpu_done/cpu_dout.
+	// It also muxed into the CPU's own request nets — exactly the shared-mux
+	// class Phase C exists to eliminate. Recover from git history (buildAC
+	// era, scripts/romv*.tcl) if a memory-content oracle is ever needed
+	// again; under the demand engine it would need its own request port,
+	// like the download's dl_*.
 
-	// v4: the oracle addresses the FULL 23-bit SDRAM word space directly —
-	// the ROM region is base 23'h500000 (the old implicit {5'b10100} prefix).
-	wire [24:0] ram_addr = romv_run       ? {2'b00, romv_base + romv_idx[22:0]} :
-	                       download_cycle ? {2'b00, dio_a[22:0]} :
-	                                        {2'b00, memoryAddr[22:0]};
-
-	// din/we use the LATCHED word (dio_data) and the slot-gated one-shot
-	// (dio_write) — see the root-cause block above. Live ioctl_dout / a bare
-	// 1'b1 here re-opens the row-crossing tear.
-	wire [15:0] ram_din  = download_cycle ? dio_data : memoryDataOut;
-	wire  [1:0] ram_ds   = download_cycle ? 2'b11 : { !_memoryUDS, !_memoryLDS };
-	wire        ram_we   = download_cycle ? dio_write : !_ramWE;
-	wire        ram_oe   = romv_run ? 1'b1 : download_cycle ? 1'b0 : (!_ramOE || !_romOE || dskReadAckInt);
-	wire [15:0] ram_do_raw;
-	// --- FORCED-WARM BOOT: RETIRED (buildU, 2026-08-12) ----------------------
-	// The 2026-08-12 forced-warm experiment NOPed the warm-vs-cold `bne.w`
-	// ($4655E, SDRAM words $5232AF/B0; the inherited MiSTer patch aimed at
-	// $52322F and never fired — address typo). It was cover for the cold RAM
-	// march failing — which the ROMV v3 oracle then explained: the march was
-	// executing SCARRED ROM (download row-crossing tears, see the root-cause
-	// block above). With the download path fixed and content verified
-	// byte-perfect, the patch became actively harmful: it forced warm-boot
-	// semantics onto uninitialized RAM on every true cold boot, which failed
-	// POST into the $A49xxx reporter deterministically. Honest branch
-	// restored; the cold march runs on clean code now. (If a forced-warm
-	// experiment is ever needed again: NOP words $5232AF/B0 when ram_do_raw
-	// reads 6600/0016, guarded on !_romOE and the exact address.)
-	wire [15:0] ram_do_patched = ram_do_raw;
-	wire [15:0] ram_do   = download_cycle ? 16'hffff : dskReadAckInt ? extra_rom_data_demux : ram_do_patched;
+	// The CPU's SDRAM request — a pure LEVEL, held while AS is low (Phase C).
+	// No download leg (dl_* port), no romv leg (retired), and oe carries NO
+	// floppy term: floppy intent travels ONLY via flp_win. Including
+	// dskReadAckInt here (as the slot machine needed) let a pending floppy
+	// window bridge the 2-3 tick AS-high gap between CPU cycles, holding oe
+	// high so cpu_done never cleared: the next read then instant-acked on
+	// the HELD done and latched the PREVIOUS access's cpu_dout without ever
+	// touching SDRAM (stale-read class), and writes lost their done-RISE
+	// (vram_we strobes silently dropped) — the MiSTer magenta-screen hunt of
+	// 2026-08-17.
+	// ★ A cache hit never starts an SDRAM transaction (Law 7): the
+	// suppression verdict is a per-access snapshot from fetch_cache (same
+	// edge the hit registers, held for the access), so ram_oe_q sees a
+	// stable gate — never a mid-transaction drop. Without this every hit
+	// ABANDONED its demand transaction and the next access stalled behind
+	// the phantom: on MiSTer, Speedometer showed the software-FP tests 4-6%
+	// BELOW cache-off while tight loops gained — the stall tax.
+	// pocket_sdram's done-birth guard (`&& oe`) remains as the safety net.
+	wire [24:0] ram_addr = {2'b00, memoryAddr[22:0]};
+	wire [15:0] ram_din  = memoryDataOut;
+	wire  [1:0] ram_ds   = { !_memoryUDS, !_memoryLDS };
+	wire        ram_we   = !_ramWE;
+	wire        ram_oe   = (!_ramOE || !_romOE) && !icache_hit_now;
+	// Phase C: CPU reads come from the controller's held cpu_dout register
+	// (captured once per demand access), not the shared slot-domain dout —
+	// floppy windows can no longer clobber CPU read data, and the value
+	// stays valid through the CPU FSM's late din_r latch.
+	// (The old `download_cycle ? 16'hffff` term is removed with the mux —
+	// video no longer reads SDRAM at all (BRAM framebuffer), and forcing
+	// $FFFF here corrupted any CPU read sampled inside a download slot.)
+	// ★ The floppy leg is GONE from this mux — it now reaches dataController
+	// on its own dskReadDataIn wire. This net is the memory leg of
+	// cpuDataOut, so swapping it to the floppy byte for the duration of
+	// every fetch window would hand the CPU floppy data whenever a window
+	// landed inside a (no-longer-slot-aligned) demand access.
+	// (FORCED-WARM BOOT patch: retired buildU 2026-08-12 and stays retired —
+	// the honest branch runs on clean code; see git history if ever needed.)
+	wire [15:0] sdram_cpu_dout;
+	wire        sdram_cpu_done;
+	wire [15:0] ram_do = sdram_cpu_dout;
 	// Disk byte-parity select: must be dskReadAddr[0], NOT memoryAddr[0] (which
 	// is dskReadAddr[1] after the >>1 word conversion drops bit 0). See the long
 	// note at the matching demux in MacLC.sv — the old bit selected the wrong
-	// byte on odd addresses and corrupted every floppy sector. Keep in sync.
+	// byte on odd addresses and corrupted every floppy sector.
+	// Phase C: select with the parity REGISTERED alongside the request
+	// bundle, so it matches the address the access was actually issued with
+	// (the live signal is one tick ahead of the registered window now). The
+	// demux source is the controller's `dout` — the floppy-window data
+	// register, which CPU traffic never touches.
 	wire dsk_byte_odd = dskReadAddrInt[0];
-	wire [15:0] extra_rom_data_demux = dsk_byte_odd ?
-						   {ram_do_raw[7:0],ram_do_raw[7:0]}:{ram_do_raw[15:8],ram_do_raw[15:8]};
+	reg  ram_dskodd_q;
+	always @(posedge clk_sys) ram_dskodd_q <= dsk_byte_odd;
+	wire [15:0] ram_flp_do;
+	wire [15:0] extra_rom_data_demux = ram_dskodd_q ?
+						   {ram_flp_do[7:0],ram_flp_do[7:0]}:{ram_flp_do[15:8],ram_flp_do[15:8]};
+
+	// ── Phase C fix (ported from MiSTer 2026-08-18): pipeline the SDRAM
+	// request in clk_sys ─────────────────────────────────────────────────────
+	// STA on the MiSTer post-fit netlist measured the clk_sys->clk_mem
+	// request paths at **-6.710 ns** with a 15.381 ns window: the V8
+	// address-translation cone (tg68k|addr -> SIMM compare / mirror subtract
+	// / mux -> sd_addr) needs ~22 ns, but a clk_64 capture edge gives it only
+	// ONE clk_64 period. The demand sequencer was therefore latching a
+	// HALF-SETTLED ROW/COLUMN ADDRESS — reads and writes landing at the wrong
+	// location (the "System Update" F-line bomb of 2026-08-17). A multicycle
+	// "fixed" this on paper by granting 2 destination periods the silicon
+	// never had; the fix must be structural. One clk_sys register stage on
+	// the whole request bundle:
+	//   * the deep translation cone now terminates at a clk_sys flop and gets
+	//     a full 30.76 ns period (22 ns needed -> genuine positive slack);
+	//   * the sequencer captures from an adjacent register, a short route
+	//     that closes inside one clk_64 period with room to spare.
+	// Cost is one clk_sys tick of request latency per access.
+	// The bundle registers together (including flp_guard) so the floppy
+	// window stays coherent with the address it is muxing — floppy.v latches
+	// its fetch a full clk8 period later, which absorbs the shift.
+	// ★ flp_win and flp_addr are passed LIVE, deliberately — see the flp_addr
+	// port note in pocket_sdram.v: the window IS slot-aligned by construction
+	// and delaying the floppy address by the pipeline tick delivers the
+	// PREVIOUS byte to the encoder.
+	// ★ DO NOT add an SDC multicycle to "help" these paths — that is the
+	// exact trap the registration replaces (see core_constraints.sdc).
+	reg [24:0] ram_addr_q;
+	reg [15:0] ram_din_q;
+	reg  [1:0] ram_ds_q;
+	reg        ram_we_q, ram_oe_q;
+	reg        ram_flpguard_q;
+	reg        ram_dlreq_q, ram_dlslot_q;
+	reg [23:0] ram_dladdr_q;
+	reg [15:0] ram_dldin_q;
+	always @(posedge clk_sys) begin
+		ram_addr_q     <= ram_addr;
+		ram_din_q      <= ram_din;
+		ram_ds_q       <= ram_ds;
+		ram_we_q       <= ram_we;
+		ram_oe_q       <= ram_oe;
+		ram_flpguard_q <= flp_guard && !dio_download;
+		ram_dlreq_q    <= ioctl_wait;
+		ram_dlslot_q   <= dioBusControl;
+		ram_dladdr_q   <= {1'b0, dio_a[22:0]};
+		ram_dldin_q    <= dio_data;
+	end
 
 	// ------------------------------------------------------------------
-	// SDRAM — a drop-in swap for sim_ram (identical din/addr/ds/we/oe/dout).
+	// SDRAM — the Phase-C demand-start controller (see pocket_sdram.v).
 	// ------------------------------------------------------------------
 	// The .init policy is load-bearing and was got wrong twice on MiSTer
 	// (reverted d88c098 / 50d0c32): anything tied here that is ALSO asserted
@@ -2091,13 +2134,39 @@ module mac_lc_pocket
 		.sd_we          ( sdram_we_n  ),
 		.sd_ras         ( sdram_ras_n ),
 		.sd_cas         ( sdram_cas_n ),
-		.din            ( ram_din     ),
-		.addr           ( ram_addr[23:0] ),
-		.ds             ( ram_ds      ),
-		.we             ( ram_we      ),
-		.oe             ( ram_oe      ),
-		.dout           ( ram_do_raw  ),
-		.dout_stb       ( ram_do_stb  )
+
+		// cpu/chipset interface — the clk_sys-REGISTERED request bundle (see
+		// the pipeline note above; feeding the combinational nets here is
+		// what broke the 2026-08-17 MiSTer build).
+		.din            ( ram_din_q   ),
+		.addr           ( ram_addr_q[23:0] ),
+		.ds             ( ram_ds_q    ),
+		.we             ( ram_we_q    ),
+		.oe             ( ram_oe_q    ),
+		.dout           ( ram_flp_do  ),
+
+		// Phase C demand-start service.
+		// !dio_download on the window terms (matching addrController's
+		// at-source gate): during a download, dio writes are only PRESENTED
+		// during dioBusControl ticks — the very ticks floppy windows claim —
+		// and the guard zone covers them, so a pending floppy fetch would
+		// deadlock the loader (ioctl_wait never clears). Floppy pending
+		// state persists and is served after the download.
+		// flp_win/flp_addr LIVE, flp_guard registered — see the pipeline
+		// note above.
+		.flp_win        ( dskReadAckInt && !dio_download ),
+		.flp_addr       ( ram_addr[23:0] ),
+		.flp_guard      ( ram_flpguard_q ),
+
+		// download port (see the root-cause note in pocket_sdram.v)
+		.dl_req         ( ram_dlreq_q  ),
+		.dl_slot        ( ram_dlslot_q ),
+		.dl_addr        ( ram_dladdr_q ),
+		.dl_din         ( ram_dldin_q  ),
+		.dl_ack         ( sdram_dl_ack ),
+
+		.cpu_done       ( sdram_cpu_done ),
+		.cpu_dout       ( sdram_cpu_dout )
 	);
 
 	// Dedicated SDRAM re-init pulse on explicit user resets only.
@@ -2121,7 +2190,7 @@ module mac_lc_pocket
 	// RAM debug outputs
 	assign debug_ram_addr = ram_addr;
 	assign debug_ram_din = ram_din;
-	assign debug_ram_dout = ram_do_raw;
+	assign debug_ram_dout = sdram_cpu_dout;
 	assign debug_ram_we = ram_we;
 	assign debug_ram_oe = ram_oe;
 	assign debug_ram_ds = ram_ds;
@@ -2384,13 +2453,13 @@ module mac_lc_pocket
 	// STM-on-demand: set DIAG=1, strobe JBOO, converse, set DIAG=0.
 	wire diag_src;
 `ifndef USE_BOOT_ISSP
-	// Probe-less fit: levers permanently released. stm_src/romv_src are
-	// declared at their engines above; without cp_stmc/cp_romv driving them
-	// they would float to GND with a warning — tie them explicitly.
+	// Probe-less fit: levers permanently released. stm_src is declared at
+	// its engine above; without cp_stmc driving it it would float to GND
+	// with a warning — tie it explicitly. (romv_src retired 2026-08-19 with
+	// the ROMV engine — see the Phase-C note in the RAM section.)
 	assign jboot_src = 1'b0;
 	assign diag_src  = 1'b0;
 	assign stm_src   = 9'd0;
-	assign romv_src  = 32'd0;
 `endif
 
 `ifdef USE_BOOT_ISSP
@@ -2466,20 +2535,7 @@ module mac_lc_pocket
 		.sld_auto_instance_index ("YES")
 	) cp_diag (.probe(diag_src), .source(diag_src), .source_clk(clk_sys), .source_ena(1'b1));
 
-	altsource_probe #(
-		.instance_id ("ROMV"), .probe_width (4), .source_width (32),
-		.sld_auto_instance_index ("YES")
-	) cp_romv (.probe({2'b00, romv_st}), .source(romv_src), .source_clk(clk_sys), .source_ena(1'b1));
-
-	altsource_probe #(
-		.instance_id ("RVSU"), .probe_width (32), .source_width (1),
-		.sld_auto_instance_index ("YES")
-	) cp_rvsu (.probe(romv_sum), .source(), .source_clk(clk_sys), .source_ena(1'b1));
-
-	altsource_probe #(
-		.instance_id ("RVAX"), .probe_width (32), .source_width (1),
-		.sld_auto_instance_index ("YES")
-	) cp_rvax (.probe(romv_axs), .source(), .source_clk(clk_sys), .source_ena(1'b1));
+	// (cp_romv / cp_rvsu / cp_rvax removed 2026-08-19 with the ROMV engine.)
 
 	altsource_probe #(
 		.instance_id ("ROMC"), .probe_width (32), .source_width (1),

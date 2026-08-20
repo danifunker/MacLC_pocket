@@ -61,6 +61,18 @@ module dataController_top(
 	// RAM/ROM:
 	input cpuBusControl,
 	input [15:0] memoryDataIn,
+	// ★ Floppy fetch data on its OWN wire (ported from MiSTer 2026-08-19). It
+	// used to arrive through memoryDataIn, which the top level muxed to the
+	// floppy byte for the duration of every fetch window — but memoryDataIn is
+	// ALSO the memory leg of cpuDataOut. Under the old slot machine that was
+	// safe: the CPU could only sample data at its own slot's memoryLatch,
+	// never during the floppy slot. Phase C's demand-start broke that
+	// guarantee — a CPU access is no longer slot-aligned, so a window landing
+	// inside one hands the CPU floppy bytes instead of its own read data.
+	// Same defect class as the download riding the CPU's request nets: under
+	// demand-start, ANY mux shared between the CPU and a non-CPU agent is a
+	// bug.
+	input [7:0] dskReadDataIn,
 	output [15:0] memoryDataOut,
 	input memoryLatch,
 	
@@ -309,8 +321,14 @@ module dataController_top(
 		3'b111;                     // No interrupt
 		
 
-	reg [15:0] cpu_data;
-	always @(posedge clk32) if (cpuBusControl && memoryLatch) cpu_data <= memoryDataIn;
+	// Phase C (ported from MiSTer cpu-icache): the memory leg of the CPU read
+	// mux passes memoryDataIn straight through. Upstream it is the SDRAM
+	// controller's held cpu_dout register (captured once per demand access,
+	// stable from capture until AS release), so the old slot-tick sample
+	// (`cpu_data <= memoryDataIn` at cpuBusControl && memoryLatch, passthrough
+	// on that one tick) is no longer needed — and would be wrong: a demand
+	// access is not slot-aligned, so the CPU FSM's din_r latch tick need not
+	// coincide with a cpu-slot memoryLatch tick.
 
 	// CPU-side data output mux
     wire [15:0] viaDataOut_full = viaDataOut;
@@ -340,7 +358,7 @@ module dataController_top(
                         // conventional "open bus" value that the probe's
                         // write-pattern/read-mismatch check correctly rejects.
                         selectUnmapped ? 16'hFFFF :
-                        (cpuBusControl && memoryLatch) ? memoryDataIn : cpu_data;
+                        memoryDataIn;
 
 
     always @(posedge clk32) begin
@@ -975,7 +993,7 @@ module dataController_top(
 
 		.dskReadAddrInt(dskReadAddrInt),
 		.dskReadAckInt(dskReadAckInt),
-		.dskReadData(memoryDataIn[7:0]),
+		.dskReadData(dskReadDataIn),
 
 		.dbg_ism_flpe(dbg_ism_flpe),
 		.dbg_flp_byte_cnt(dbg_flp_byte_cnt),
