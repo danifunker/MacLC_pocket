@@ -128,6 +128,42 @@ read-only, snoop-free, and mostly cache-resident.
   `v1.1.0-sp` **byte-exact from the archived .sof, verified against the
   snapshot manifest** — the snapshot discipline paid for itself the same
   day it was created.
+- **★ EPILOGUE / CORRECTION (2026-08-20 later):** the seed-11 "F-line on
+  boot" datum was CONTAMINATED — it was Case 5 (the 7.5.5 corruption,
+  which reproduces on the known-good sp fit too), not a placement loss.
+  Case 4's placement evidence is really: seed 4 = black-video loss,
+  seed 11 = fit possibly fine, **seed 7 = clean on hardware** (video,
+  usual System, and the 7.5.5 volume). So 275/308 CAN place — at reduced
+  odds, on the third roll, exactly the Law 7 budget. The ring change was
+  un-reverted and shipped as `1.1.0-hd32c` = **v1.1.0-rc1**.
+
+### Case 5 — Pocket, 2026-08-20: the 7.5.5 corruption (OPEN — mitigated, not root-caused)
+
+- **Symptom:** a 7.5.5 volume consistently dies during/after Finder
+  launch on `1.1.0-sp` (16 KB ring): MacsBug shows a **bus error** with
+  A0 = `$50F06060` (the SCSI pseudo-DMA port address where a param-block
+  pointer belonged) on one boot, and a **jump to garbage** PC `6DB6DE41`
+  with the byte-periodic pattern `B6 DB 6D` in D4/D7/stack on another —
+  clean, well-formed wrong VALUES in pointer slots, not noise.
+- **Exonerated:** the disk image and guest (the exact volume boots clean
+  on MiSTer MacLC_20260819 with the same CPU stack); the scsi_dpram
+  ring/prefetch seam (`tb_scsi_ring`: 84k streaming checks across the
+  Phase-B-era cadence space, zero stales); the demand engine
+  (`tb_pocket_sdram`); the cache/controller seam (`tb_mem_seam`).
+- **Mitigated:** deepening HD1's ring to 32 KB (`RING_LOG=6`, the user's
+  theory — same mechanism as the original 2026-06-15 deepening: 7.5.5's
+  load pattern drains faster than the bridge refills) makes the volume
+  boot and run. **The mechanism is NOT explained** — a ring-starvation
+  path that corrupts POINTERS rather than failing reads cleanly is not
+  yet located. Suspect space: the ncr5380 host-face latch stack under
+  Phase-B pacing (`tb_scsi_face`, runnable only on the Verilator box —
+  the bundled 32-bit ModelSim SIGSEGVs on this module), and the
+  REQ-stall/DREQ seam at ring-empty boundaries.
+- **Watch items:** one transient guest "out of memory" on `hd32c`
+  (single occurrence, cleared by core restart); treat recurrence as new
+  evidence. If the corruption ever recurs on rc1, capture
+  `f 0 800000 6DB6` in MacsBug — the pattern-run extent fingerprints the
+  writer (still the missing datum from the sp-era crashes).
 
 ---
 

@@ -3,3 +3,7 @@ work_seam/
 *.log
 transcript
 work/
+ncr5380_bench_gen.v
+scsi_dpram_gen.v
+obj_face/
+face_vsim.log
