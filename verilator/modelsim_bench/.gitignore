@@ -1,5 +1,4 @@
-work_sdram/
-work_seam/
+work_*/
 *.log
 transcript
 work/
