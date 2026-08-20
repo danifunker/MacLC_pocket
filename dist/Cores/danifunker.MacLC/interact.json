@@ -21,7 +21,7 @@
         "mask": "0xFFFFFFFE"
       },
       {
-        "name": "Start D-Pad in Mouse Mode",
+        "name": "D-Pad Mouse Mode",
         "id": 130,
         "type": "list",
         "enabled": true,
@@ -41,24 +41,35 @@
         "persist": true
       },
       {
-        "name": "Pointer Speed (1=slow, 4=max)",
-        "id": 131,
-        "type": "slider_u32",
+        "name": "Pointer Speed",
+        "id": 133,
+        "type": "list",
         "enabled": true,
-        "defaultval": "4",
-        "persist": true,
         "address": "0xf0000054",
+        "defaultval": "0x4",
         "mask": "0xFFFFFFF8",
-        "graphical": {
-          "signed": false,
-          "min": 1,
-          "max": 4,
-          "adjust_small": 1,
-          "adjust_large": 1
-        }
+        "options": [
+          {
+            "value": "0x00000001",
+            "name": "1 (slow)"
+          },
+          {
+            "value": "0x00000002",
+            "name": "2"
+          },
+          {
+            "value": "0x00000003",
+            "name": "3"
+          },
+          {
+            "value": "0x00000004",
+            "name": "4 (max)"
+          }
+        ],
+        "persist": true
       },
       {
-        "name": "Remap Alt + CMD keys for PC keymaps",
+        "name": "PC Modifier Keys",
         "id": 132,
         "type": "list",
         "enabled": true,
