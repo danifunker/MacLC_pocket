@@ -67,3 +67,24 @@ Unexplained: a fresh test slot persisted `id 110 val 0` while all six other
 buttons held correct values. Something set Button A alone to 0. The clean
 experiment is to delete `Interact/_core/interact_persist.json`, launch without
 touching the menu, and read back what APF writes from defaults alone.
+
+## Menu laws learned 2026-08-20 (the input-settings feature)
+
+1. **Never change a row's TYPE (or value semantics) under an existing id.**
+   The OS persists values per-id and restores them into the new shape:
+   row 131 went list -> slider under the same id and rendered
+   UN-TOGGLEABLE on hardware (stale list-era 0 into a min=1 slider).
+   Re-id on any shape change; ids are free.
+2. **Long names truncate in the Pocket UI.** Keep row names short
+   ("PC Modifier Keys", not "Remap Alt + CMD keys for PC keymaps");
+   put explanation in option names, which render on the full-screen
+   picker each list row opens.
+3. **No submenus exist, period** — confirmed against Analogue's current
+   spec (flat list; the only "group" field gangs radio buttons). The
+   per-row full-screen option picker is the platform's only
+   submenu-like affordance.
+4. **Minification is the envelope lever.** The v2 input menu overshot
+   pretty-printed (7,935 > 7,793); compact serialization landed the
+   same content at 3,707 bytes. (Minified-file load: verified on
+   hardware pending the 1.1.2-inp2 test — update this line with the
+   verdict.)
