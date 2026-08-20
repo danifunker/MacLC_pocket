@@ -21,7 +21,7 @@
         "mask": "0xFFFFFFFE"
       },
       {
-        "name": "Startup input mode",
+        "name": "Start D-Pad in Mouse Mode",
         "id": 130,
         "type": "list",
         "enabled": true,
@@ -31,39 +31,48 @@
         "options": [
           {
             "value": "0x00000000",
-            "name": "Keyboard"
+            "name": "Off"
           },
           {
             "value": "0x00000001",
-            "name": "Mouse"
+            "name": "On"
           }
         ],
         "persist": true
       },
       {
-        "name": "Dock mouse speed",
+        "name": "Pointer Speed (1=slow, 4=max)",
         "id": 131,
+        "type": "slider_u32",
+        "enabled": true,
+        "defaultval": "4",
+        "persist": true,
+        "address": "0xf0000054",
+        "mask": "0xFFFFFFF8",
+        "graphical": {
+          "signed": false,
+          "min": 1,
+          "max": 4,
+          "adjust_small": 1,
+          "adjust_large": 1
+        }
+      },
+      {
+        "name": "Remap Alt + CMD keys for PC keymaps",
+        "id": 132,
         "type": "list",
         "enabled": true,
-        "address": "0xf0000054",
-        "defaultval": "0x0",
-        "mask": "0xFFFFFFFC",
+        "address": "0xf0000058",
+        "defaultval": 0,
+        "mask": "0xFFFFFFFE",
         "options": [
           {
-            "value": "0x0",
-            "name": "Normal"
+            "value": "0x00000000",
+            "name": "Off"
           },
           {
-            "value": "0x1",
-            "name": "Half"
-          },
-          {
-            "value": "0x2",
-            "name": "Quarter"
-          },
-          {
-            "value": "0x3",
-            "name": "Eighth"
+            "value": "0x00000001",
+            "name": "On"
           }
         ],
         "persist": true

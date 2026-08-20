@@ -64,6 +64,7 @@ module pocket_hid (
 	//       clicks off and unstable with them on, the extra ps2_mouse EVENTS
 	//       are. Four builds and four seeds could not separate those.
 	input  wire [2:0]  speed_sel,
+	input  wire        layout_pc,   // 1 = PC positional modifier remap (see mod_code)
 
 	output reg  [10:0] ps2_key,
 	output reg  [24:0] ps2_mouse,
@@ -249,23 +250,34 @@ module pocket_hid (
 	localparam integer MOD_LCTRL = 0, MOD_LSHIFT = 1, MOD_LALT = 2, MOD_LGUI = 3;
 	localparam integer MOD_RCTRL = 4, MOD_RSHIFT = 5, MOD_RALT = 6, MOD_RGUI = 7;
 
-	// Modifier -> PS/2 Set 2. The mapping puts a PC keyboard's modifiers in
-	// the physically correct Mac positions: Alt sits where Command does and
-	// the GUI/Windows key sits where Option does.
-	//   LALT/RALT -> 0x011/0x111 -> ADB 0x37 Command
-	//   LGUI/RGUI -> 0x11F       -> ADB 0x3A Option
+	// Modifier -> PS/2 Set 2, layout-selectable (v1.1.2, Core Settings
+	// "Remap Alt + CMD keys for PC keymaps"):
+	//
+	//   pc=0 (DEFAULT, Mac/semantic): HID Alt -> 0x11F -> ADB 0x3A Option,
+	//     HID GUI -> 0x011/0x111 -> ADB 0x37 Command. Apple keyboards report
+	//     Command as GUI and Option as Alt, so this is label-correct on Mac
+	//     boards out of the box, and the macOS-standard arrangement on PC
+	//     boards (Win = Command).
+	//   pc=1 (positional remap): the pre-v1.1.2 shipped table — Alt (beside
+	//     Space) acts as Command, GUI as Option. PC-keyboard muscle memory.
+	//
+	// ★ The layout input is sampled in layout_pc_r ONLY while the walker is
+	// idle with no modifiers held (see below): a release always emits the
+	// same code its press did, so a mid-hold menu flip can never strand a
+	// modifier down on the Mac (the buildBF stuck-key class).
 	function [8:0] mod_code;
 		input integer b;
+		input pc;
 		begin
 			case (b)
 				MOD_LCTRL : mod_code = 9'h014;
 				MOD_LSHIFT: mod_code = 9'h012;
-				MOD_LALT  : mod_code = 9'h011;
-				MOD_LGUI  : mod_code = 9'h11F;
+				MOD_LALT  : mod_code = pc ? 9'h011 : 9'h11F;
+				MOD_LGUI  : mod_code = pc ? 9'h11F : 9'h011;
 				MOD_RCTRL : mod_code = 9'h014;
 				MOD_RSHIFT: mod_code = 9'h059;
-				MOD_RALT  : mod_code = 9'h111;
-				MOD_RGUI  : mod_code = 9'h11F;
+				MOD_RALT  : mod_code = pc ? 9'h111 : 9'h11F;
+				MOD_RGUI  : mod_code = pc ? 9'h11F : 9'h111;
 				default   : mod_code = 9'h000;
 			endcase
 		end
@@ -341,6 +353,11 @@ module pocket_hid (
 
 	reg [7:0] cur [0:5];        // codes as last reported to the Mac
 	reg [7:0] cur_mod;
+	// Layout snapshot: advances only while idle with every modifier up, so
+	// press and release of a modifier always use the same table (see the
+	// mod_code comment). Menu writes are human-paced; the deferral until
+	// all-modifiers-released is imperceptible.
+	reg       layout_pc_r = 1'b0;
 	reg [7:0] nxt [0:5];        // the report being applied
 	reg [7:0] nxt_mod;
 	reg       busy;
@@ -390,6 +407,7 @@ module pocket_hid (
 				nxt[i] <= 8'd0;
 			end
 		end else if (!busy) begin
+			if (cur_mod == 8'd0) layout_pc_r <= layout_pc;
 			// Idle: take a snapshot and start walking it.
 			if (report_changed) begin
 				nxt[0] <= rc0; nxt[1] <= rc1; nxt[2] <= rc2;
@@ -414,7 +432,7 @@ module pocket_hid (
 			end else begin
 				if (nxt_mod[step-12] != cur_mod[step-12])
 					ps2_key <= { ~ps2_key[10], nxt_mod[step-12],
-					             mod_code(step-12) };
+					             mod_code(step-12, layout_pc_r) };
 			end
 
 			if (step == 5'd19) begin

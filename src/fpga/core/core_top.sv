@@ -375,7 +375,8 @@ always @(*) begin
     32'hF0000048: bridge_rd_data <= {23'd0, opt_code_r};
     32'hF000004C: bridge_rd_data <= {23'd0, opt_code_start};
     32'hF0000050: bridge_rd_data <= {31'd0, opt_ptr_default};
-    32'hF0000054: bridge_rd_data <= {29'd0, opt_mouse_speed};
+    32'hF0000054: bridge_rd_data <= {29'd0, opt_pointer_speed};
+    32'hF0000058: bridge_rd_data <= {31'd0, opt_kb_pc};
     32'hF0xxxxxx: bridge_rd_data <= 32'd0;   // actions read back as 0
     32'hF8xxxxxx: begin
         bridge_rd_data <= cmd_bridge_rd_data;
@@ -432,7 +433,18 @@ reg [8:0] opt_code_start = 9'h000;
 // sample happens after the OS has written this value (see the instantiation).
 // The power-on constant is the fallback when no Core Settings value is sent.
 reg       opt_ptr_default = 1'b1;
-reg [2:0] opt_mouse_speed = 3'd0;   // [1:0] 1:1/half/quarter/eighth, [2] click path off (diag)
+// Pointer speed, user-facing 1..4 (1=slowest, 4=max). The dock mouse path
+// divides deltas by a power-of-2 shift; shift = 4 - value, so the menu
+// slider reads naturally (higher = faster) and 4 = the historical Normal.
+// Out-of-range values (corrupt persist file, OS oddity) clamp to Normal.
+// ★ The old [2] "click path off" diagnostic (buildCG A/B lever) is RETIRED
+// — post-diagnosis dead weight; clicks are unconditionally on.
+reg [2:0] opt_pointer_speed = 3'd4;
+// Dock keyboard modifier layout: 0 = Mac/semantic (HID Alt -> Option,
+// HID GUI -> Command — Apple keyboards label-correct, the macOS-standard
+// arrangement for PC keyboards), 1 = PC/positional remap (Alt acts as
+// Command beside Space, the pre-v1.1.2 shipped behavior).
+reg       opt_kb_pc = 1'b0;
 
 always @(posedge clk_74a) begin
     // Actions are one-shot: they self-clear once the core side has seen them.
@@ -461,7 +473,8 @@ always @(posedge clk_74a) begin
         32'hF0000048: opt_code_r     <= bridge_wr_data[8:0];
         32'hF000004C: opt_code_start <= bridge_wr_data[8:0];
         32'hF0000050: opt_ptr_default <= bridge_wr_data[0];
-        32'hF0000054: opt_mouse_speed <= bridge_wr_data[2:0];
+        32'hF0000054: opt_pointer_speed <= bridge_wr_data[2:0];
+        32'hF0000058: opt_kb_pc <= bridge_wr_data[0];
         default: ;
         endcase
     end
@@ -1334,12 +1347,21 @@ always @(posedge clk_sys) pi_rstn_s <= {pi_rstn_s[0], reset_n};
 // then only by a human in the menu), so a 2FF sync is sufficient.
 reg  ptrdef_s1 = 1'b1, ptrdef_s2 = 1'b1;
 // Quasi-static (human-paced menu writes), so a plain 2FF is enough.
+// Speed slider (1..4) -> the dock path's shift amount (0..3), clamped so a
+// corrupt persist value degrades to Normal, never to eighth-speed molasses.
+wire [2:0] spd_diff_74  = 3'd4 - opt_pointer_speed;   // 1..4 -> 3..0
+wire [1:0] spd_shift_74 = (opt_pointer_speed >= 3'd1 && opt_pointer_speed <= 3'd4)
+                          ? spd_diff_74[1:0]
+                          : 2'd0;
 reg [2:0] mspd_s1 = 3'd0, mspd_s2 = 3'd0;
+reg       kbpc_s1 = 1'b0, kbpc_s2 = 1'b0;
 always @(posedge clk_sys) begin
     ptrdef_s1 <= opt_ptr_default;
     ptrdef_s2 <= ptrdef_s1;
-    mspd_s1   <= opt_mouse_speed;
+    mspd_s1   <= {1'b0, spd_shift_74};   // [2] (old clicks-off diag) retired
     mspd_s2   <= mspd_s1;
+    kbpc_s1   <= opt_kb_pc;
+    kbpc_s2   <= kbpc_s1;
 end
 
 pocket_input #(
@@ -1375,6 +1397,7 @@ pocket_hid hid_bridge (
     .cont4_joy     ( cont4_joy ),
     .cont4_trig    ( cont4_trig ),
     .speed_sel     ( mspd_s2 ),
+    .layout_pc     ( kbpc_s2 ),
     .ps2_key       ( ph_ps2_key ),
     .ps2_mouse     ( ph_ps2_mouse ),
     .kbd_present   ( hid_kbd_present ),
