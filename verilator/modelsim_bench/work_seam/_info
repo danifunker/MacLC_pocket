@@ -1,0 +1,76 @@
+m255
+K4
+z2
+13
+!s112 1.1
+!i10d 8192
+!i10e 25
+!i10f 100
+cModel Technology
+Z0 dC:/repos/MacLC_Pocket/verilator/modelsim_bench
+vfetch_cache
+DXx6 sv_std 3 std 0 22 AD7iAPLo6nTIKk<N0eo=D3
+Z1 !s110 1787196100
+!i10b 1
+!s100 ?Cmci=0bWI>Y]0T<cIb6j3
+ICF>MbeAg4LU4o5cOiAP@o2
+Z2 VDg1SIo80bB@j0V0VzS_@n1
+!s105 fetch_cache_sv_unit
+S1
+R0
+w1787195824
+8../../rtl/fetch_cache.sv
+F../../rtl/fetch_cache.sv
+L0 48
+Z3 OV;L;10.5b;63
+r1
+!s85 0
+31
+Z4 !s108 1787196100.000000
+Z5 !s107 tb_mem_seam.v|../../rtl/fetch_cache.sv|../../src/fpga/core/pocket_sdram.v|
+Z6 !s90 -work|work_seam|../../src/fpga/core/pocket_sdram.v|../../rtl/fetch_cache.sv|tb_mem_seam.v|
+!i113 1
+Z7 o-work work_seam
+Z8 tCvgOpt 0
+vpocket_sdram
+R1
+!i10b 1
+!s100 1J_79H0gHemT9`2[C]^jQ0
+I;W?e?mMe0M[BINKOb?_Pn2
+R2
+R0
+w1787194528
+8../../src/fpga/core/pocket_sdram.v
+F../../src/fpga/core/pocket_sdram.v
+L0 69
+R3
+r1
+!s85 0
+31
+R4
+R5
+R6
+!i113 1
+R7
+R8
+vtb_mem_seam
+R1
+!i10b 1
+!s100 OKJMQLP5O@LzZkBWm4Mfn1
+IXYz0^4Wj^XJ[Y9`@iTjIG2
+R2
+R0
+w1787196100
+8tb_mem_seam.v
+Ftb_mem_seam.v
+L0 28
+R3
+r1
+!s85 0
+31
+R4
+R5
+R6
+!i113 1
+R7
+R8

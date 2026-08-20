@@ -149,6 +149,15 @@ module fetch_cache #(
 	// written this cycle, the registered lookup is untrustworthy, so force a
 	// MISS. Costs one refill in a rare case and removes the hazard class
 	// entirely, whatever RDW mode the fitter picks.
+	// (tag_we/tag_waddr/tag_wdata declared here rather than at the write-port
+	// mux below — a compile-ORDER change only, zero logic delta vs the MiSTer
+	// original: strict-LRM simulators (ModelSim 10.5b) reject the
+	// use-before-declaration that Quartus and Verilator tolerate.)
+	wire                  tag_we    = !reset && (write_start || (as_rise && miss_pend));
+	wire [LOG2_WORDS-1:0] tag_waddr = write_start ? idx : miss_idx;
+	wire [GENW+TAGW-1:0]  tag_wdata = write_start ? {(GENW+TAGW){1'b0}}
+	                                              : {gen, miss_tag};
+
 	reg  rdw_collide_d = 1'b0;
 	wire rdw_collide = (tag_we && (tag_waddr == idx))
 	                || (as_rise && miss_pend && (miss_idx == idx));
@@ -184,10 +193,8 @@ module fetch_cache #(
 	// opposite AS edges and can never coincide, so mux them onto one port.
 	// Two separate write statements made Quartus fall back to a register
 	// array — 6.3k ALUTs / 15.5k FFs, the 2026-07-07 fitter overflow.
-	wire                  tag_we    = !reset && (write_start || (as_rise && miss_pend));
-	wire [LOG2_WORDS-1:0] tag_waddr = write_start ? idx : miss_idx;
-	wire [GENW+TAGW-1:0]  tag_wdata = write_start ? {(GENW+TAGW){1'b0}}
-	                                              : {gen, miss_tag};
+	// (tag_we/tag_waddr/tag_wdata now declared above the RDW block — see the
+	// compile-order note there.)
 
 	always @(posedge clk) begin
 		as_n_d   <= as_n;

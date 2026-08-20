@@ -330,7 +330,23 @@ wire req_dl    = dl_req && dl_slot && !dl_served;
 // boundary, so cpu_dout -> clk_sys consumer paths are timed at a full
 // 30.8 ns period by STA — no cross-clock multicycle, no half-period races.
 // Costs at most one clk_64 of start latency.
-wire req_cpu   = (oe || we) && !flp_win && !flp_guard && t[0]
+// ★★ SLOT-PHASE DIAGNOSTIC (2026-08-19, F-line hunt — see docs/RESUME.md §-6).
+// Every DIGITAL layer of this path is now exonerated offline (token-identical
+// engine, unit bench + seam bench both fully green, STA met on two seeds,
+// loader handshake verified) yet seeds 4 and 11 both F-line at Finder load.
+// The surviving suspect is the PHYSICAL layer: demand-start issues SDRAM
+// commands at pin phases the old slot machine never used, against board I/O
+// margins only ever validated at slot phases (numbers that have disagreed
+// with hardware before). This build quantizes CPU starts (and opportunistic
+// refreshes below) to ONE fixed phase per clk_8 period — t==1, the parity-
+// preserving neighbour of the old slot boundary — reverting the pin-level
+// command statistics to ~the validated pattern while keeping every new
+// mechanism live (demand DTACK, cpu_dout, dl_* port, I-cache). Costs the
+// mod-4 floor on bus-bound accesses; cache hits are unaffected (bus-silent).
+// If HW is CLEAN with this: the phase hypothesis is confirmed — pursue I/O
+// timing, then restore `t[0]`. If HW still F-lines: the hypothesis is dead —
+// restore `t[0]` before the next experiment.
+wire req_cpu   = (oe || we) && !flp_win && !flp_guard && (t == 3'd1)
                  && !cpu_done && (ref_due < REF_FORCE);
 
 always @(posedge clk_64) begin
@@ -463,7 +479,9 @@ always @(posedge clk_64) begin
 				if (we) cpu_done <= 1;   // posted write: ack at ACTIVE; din/ds
 				                         // stay valid (AS held) through CAS
 			end
-		end else if (ref_due >= REF_OPP && !flp_guard && !flp_win && !(dl_req && dl_slot)) begin
+		end else if (ref_due >= REF_OPP && (t == 3'd1) && !flp_guard && !flp_win && !(dl_req && dl_slot)) begin
+			// (t == 3'd1): part of the slot-phase diagnostic above — refresh
+			// commands also held to the fixed per-slot phase. Remove with it.
 			// !flp_guard/!flp_win: a refresh started just before a floppy
 			// window would push the window's capture past its end — floppy.v
 			// latches on its own (post-window) enables and would read stale
