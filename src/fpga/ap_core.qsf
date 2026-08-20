@@ -749,6 +749,7 @@ set_global_assignment -name SIP_FILE core/mf_pllbase.sip
 set_global_assignment -name VERILOG_FILE core/pocket_sdram.v
 set_global_assignment -name SYSTEMVERILOG_FILE core/mac_lc_pocket.sv
 set_global_assignment -name VERILOG_FILE core/pocket_input.v
+set_global_assignment -name VERILOG_FILE core/pocket_hid.v
 set_global_assignment -name VERILOG_FILE core/apf_bridge_loader.v
 set_global_assignment -name VERILOG_FILE core/i2s.v
 set_global_assignment -name VERILOG_FILE core/apf_blockdev.v
@@ -873,5 +874,5 @@ set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to dram_we_n
 set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to dram_ras_n
 set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to dram_cas_n
 
-set_global_assignment -name SEED 4
+set_global_assignment -name SEED 7
 

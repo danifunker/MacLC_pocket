@@ -374,6 +374,8 @@ always @(*) begin
     32'hF0000044: bridge_rd_data <= {23'd0, opt_code_l};
     32'hF0000048: bridge_rd_data <= {23'd0, opt_code_r};
     32'hF000004C: bridge_rd_data <= {23'd0, opt_code_start};
+    32'hF0000050: bridge_rd_data <= {31'd0, opt_ptr_default};
+    32'hF0000054: bridge_rd_data <= {29'd0, opt_mouse_speed};
     32'hF0xxxxxx: bridge_rd_data <= 32'd0;   // actions read back as 0
     32'hF8xxxxxx: begin
         bridge_rd_data <= cmd_bridge_rd_data;
@@ -425,6 +427,13 @@ reg [8:0] opt_code_l     = 9'h000;
 reg [8:0] opt_code_r     = 9'h000;
 reg [8:0] opt_code_start = 9'h000;
 
+// Startup input mode: 1 = pointer/mouse at power-on, 0 = keyboard. Sampled by
+// pocket_input at ITS reset release, which core_top gates on reset_n so the
+// sample happens after the OS has written this value (see the instantiation).
+// The power-on constant is the fallback when no Core Settings value is sent.
+reg       opt_ptr_default = 1'b1;
+reg [2:0] opt_mouse_speed = 3'd0;   // [1:0] 1:1/half/quarter/eighth, [2] click path off (diag)
+
 always @(posedge clk_74a) begin
     // Actions are one-shot: they self-clear once the core side has seen them.
     opt_reset_apply <= 1'b0;
@@ -451,6 +460,8 @@ always @(posedge clk_74a) begin
         32'hF0000044: opt_code_l     <= bridge_wr_data[8:0];
         32'hF0000048: opt_code_r     <= bridge_wr_data[8:0];
         32'hF000004C: opt_code_start <= bridge_wr_data[8:0];
+        32'hF0000050: opt_ptr_default <= bridge_wr_data[0];
+        32'hF0000054: opt_mouse_speed <= bridge_wr_data[2:0];
         default: ;
         endcase
     end
@@ -1258,11 +1269,18 @@ apf_bridge_loader #(
 
 
 // ---------------------------------------------------------------------------
-// Input: gamepad -> ps2_key / ps2_mouse
+// Input: gamepad AND Dock USB keyboard/mouse -> ps2_key / ps2_mouse
 // ---------------------------------------------------------------------------
-    wire [10:0] ps2_key;
-    wire [24:0] ps2_mouse;
+    wire [10:0] pi_ps2_key,  ph_ps2_key;    // pi = gamepad, ph = Dock HID
+    wire [24:0] pi_ps2_mouse, ph_ps2_mouse;
     wire        ptr_mode;
+    wire        hid_kbd_present, hid_mouse_present;
+
+    // The merged buses the machine actually sees. Both sources are still
+    // live when a Dock is attached — the gamepad is NOT disabled, so pad
+    // controls and a real keyboard can be used together.
+    reg  [10:0] ps2_key   = 11'd0;
+    reg  [24:0] ps2_mouse = 25'd0;
 
 // buildBF: bring the 14 mapper registers (clk_74a) into clk_sys as one packed
 // quasi-static bus, then resolve the Custom indirection (map value 9'h1FF =
@@ -1286,11 +1304,49 @@ apf_bridge_loader #(
     wire [8:0] rmap_r     = (kmap_s2[45 +: 9] == 9'h1FF) ? kcode_s2[45 +: 9] : kmap_s2[45 +: 9];
     wire [8:0] rmap_start = (kmap_s2[54 +: 9] == 9'h1FF) ? kcode_s2[54 +: 9] : kmap_s2[54 +: 9];
 
+// ★ pocket_input's reset is NOT PLL lock alone. The startup input mode is
+// sampled at this reset's release, and the OS holds reset_n LOW while it
+// loads data slots and writes the interact values (see the reset_n_sys note
+// further down). PLL lock happens long before that write lands, so a reset on
+// lock alone would sample opt_ptr_default while it still held its power-on
+// constant and the user's Core Settings choice would never take effect.
+// reset_n releases after the write, which makes its edge the correct — and
+// only — safe sampling point. Its own 2FF sync is local because reset_n_sys
+// is declared below this instantiation.
+//
+// ★ opt_reset_apply_sys IS IN THE TERM DELIBERATELY (2026-08-16). Whether APF
+// also drops reset_n when it applies settings was never established: the one
+// hardware trial that seemed to confirm it set the mode to MOUSE, which is
+// the power-on default — so a mode that never re-sampled and a mode that
+// re-sampled correctly produce the SAME result. That test could not
+// discriminate, and the KEYBOARD direction (the one that can) was
+// inconclusive. Rather than depend on undocumented APF reset behaviour,
+// Reset & Apply is wired to re-sample explicitly. It is one OR term, it is
+// idempotent if reset_n drops anyway, and it also gives Reset & Apply a
+// clean input state (held keys released, mouse button cleared).
+// Forward declaration: the pulse itself is built ~280 lines below, but the
+// input modules above need it in their reset term.
+wire opt_reset_apply_sys;
+reg  [1:0] pi_rstn_s = 2'b00;
+always @(posedge clk_sys) pi_rstn_s <= {pi_rstn_s[0], reset_n};
+
+// Startup input mode into clk_sys. Quasi-static (written once at core load,
+// then only by a human in the menu), so a 2FF sync is sufficient.
+reg  ptrdef_s1 = 1'b1, ptrdef_s2 = 1'b1;
+// Quasi-static (human-paced menu writes), so a plain 2FF is enough.
+reg [2:0] mspd_s1 = 3'd0, mspd_s2 = 3'd0;
+always @(posedge clk_sys) begin
+    ptrdef_s1 <= opt_ptr_default;
+    ptrdef_s2 <= ptrdef_s1;
+    mspd_s1   <= opt_mouse_speed;
+    mspd_s2   <= mspd_s1;
+end
+
 pocket_input #(
     .CLK_HZ ( 32_500_000 )
 ) input_bridge (
     .clk        ( clk_sys ),
-    .reset      ( ~pll_core_locked_sys ),
+    .reset      ( ~pll_core_locked_sys | ~pi_rstn_s[1] | opt_reset_apply_sys ),
     .cont1_key  ( cont1_key[15:0] ),
     .map_a      ( rmap_a ),
     .map_b      ( rmap_b ),
@@ -1299,10 +1355,81 @@ pocket_input #(
     .map_l      ( rmap_l ),
     .map_r      ( rmap_r ),
     .map_start  ( rmap_start ),
-    .ps2_key    ( ps2_key ),
-    .ps2_mouse  ( ps2_mouse ),
+    .ptr_default( ptrdef_s2 ),
+    .ps2_key    ( pi_ps2_key ),
+    .ps2_mouse  ( pi_ps2_mouse ),
     .ptr_mode   ( ptr_mode )
 );
+
+// ---- Dock USB keyboard / mouse ------------------------------------------
+// APF publishes a Dock keyboard on controller 3 and a Dock mouse on
+// controller 4 — the SAME ports the gamepad arrives on, so nothing in
+// src/fpga/apf/ changes. Scope and wire format: docs/usb_hid_scope.md.
+pocket_hid hid_bridge (
+    .clk           ( clk_sys ),
+    .reset         ( ~pll_core_locked_sys | ~pi_rstn_s[1] | opt_reset_apply_sys ),
+    .cont3_key     ( cont3_key ),
+    .cont3_joy     ( cont3_joy ),
+    .cont3_trig    ( cont3_trig ),
+    .cont4_key     ( cont4_key ),
+    .cont4_joy     ( cont4_joy ),
+    .cont4_trig    ( cont4_trig ),
+    .speed_sel     ( mspd_s2 ),
+    .ps2_key       ( ph_ps2_key ),
+    .ps2_mouse     ( ph_ps2_mouse ),
+    .kbd_present   ( hid_kbd_present ),
+    .mouse_present ( hid_mouse_present )
+);
+
+// ---- Input merge ---------------------------------------------------------
+// Both sources emit TOGGLE strobes and either may fire on any cycle. Each
+// gets a one-deep pending slot and the arbiter alternates priority, so a
+// simultaneous pair is serialised rather than dropped. ★ A dropped key-UP
+// would leave that key held down on the Mac forever, which is why this is an
+// arbiter and not a mux.
+//
+// Known bound: each source can emit at most one event per clock while walking
+// its own change list (11 slots for the gamepad, 20 for HID). If BOTH burst
+// continuously the arbiter drains one per cycle and the loser's pending slot
+// can be overwritten. That needs a full gamepad chord and a full keyboard
+// chord changing on the same clock — human input is many orders of magnitude
+// slower — but it is the failure mode to look at if a key ever sticks.
+reg pi_k_d, ph_k_d, pi_m_d, ph_m_d;
+reg pi_k_pq, ph_k_pq, pi_m_pq, ph_m_pq;
+reg [9:0]  pi_k_pd, ph_k_pd;
+reg [23:0] pi_m_pd, ph_m_pd;
+reg        k_turn, m_turn;               // 0 = gamepad first, 1 = HID first
+
+always @(posedge clk_sys) begin
+    if (~pll_core_locked_sys) begin
+        pi_k_d <= 1'b0; ph_k_d <= 1'b0; pi_m_d <= 1'b0; ph_m_d <= 1'b0;
+        pi_k_pq <= 1'b0; ph_k_pq <= 1'b0; pi_m_pq <= 1'b0; ph_m_pq <= 1'b0;
+        k_turn <= 1'b0; m_turn <= 1'b0;
+    end else begin
+        pi_k_d <= pi_ps2_key[10];   ph_k_d <= ph_ps2_key[10];
+        pi_m_d <= pi_ps2_mouse[24]; ph_m_d <= ph_ps2_mouse[24];
+
+        // --- keyboard: forward one, alternating who goes first
+        if (pi_k_pq && (!ph_k_pq || !k_turn)) begin
+            ps2_key <= { ~ps2_key[10], pi_k_pd }; pi_k_pq <= 1'b0; k_turn <= 1'b1;
+        end else if (ph_k_pq) begin
+            ps2_key <= { ~ps2_key[10], ph_k_pd }; ph_k_pq <= 1'b0; k_turn <= 1'b0;
+        end
+        // Capture AFTER the forward so an event landing on the same cycle as a
+        // drain sets the flag again instead of being cleared away.
+        if (pi_ps2_key[10] != pi_k_d) begin pi_k_pq <= 1'b1; pi_k_pd <= pi_ps2_key[9:0]; end
+        if (ph_ps2_key[10] != ph_k_d) begin ph_k_pq <= 1'b1; ph_k_pd <= ph_ps2_key[9:0]; end
+
+        // --- mouse: same shape
+        if (pi_m_pq && (!ph_m_pq || !m_turn)) begin
+            ps2_mouse <= { ~ps2_mouse[24], pi_m_pd }; pi_m_pq <= 1'b0; m_turn <= 1'b1;
+        end else if (ph_m_pq) begin
+            ps2_mouse <= { ~ps2_mouse[24], ph_m_pd }; ph_m_pq <= 1'b0; m_turn <= 1'b0;
+        end
+        if (pi_ps2_mouse[24] != pi_m_d) begin pi_m_pq <= 1'b1; pi_m_pd <= pi_ps2_mouse[23:0]; end
+        if (ph_ps2_mouse[24] != ph_m_d) begin ph_m_pq <= 1'b1; ph_m_pd <= ph_ps2_mouse[23:0]; end
+    end
+end
 
 
 // ---------------------------------------------------------------------------
@@ -1491,7 +1618,7 @@ always @(posedge clk_sys) begin
     if (opt_reset_pram_edge)  pram_hold <= 5'd16; else if (pram_hold) pram_hold <= pram_hold - 5'd1;
     if (opt_nmi_edge)         nmi_hold  <= 5'd16; else if (nmi_hold)  nmi_hold  <= nmi_hold  - 5'd1;
 end
-    wire opt_reset_apply_sys = |rst_hold;
+    assign opt_reset_apply_sys = |rst_hold;   // declared above the input modules
     wire opt_reset_pram_sys  = |pram_hold;
     wire opt_nmi_sys         = |nmi_hold;
 
