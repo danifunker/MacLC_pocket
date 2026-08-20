@@ -1,6 +1,4 @@
-work/
+work_sdram/
+work_seam/
+*.log
 transcript
-sim.log
-amnt_block.vh
-core_bridge_cmd_ms.v
-apf/
