@@ -42,7 +42,10 @@
 `define TCR_A_CD        1
 `define TCR_A_IO        0
 
-module ncr5380
+module ncr5380 #(parameter DEVS = 2,
+                 // Read-prefetch ring depth for the CD target. 3 => 8 sectors/4KB.
+                 // Kept smaller than the disks' RING_LOG=5 (see original note).
+                 parameter CD_RING_LOG = 3)
 (
 	input    		clk,
 	input 	     	reset,
@@ -150,11 +153,45 @@ module ncr5380
 	//   {cd_bsy, phase[2:0], hs[7:0], hs2[3:0]}
 	output      [15:0] dbg_cd_state
 );
-	parameter DEVS = 2;
-	// Read-prefetch ring depth for the CD target. 3 => 8 sectors / 4KB.
-	// Kept smaller than the disks' RING_LOG=5: the Pocket is at 82% M10K,
-	// and the CD is never the boot device, so latency-hiding matters less.
-	parameter CD_RING_LOG = 3;
+	// ── strict-LRM declaration block (2026-08-20): every wire below is
+	// declared ahead of its first lexical use so 4-state tools (ModelSim)
+	// can compile this file for the bench suite. Declaration-order-only —
+	// each signal keeps its assign/driver at its original location.
+	reg scsi_cd, scsi_io, scsi_msg, scsi_req;
+	reg scsi_req_bus;  // bus-visible REQ (no HPS-fetch dropouts in data phases)
+	reg [15:0] din_pair;
+	reg [15:0] din_pair_next;
+	wire [7:0] bsr;
+	wire bsr_pmatch;
+	wire cd_bsy;
+	wire cd_cd;
+	wire [7:0] cd_dout;
+	wire [15:0] cd_dout_pair;
+	wire [15:0] cd_dout_pair_next;
+	wire cd_io;
+	wire cd_msg;
+	wire cd_req;
+	wire cd_req_bus;
+	wire [7:0] cur_data;
+	wire [15:0] cur_data_pair;
+	wire icr_aip;
+	wire icr_la;
+	wire [7:0] icr_read;
+	wire scsi_ack;
+	wire scsi_atn;
+	wire scsi_bsy;
+	wire [7:0] scsi_bus_data;
+	wire scsi_rst;
+	wire scsi_sel;
+	wire [DEVS-1:0] target_bsy;
+	wire [DEVS-1:0] target_cd;
+	wire      [7:0] target_dout[DEVS];
+	wire     [15:0] target_dout_pair[DEVS];
+	wire     [15:0] target_dout_pair_next[DEVS];
+	wire [DEVS-1:0] target_io;
+	wire [DEVS-1:0] target_msg;
+	wire [DEVS-1:0] target_req;
+	wire [DEVS-1:0] target_req_bus;
 
 	reg  [7:0] mr;        /* Mode Register */
 	reg  [7:0] icr;       /* Initiator Command Register */
@@ -374,16 +411,16 @@ module ncr5380
 	 */
 	wire       out_en = icr[`ICR_A_DATA] | mr[`MR_ARB];
 	wire [7:0] dma_write_data = (dma_ack_holdoff == 3'd1 && dma_word_latched) ? dma_write_low_byte : dout;
-	wire [7:0] scsi_bus_data = (out_en ? dma_write_data : 8'h00) | din;
+	assign scsi_bus_data = (out_en ? dma_write_data : 8'h00) | din;
 	/* Host-read face: registered copies (see the PDMA pipeline block above).
 	 * cur_data's CDR/IDR consumers are VPA-paced (microsecond-stable values);
 	 * the DACK byte leg and cur_data_pair are DREQ-gated — both tolerate the
 	 * one-cycle lag by the invariant argued there. */
-	wire [7:0] cur_data = host_bus_r;
-	wire [15:0] cur_data_pair = out_en ? { dout, dout } : (dma_suppress_ack_latched ? dma_second_word_data : din_pair_r);
+	assign cur_data = host_bus_r;
+	assign cur_data_pair = out_en ? { dout, dout } : (dma_suppress_ack_latched ? dma_second_word_data : din_pair_r);
 
 	/* ICR read wires */
-	wire [7:0] icr_read = { icr[`ICR_A_RST],
+	assign icr_read = { icr[`ICR_A_RST],
 	                        icr_aip,
 	                        icr_la,
 	                        icr[`ICR_A_ACK],
@@ -566,19 +603,19 @@ module ncr5380
 	wire bsr_dmarq = scsi_req_bus & dma_en;
 	wire bsr_perr = 1'b0;	/* We don't do parity */
 	wire bsr_irq = irq_latch;
-	wire bsr_pmatch = 
+	assign bsr_pmatch = 
 	         tcr[`TCR_A_MSG] == scsi_msg &&
 	         tcr[`TCR_A_CD ] == scsi_cd  &&
 	         tcr[`TCR_A_IO ] == scsi_io;
 
 	wire bsr_berr = 1'b0;	/* XXX ? Does MacOS use this ? */
-	wire [7:0] bsr = { bsr_eodma, bsr_dmarq, bsr_perr, bsr_irq,
+	assign bsr = { bsr_eodma, bsr_dmarq, bsr_perr, bsr_irq,
 	                   bsr_pmatch, bsr_berr, scsi_atn, scsi_ack };
 
    /* --- Simulated SCSI Signals --- */
 
    /* BSY logic (simplified arbitration, see notes) */
-	wire scsi_bsy =
+	assign scsi_bsy =
 	    icr[`ICR_A_BSY] |
 	    |target_bsy |
 	    cd_bsy |
@@ -587,18 +624,18 @@ module ncr5380
 	    mr[`MR_ARB];
 
 	/* Keep AIP visible while the ROM is requesting arbitration. */
-	wire icr_aip = mr[`MR_ARB];
-	wire icr_la = 0;
+	assign icr_aip = mr[`MR_ARB];
+	assign icr_la = 0;
 
 	/* Other ORed SCSI signals */
-	wire scsi_sel = icr[`ICR_A_SEL];
-	wire scsi_rst = icr[`ICR_A_RST];
-	wire scsi_ack = icr[`ICR_A_ACK] | dma_ack;
-	wire scsi_atn = icr[`ICR_A_ATN];
+	assign scsi_sel = icr[`ICR_A_SEL];
+	assign scsi_rst = icr[`ICR_A_RST];
+	assign scsi_ack = icr[`ICR_A_ACK] | dma_ack;
+	assign scsi_atn = icr[`ICR_A_ATN];
 
 	/* Mux target signals */
-	reg scsi_cd, scsi_io, scsi_msg, scsi_req;
-	reg scsi_req_bus;  // bus-visible REQ (no HPS-fetch dropouts in data phases)
+	// (scsi_cd/scsi_io/scsi_msg/scsi_req/scsi_req_bus declarations hoisted
+	//  to the strict-LRM block; drivers unchanged below.)
 
 	always begin
 		integer i;
@@ -647,7 +684,7 @@ module ncr5380
 	wire [31:0]     target_wrstall[DEVS];  // JTAG debug: write-stall snapshot (PSCW)
 	wire [31:0]     target_wrfb[DEVS];     // JTAG debug: write first-beat forensics (WRFB)
 	wire [31:0]     target_ring[DEVS];     // read-ring bookkeeping (anchor feed)
-	wire [DEVS-1:0] target_bsy;
+	// (target_bsy declaration hoisted to the strict-LRM block below the parameters)
 
 	// Count SCSI bus resets (Mac asserting ICR.RST) -- the abort/retry signal.
 	// Resets only on the global module reset, so it survives scsi_rst.
@@ -663,14 +700,14 @@ module ncr5380
 				dbg_rst_count <= dbg_rst_count + 8'd1;
 		end
 	end
-	wire [DEVS-1:0] target_msg;
-	wire [DEVS-1:0] target_io;
-	wire [DEVS-1:0] target_cd;
-	wire [DEVS-1:0] target_req;
-	wire [DEVS-1:0] target_req_bus;  // bus-visible REQ (continuity across HPS fetches)
-	wire      [7:0] target_dout[DEVS];
-	wire     [15:0] target_dout_pair[DEVS];
-	wire     [15:0] target_dout_pair_next[DEVS];
+	// (target_msg declaration hoisted to the strict-LRM block below the parameters)
+	// (target_io declaration hoisted to the strict-LRM block below the parameters)
+	// (target_cd declaration hoisted to the strict-LRM block below the parameters)
+	// (target_req declaration hoisted to the strict-LRM block below the parameters)
+	// (target_req_bus declaration hoisted to the strict-LRM block below the parameters)  // bus-visible REQ (continuity across HPS fetches)
+	// (target_dout declaration hoisted to the strict-LRM block below the parameters)
+	// (target_dout_pair declaration hoisted to the strict-LRM block below the parameters)
+	// (target_dout_pair_next declaration hoisted to the strict-LRM block below the parameters)
 
 	// POCKET CUT: BlueSCSI Toolbox removed. TOOLBOX_ENABLE is 0 on every
 	// target now, so scsi.v's toolbox body folds away and these transport
@@ -680,8 +717,7 @@ module ncr5380
 	wire     [31:0] tb_lba_g[DEVS];
 	wire [DEVS-1:0] tb_rd_g, tb_wr_g;
 	wire     [15:0] tb_buff_din_g[DEVS];
-	reg      [15:0] din_pair;
-	reg      [15:0] din_pair_next;
+	// (din_pair/din_pair_next declarations hoisted to the strict-LRM block)
 
 	// ★ 2026-08-13: the CD-ROM target is BACK, slimmed for the Pocket. The
 	// MiSTer full stack was 7,762 ALUTs + 17 M10K, but 3,076 of those ALUTs
@@ -691,15 +727,15 @@ module ncr5380
 	// scsi.v target in CDROM mode: AppleCD command set on the CDU-8004
 	// identity, read-only 2048-byte blocks, TOC from cd_toc_stub (ISO =
 	// one data track). RING_LOG(3) = 8-sector/4KB prefetch ring.
-	wire cd_bsy;
-	wire cd_msg;
-	wire cd_io;
-	wire cd_cd;
-	wire cd_req;
-	wire cd_req_bus;
-	wire [7:0]  cd_dout;
-	wire [15:0] cd_dout_pair;
-	wire [15:0] cd_dout_pair_next;
+	// (cd_bsy declaration hoisted to the strict-LRM block below the parameters)
+	// (cd_msg declaration hoisted to the strict-LRM block below the parameters)
+	// (cd_io declaration hoisted to the strict-LRM block below the parameters)
+	// (cd_cd declaration hoisted to the strict-LRM block below the parameters)
+	// (cd_req declaration hoisted to the strict-LRM block below the parameters)
+	// (cd_req_bus declaration hoisted to the strict-LRM block below the parameters)
+	// (cd_dout declaration hoisted to the strict-LRM block below the parameters)
+	// (cd_dout_pair declaration hoisted to the strict-LRM block below the parameters)
+	// (cd_dout_pair_next declaration hoisted to the strict-LRM block below the parameters)
 	wire [2:0]  dbg_cd_phase;
 	wire [7:0]  dbg_cd_hs;
 	wire [3:0]  dbg_cd_hs2;

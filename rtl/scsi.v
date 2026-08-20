@@ -3107,6 +3107,10 @@ reg [ADDRWIDTH-1:0] pf_d_addr  = {ADDRWIDTH{1'b1}};
 reg [ADDRWIDTH-1:0] pf_c_tgt, pf_d_tgt;             // addresses in flight
 reg                 pf_valid   = 1'b0;
 reg                 pf_snooped = 1'b0;
+// Declared ahead of pf_snoop_hit (which references it): strict-LRM 4-state
+// tools reject the forward reference. Declaration-order-only, zero logic
+// delta (2026-08-20); the assign lives at its original spot below.
+wire pf_steal_c;
 
 wire pf_snoop_hit =
 	(wren_a && (address_a == pf_c_addr || address_a == pf_d_addr ||
@@ -3128,7 +3132,8 @@ wire pf_stale = !pf_valid || pf_snooped ||
 // Port-B address mux: a stolen read presents the look-ahead address for one
 // cycle; its result lands in q_b (port B's read register) and is copied into
 // q_c/q_d in the following state. Writes always use the real address_b.
-wire pf_steal_c = (pf_st == PF_IDLE) && pf_stale && !wren_b;
+// (assign only — the declaration is hoisted above pf_snoop_hit, see there.)
+assign pf_steal_c = (pf_st == PF_IDLE) && pf_stale && !wren_b;
 wire pf_steal_d = (pf_st == PF_RDC)  && !wren_b;
 wire [ADDRWIDTH-1:0] address_b_eff =
 	pf_steal_c ? address_c :
