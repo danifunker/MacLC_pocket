@@ -85,6 +85,15 @@ touching the menu, and read back what APF writes from defaults alone.
    submenu-like affordance.
 4. **Minification is the envelope lever.** The v2 input menu overshot
    pretty-printed (7,935 > 7,793); compact serialization landed the
-   same content at 3,707 bytes. (Minified-file load: verified on
-   hardware pending the 1.1.2-inp2 test — update this line with the
-   verdict.)
+   same content at 3,707 bytes. Minified-file load: ★ VERIFIED on hardware
+   2026-08-20 (user: "menu looks okay" on the 3,707-byte file; short
+   names render, rows toggle). Minified is now the house serialization.
+
+## Backlog: the real submenu answer
+
+The user wants hierarchical settings; Analogue's menu cannot nest (law 3).
+The path that CAN: a native Mac control panel (cdev) in the guest that
+configures the core through a register window / spare PRAM bytes —
+authentic Mac UI, arbitrarily organizable, persists once the parked
+PRAM/.nvr persistence mission lands (same plumbing). Pair the two
+missions when that work is scheduled.
