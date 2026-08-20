@@ -210,6 +210,11 @@ localparam STATE_READ      = STATE_CMD_CONT + CAS_LATENCY + 4'd2;  // +2 for 65M
 localparam STATE_LAST      = 3'd7;  // last state in cycle
 
 reg [2:0] t;
+// Explicit power-up value: identical to Cyclone V silicon (uninitialized
+// registers power up 0), but REQUIRED for 4-state simulation — an X here
+// poisons the increment guard and the init ladder never counts down
+// (found by verilator/modelsim_bench/tb_pocket_sdram.v, 2026-08-19).
+initial t = 3'd0;
 always @(posedge clk_64) begin
 	// 65MHz counter synchronous to 8.125 MHz clock
 	// force counter to pass state 0 exactly after the rising edge of clk_8
