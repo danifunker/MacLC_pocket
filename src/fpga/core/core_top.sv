@@ -378,6 +378,7 @@ always @(*) begin
     32'hF0000054: bridge_rd_data <= {29'd0, opt_pointer_speed};
     32'hF0000058: bridge_rd_data <= {31'd0, opt_kb_pc};
     32'hF000005C: bridge_rd_data <= {31'd0, opt_32bit};
+    32'hF0000060: bridge_rd_data <= {30'd0, opt_kb_pc, opt_ptr_default};
     32'hF0xxxxxx: bridge_rd_data <= 32'd0;   // actions read back as 0
     32'hF8xxxxxx: begin
         bridge_rd_data <= cmd_bridge_rd_data;
@@ -482,6 +483,15 @@ always @(posedge clk_74a) begin
         32'hF0000054: opt_pointer_speed <= bridge_wr_data[2:0];
         32'hF0000058: opt_kb_pc <= bridge_wr_data[0];
         32'hF000005C: opt_32bit <= bridge_wr_data[0];
+        // "Input Mode" combined row (id 135) — the 2x2 of D-Pad startup x
+        // keyboard layout, one register: [0] = mouse default, [1] = PC
+        // modifiers. Replaces retired rows 130/132 (the 20-entry
+        // interact+data cap was dropping menu rows at 14 vars + 5 slots).
+        // The old per-setting addresses above stay decoded and harmless.
+        32'hF0000060: begin
+            opt_ptr_default <= bridge_wr_data[0];
+            opt_kb_pc       <= bridge_wr_data[1];
+        end
         default: ;
         endcase
     end

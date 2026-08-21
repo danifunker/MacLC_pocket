@@ -97,3 +97,15 @@ configures the core through a register window / spare PRAM bytes —
 authentic Mac UI, arbitrarily organizable, persists once the parked
 PRAM/.nvr persistence mission lands (same plumbing). Pair the two
 missions when that work is scheduled.
+
+## The entry cap, measured (2026-08-20)
+
+The spec's combined limit is REAL and binds before the byte envelope:
+**interact vars + data slots <= ~19 rendered** with this core's 5 data
+slots — at 14 vars a face-button row silently vanished from the menu on
+hardware ("additional entries will be dropped"). 13 vars + 5 slots
+renders fully (proven twice). Budget: with 5 data slots, treat 13
+interact rows as the ceiling; consolidate with multi-option lists (each
+list holds up to 16 options and opens its own full-screen picker — the
+platform's submenu substitute, and the reason the "Input Mode" 2x2 row
+exists).
