@@ -259,10 +259,13 @@ module mac_lc_pocket
 	// pram_loaded comes from apf_blockdev and is raised on load success OR
 	// failure, so a missing save file can never wedge the boot.
 	// ---- 32-bit addressing injection ("32-Bit Memory" Core Settings row) --
-	// One byte, once per core load: PRAM $8A <= $01 (bit 0 = 32-bit
-	// addressing enabled — the flag MODE32 / the Memory control panel set on
-	// real machines. If hardware A/B ever shows the ROM wanting more, the
-	// documented fallback value is $05). Rides the SAME load port as the
+	// One byte, once per core load: PRAM $8A <= $05 — bits 0+2 together are
+	// the 32-bit-addressing enable. ★ Ground truth: cheesestraws/Force32
+	// (the "force 32-bit on battery-less Macs" INIT) does read_xpram($8A);
+	// membyte |= 5; write_xpram — our blanket $05 is equivalent because
+	// pram[] re-initializes to $00 at every FPGA load and after a menu
+	// PRAM-zero. ($01 alone — bit 0 only — was tried first and is NOT
+	// sufficient.) Rides the SAME load port as the
 	// zeroer, so the wrapper's single-writer law and the loads-before-
 	// pram_ready ordering are inherited, not re-derived:
 	//   - The OS writes interact values BEFORE reset_n releases (the same
@@ -284,7 +287,7 @@ module mac_lc_pocket
 	assign pram_load_addr = pram_zero_busy ? pram_zero_addr :
 	                        pram_inj_fire  ? 8'h8A          : pram_load_addr_i;
 	assign pram_load_data = pram_zero_busy ? 8'h00          :
-	                        pram_inj_fire  ? 8'h01          : pram_load_data_i;
+	                        pram_inj_fire  ? 8'h05          : pram_load_data_i;
 	assign pram_load_wr   = pram_zero_busy | pram_inj_fire | pram_load_wr_i;
 	// ★ READY BACKSTOP — do not remove. 2026-08-11: the first cut of this made
 	// pram_ready depend ONLY on pram_loaded_i, and the PRAM load never
