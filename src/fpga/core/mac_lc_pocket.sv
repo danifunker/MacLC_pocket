@@ -67,6 +67,7 @@ module mac_lc_pocket
 	// ---- Pocket additions -------------------------------------------------
 	// Zero the Egret PRAM, then let the machine reboot. See the FSM below.
 	input         pram_reset,
+	input         opt_32bit,     // inject the 32-bit-addressing PRAM flag at boot
 	// Built-in video test pattern: [2] = bypass VRAM, [1:0] = pattern select.
 	// Bring-up witness — proves the video contract and the interact write path
 	// independently of whether the Mac itself is running.
@@ -257,9 +258,34 @@ module mac_lc_pocket
 	// that signal and holds the 68020 in reset until the copy completes.
 	// pram_loaded comes from apf_blockdev and is raised on load success OR
 	// failure, so a missing save file can never wedge the boot.
-	assign pram_load_addr = pram_zero_busy ? pram_zero_addr : pram_load_addr_i;
-	assign pram_load_data = pram_zero_busy ? 8'h00          : pram_load_data_i;
-	assign pram_load_wr   = pram_zero_busy | pram_load_wr_i;
+	// ---- 32-bit addressing injection ("32-Bit Memory" Core Settings row) --
+	// One byte, once per core load: PRAM $8A <= $01 (bit 0 = 32-bit
+	// addressing enabled — the flag MODE32 / the Memory control panel set on
+	// real machines. If hardware A/B ever shows the ROM wanting more, the
+	// documented fallback value is $05). Rides the SAME load port as the
+	// zeroer, so the wrapper's single-writer law and the loads-before-
+	// pram_ready ordering are inherited, not re-derived:
+	//   - The OS writes interact values BEFORE reset_n releases (the same
+	//     contract ptr_default depends on), so opt_32bit is valid here long
+	//     before the Egret boot-copy walks to index $8A at cen pace.
+	//   - Priority zero > inject > SD-load: after a menu "Reset PRAM" the
+	//     zeroer wipes $8A and pram_inj_done re-arms, so Reset-PRAM with the
+	//     toggle On still comes up 32-bit.
+	//   - Within a session the GUEST owns the byte (Memory panel changes are
+	//     respected until the next core load) — authentic Mac behavior.
+	reg  pram_inj_done = 1'b0;
+	wire pram_inj_fire = opt_32bit && !pram_inj_done
+	                     && !pram_zero_busy && !pram_load_wr_i;
+	always @(posedge clk_sys) begin
+		if (pram_reset)         pram_inj_done <= 1'b0;
+		else if (pram_inj_fire) pram_inj_done <= 1'b1;
+	end
+
+	assign pram_load_addr = pram_zero_busy ? pram_zero_addr :
+	                        pram_inj_fire  ? 8'h8A          : pram_load_addr_i;
+	assign pram_load_data = pram_zero_busy ? 8'h00          :
+	                        pram_inj_fire  ? 8'h01          : pram_load_data_i;
+	assign pram_load_wr   = pram_zero_busy | pram_inj_fire | pram_load_wr_i;
 	// ★ READY BACKSTOP — do not remove. 2026-08-11: the first cut of this made
 	// pram_ready depend ONLY on pram_loaded_i, and the PRAM load never
 	// resolved on hardware, so pram_ready never rose, egret_wrapper never set

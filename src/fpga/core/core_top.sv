@@ -377,6 +377,7 @@ always @(*) begin
     32'hF0000050: bridge_rd_data <= {31'd0, opt_ptr_default};
     32'hF0000054: bridge_rd_data <= {29'd0, opt_pointer_speed};
     32'hF0000058: bridge_rd_data <= {31'd0, opt_kb_pc};
+    32'hF000005C: bridge_rd_data <= {31'd0, opt_32bit};
     32'hF0xxxxxx: bridge_rd_data <= 32'd0;   // actions read back as 0
     32'hF8xxxxxx: begin
         bridge_rd_data <= cmd_bridge_rd_data;
@@ -445,6 +446,11 @@ reg [2:0] opt_pointer_speed = 3'd4;
 // arrangement for PC keyboards), 1 = PC/positional remap (Alt acts as
 // Command beside Space, the pre-v1.1.2 shipped behavior).
 reg       opt_kb_pc = 1'b0;
+// Inject the 32-bit-addressing PRAM flag ($8A) at boot. Default Off =
+// stock dead-battery behavior (24-bit; System 6.0.8-safe). On = the
+// machine comes up MODE32 every core load — the 7.5.5 workflow's need
+// without imposing it on other Systems.
+reg       opt_32bit = 1'b0;
 
 always @(posedge clk_74a) begin
     // Actions are one-shot: they self-clear once the core side has seen them.
@@ -475,6 +481,7 @@ always @(posedge clk_74a) begin
         32'hF0000050: opt_ptr_default <= bridge_wr_data[0];
         32'hF0000054: opt_pointer_speed <= bridge_wr_data[2:0];
         32'hF0000058: opt_kb_pc <= bridge_wr_data[0];
+        32'hF000005C: opt_32bit <= bridge_wr_data[0];
         default: ;
         endcase
     end
@@ -1355,6 +1362,7 @@ wire [1:0] spd_shift_74 = (opt_pointer_speed >= 3'd1 && opt_pointer_speed <= 3'd
                           : 2'd0;
 reg [2:0] mspd_s1 = 3'd0, mspd_s2 = 3'd0;
 reg       kbpc_s1 = 1'b0, kbpc_s2 = 1'b0;
+reg       o32_s1  = 1'b0, o32_s2  = 1'b0;
 always @(posedge clk_sys) begin
     ptrdef_s1 <= opt_ptr_default;
     ptrdef_s2 <= ptrdef_s1;
@@ -1362,6 +1370,8 @@ always @(posedge clk_sys) begin
     mspd_s2   <= mspd_s1;
     kbpc_s1   <= opt_kb_pc;
     kbpc_s2   <= kbpc_s1;
+    o32_s1    <= opt_32bit;
+    o32_s2    <= o32_s1;
 end
 
 pocket_input #(
@@ -1804,6 +1814,7 @@ mac_lc_pocket machine (
     // Same pulse also stays in .reset above: the zeroing takes ~8 us and the
     // reset stretch is ~2 ms, so the Egret is held off until PRAM is clear.
     .pram_reset     ( opt_reset_pram_sys ),
+    .opt_32bit      ( o32_s2 ),
     // Bring-up test-pattern UI removed 2026-08-14; the generator in
     // maclc_v8_video folds away against the constant.
     .test_pattern   ( 3'd0 )
