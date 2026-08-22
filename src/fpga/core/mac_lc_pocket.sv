@@ -68,6 +68,10 @@ module mac_lc_pocket
 	// Zero the Egret PRAM, then let the machine reboot. See the FSM below.
 	input         pram_reset,
 	input         opt_32bit,     // inject the 32-bit-addressing PRAM flag at boot
+	// Fetch-cache answer-path enable. MUST be a real (non-constant) net that
+	// evaluates to 1 — see the fetch_cache instantiation below for why a
+	// hardwired 1'b1 crashes the Finder at 8bpp + 32-bit addressing.
+	input         icache_en,
 	// Built-in video test pattern: [2] = bypass VRAM, [1:0] = pattern select.
 	// Bring-up witness — proves the video contract and the interact write path
 	// independently of whether the Mac itself is running.
@@ -825,7 +829,31 @@ module mac_lc_pocket
 	//      guard in pocket_sdram.v).
 	// Any new agent that can abandon a bus request re-opens class 2.
 	// ★ ALWAYS ON (MiSTer user ruling 2026-08-19, after HW validation): no
-	// menu toggle — .enable is hardwired.
+	// menu toggle. But .enable is NOT hardwired — see the next paragraph.
+	// ★★★ .enable MUST BE A NON-CONSTANT NET (2026-08-22, MiSTer handoff).
+	// Hardwiring `.enable(1'b1)` crashes the Finder — Illegal Instruction /
+	// Bus Error, wild jumps into $079xxxx, heap intact — on BOTH MiSTer and
+	// this port, so it is a shared-RTL defect, not per-fit placement noise.
+	// It only expresses at 8bpp (256 colours) AND 32-bit addressing ON; in
+	// 1-bit it stays hidden (a PRAM reset to 1-bit silently masks it, which
+	// is why it took so long to reproduce). Prince of Persia 2 failing to
+	// launch is the same defect.
+	// MECHANISM: inside fetch_cache.sv `enable` is registered (`enable_r`)
+	// and enable_r is in the fanin of BOTH `hit` (the registered answer that
+	// feeds _cpuDTACK and the CPU din mux) and `hit_now_comb` (the sdram_oe
+	// request suppression). Against a constant the fitter folds enable_r and
+	// the `enable_r &&` terms away, collapsing both cones into a structure
+	// whose fast hit answer races a downstream consumer. Against a real net
+	// enable_r survives and the cones synthesise into a form that does not
+	// race. The VALUE is 1 either way — the fix is STRUCTURAL.
+	// MiSTer's form is `.enable(~status[11])` (status[11] defaults 0);
+	// isolated fix build MacLC_varA.rbf = 8896c2b2, commit ad53af0, seed 4,
+	// user-confirmed on hardware in the crashing config. The Pocket
+	// equivalent is core_top's bridge-decoded `opt_icache_off` register
+	// (0xF0000064, defaults 0), 2FF-synced and inverted into icache_en:
+	// bridge_wr_data comes from an I/O pin, so Quartus cannot prove the
+	// register constant and enable_r stays real.
+	// ★ DO NOT "simplify" this back to 1'b1. It is not dead configurability.
 	wire        icache_hit;
 	wire [15:0] icache_data;
 	wire        icache_hit_now;   // per-access request-suppression verdict
@@ -833,7 +861,7 @@ module mac_lc_pocket
 		.clk        ( clk_sys ),
 		.reset      ( ~_cpuReset ),
 		.flush_bits ( {memoryOverlayOn, dio_download} ),
-		.enable     ( 1'b1 ),
+		.enable     ( icache_en ),   // ★ non-constant '1' — never 1'b1
 		.cpuAddr    ( tg68_a_early[23:0] ),
 		.as_n       ( _cpuAS ),
 		.rw         ( _cpuRW ),

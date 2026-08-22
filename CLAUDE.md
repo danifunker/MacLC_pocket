@@ -182,6 +182,13 @@ treated the same way, even though it lives outside `apf/`.
 - `fetch_cache.sv` - 1 KB direct-mapped instruction cache (2026-08-19, from
   MiSTer `cpu-icache`, HW-validated there). Always on. RDW-immune by
   construction; `hit_now` gates the SDRAM request (Law 7).
+  ★★★ **`.enable` MUST be a non-constant net that evaluates to 1 — never
+  `1'b1`.** It is fed `icache_en` (core_top's `opt_icache_off` register at
+  bridge 0xF0000064, defaulting to enabled). Hardwiring the constant lets the
+  fitter fold `enable_r` out of the `hit`/`hit_now` cones and the resulting
+  structure **crashes the Finder at 8bpp + 32-bit addressing** — on MiSTer and
+  Pocket both, so it is shared-RTL, not fit lottery. Same class of law as
+  `pocket_sdram`'s `t == 3'd1`. Full story: `docs/RESUME.md` §-7.
 
 **Memory & Storage:**
 - `sdram.v` - MiSTer SDRAM controller. **Not built in this fork** — kept as the

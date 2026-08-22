@@ -379,6 +379,7 @@ always @(*) begin
     32'hF0000058: bridge_rd_data <= {31'd0, opt_kb_pc};
     32'hF000005C: bridge_rd_data <= {31'd0, opt_32bit};
     32'hF0000060: bridge_rd_data <= {30'd0, opt_kb_pc, opt_ptr_default};
+    32'hF0000064: bridge_rd_data <= {31'd0, opt_icache_off};
     32'hF0xxxxxx: bridge_rd_data <= 32'd0;   // actions read back as 0
     32'hF8xxxxxx: begin
         bridge_rd_data <= cmd_bridge_rd_data;
@@ -452,6 +453,22 @@ reg       opt_kb_pc = 1'b0;
 // machine comes up MODE32 every core load — the 7.5.5 workflow's need
 // without imposing it on other Systems.
 reg       opt_32bit = 1'b0;
+// ★★★ THE FETCH-CACHE ENABLE SOURCE — this register exists to NOT BE A
+// CONSTANT (2026-08-22). mac_lc_pocket's fetch_cache `.enable` must be fed a
+// real net that evaluates to 1; a hardwired 1'b1 lets the fitter fold
+// fetch_cache's internal enable_r out of the hit / hit_now cones, and the
+// resulting structure crashes the Finder at 8bpp + 32-bit addressing on BOTH
+// MiSTer and this port. Full mechanism at the fetch_cache instantiation in
+// mac_lc_pocket.sv; MiSTer's equivalent is `.enable(~status[11])`.
+// Defaults 0 (= cache ON, matching the always-on ruling). Deliberately NOT in
+// interact.json: the menu is AT its ceiling — 13 vars + 5 data slots renders,
+// a 14th var silently drops a row on hardware (docs/interact_envelope.md,
+// measured 08-20; the "Input Mode" consolidation below exists for the same
+// reason). And no row is needed: a bridge-decoded register is already
+// non-constant to Quartus because bridge_wr_data arrives on a pin.
+// The address stays available as a bench A/B lever — write 1 here to answer
+// "is the cache the cause?" without a rebuild.
+reg       opt_icache_off = 1'b0;   // 0 = I-cache answers, 1 = answer path off
 
 always @(posedge clk_74a) begin
     // Actions are one-shot: they self-clear once the core side has seen them.
@@ -492,6 +509,8 @@ always @(posedge clk_74a) begin
             opt_ptr_default <= bridge_wr_data[0];
             opt_kb_pc       <= bridge_wr_data[1];
         end
+        // Fetch-cache answer path (no menu row — see the declaration).
+        32'hF0000064: opt_icache_off <= bridge_wr_data[0];
         default: ;
         endcase
     end
@@ -1373,6 +1392,10 @@ wire [1:0] spd_shift_74 = (opt_pointer_speed >= 3'd1 && opt_pointer_speed <= 3'd
 reg [2:0] mspd_s1 = 3'd0, mspd_s2 = 3'd0;
 reg       kbpc_s1 = 1'b0, kbpc_s2 = 1'b0;
 reg       o32_s1  = 1'b0, o32_s2  = 1'b0;
+// Fetch-cache enable, same quasi-static 2FF treatment. Keep this a real chain
+// — it is the non-constant that stops Quartus folding fetch_cache's enable_r
+// (see opt_icache_off's declaration above).
+reg       icoff_s1 = 1'b0, icoff_s2 = 1'b0;
 always @(posedge clk_sys) begin
     ptrdef_s1 <= opt_ptr_default;
     ptrdef_s2 <= ptrdef_s1;
@@ -1382,6 +1405,8 @@ always @(posedge clk_sys) begin
     kbpc_s2   <= kbpc_s1;
     o32_s1    <= opt_32bit;
     o32_s2    <= o32_s1;
+    icoff_s1  <= opt_icache_off;
+    icoff_s2  <= icoff_s1;
 end
 
 pocket_input #(
@@ -1825,6 +1850,10 @@ mac_lc_pocket machine (
     // reset stretch is ~2 ms, so the Egret is held off until PRAM is clear.
     .pram_reset     ( opt_reset_pram_sys ),
     .opt_32bit      ( o32_s2 ),
+    // ★ The fetch-cache enable. ~icoff_s2 is 1 in every shipping session, but
+    // it is a REAL NET and that is the entire point — see mac_lc_pocket's
+    // fetch_cache instantiation. Never replace this with 1'b1.
+    .icache_en      ( ~icoff_s2 ),
     // Bring-up test-pattern UI removed 2026-08-14; the generator in
     // maclc_v8_video folds away against the constant.
     .test_pattern   ( 3'd0 )

@@ -1,4 +1,157 @@
-# RESUME — MacLC Pocket (2026-08-19: CPU-performance port staged as v1.1.0-test)
+# RESUME — MacLC Pocket (2026-08-22: I-cache enable-constant fix applied, HW gate owed)
+
+## -7. ★★★ 08-22: the I-cache 8bpp+32-bit Finder crash — `.enable` must not be a constant
+
+**Status: FIX APPLIED, NOT YET HARDWARE-VALIDATED ON POCKET.** Ported from the
+MiSTer handoff of the same day, where it IS hardware-validated.
+
+### The defect
+
+The I-cache release crashes the Finder — Illegal Instruction / Bus Error, wild
+jumps into `$079xxxx`, **heap intact** (a control-flow smash, not a memory
+corruption) — on **both** MiSTer (`MacLC_20260819.rbf` = md5 `65332d3b`,
+commit `454429e`) **and this Pocket port**. Two independent boards, two
+independent fitters ⇒ this is a **functional defect in the shared RTL**, not
+the fit lottery of `docs/BUILD_INSTABILITY.md`. Prince of Persia 2 failing to
+launch (6.0.8 and 7.1) is the same defect.
+
+### Why it hid for so long
+
+It only expresses with the video at **8 bpp (256 colours) AND 32-bit
+addressing ON**. In 1-bit it does not express at all — and a PRAM reset drops
+the machine back to 1-bit, silently masking it. Most "can't reproduce" rounds
+were 1-bit rounds.
+
+### The fix (one line, structural)
+
+`fetch_cache`'s `.enable` must be a **non-constant net that still evaluates to
+1**. MiSTer: `.enable(~status[11])` (status[11] defaults 0). Here:
+
+| | |
+|:--|:--|
+| `src/fpga/core/mac_lc_pocket.sv` | new `input icache_en`; `.enable( icache_en )` replaces `.enable( 1'b1 )` |
+| `src/fpga/core/core_top.sv` | new `reg opt_icache_off = 1'b0` at bridge address **0xF0000064** (read + write decoded), 2FF-synced to clk_sys as `icoff_s1/s2`, connected as `.icache_en( ~icoff_s2 )` |
+
+**No interact.json row was added** — the menu is at its measured ceiling of 13
+vars + 5 data slots (`docs/interact_envelope.md`, 08-20: a 14th var silently
+drops a row on hardware), and no row is needed: a bridge-decoded register is
+already non-constant to Quartus because `bridge_wr_data` arrives on a pin. The
+address doubles as a **bench A/B lever** — write 1 to turn the answer path off
+without a rebuild.
+
+**Mechanism.** Inside `rtl/fetch_cache.sv`, `enable` is registered
+(`enable_r <= enable`) and `enable_r` is in the fanin of *both* `hit` (the
+registered answer feeding `_cpuDTACK` and the CPU din mux) and `hit_now_comb`
+(the `sdram_oe` request suppression). Against a constant the fitter folds
+`enable_r` and every `enable_r &&` term away, collapsing both cones into a
+structure whose fast hit answer races a downstream consumer. Against a real
+net `enable_r` survives and the cones synthesise into a form that does not
+race. **The value is 1 either way — the fix changes how the logic is BUILT,
+not what it computes.**
+
+### What the offline A/B could and could NOT show (08-22, measured here)
+
+Both variants were run through `bash scripts/build.sh --check` (Analysis &
+Synthesis only) and their "Registers Removed During Synthesis" tables diffed:
+
+| | `.enable( icache_en )` | `.enable( 1'b1 )` |
+|:--|:--|:--|
+| A&S result | 0 errors | 0 errors |
+| removed-register table | 454 lines, no `fetch_cache` entry | 454 lines, **no `fetch_cache` entry either** |
+| Total registers | 9,548 | 9,546 |
+
+**★ This A/B is NOT diagnostic, and no one should read it as confirming the
+mechanism.** `enable_r` is absent from the removed list in BOTH builds, so its
+absence in the fixed build proves nothing. The +2 register delta is consistent
+with several explanations (the three new regs `opt_icache_off`/`icoff_s1/s2`
+minus optimisation, with or without `enable_r` surviving) and does not resolve
+which. The handoff attributes the folding to the **fitter**, and `--check`
+stops before the fitter — so the stage that does the damage was never run.
+The A&S report also never enumerates *surviving* registers by name, so grepping
+it for `enable_r` can only ever return the removed case.
+
+To actually measure this, a full compile is required, and then the post-fit
+netlist (fitter reports / node finder) must be inspected for `enable_r` — not
+the A&S report. **Do not repeat the `--check` A/B expecting an answer.**
+
+### ✅ Post-fit confirmation (seed 12, 08-22)
+
+Done properly, by querying the fitted timing netlist rather than reading a
+report:
+
+```bash
+quartus_sta -t q_enable.tcl     # get_registers *icache|enable_r* etc.
+```
+
+```
+*icache|enable_r*   -> 1  core_top:ic|mac_lc_pocket:machine|fetch_cache:icache|enable_r
+*opt_icache_off*    -> 1  core_top:ic|opt_icache_off
+*icoff_s*           -> 2  core_top:ic|icoff_s1, icoff_s2
+```
+
+**`enable_r` survives into the fitted netlist** — the fix does what it is meant
+to do structurally. This is the right instrument for this question; reuse it
+(`get_registers <pat> -nowarn` + `get_register_info -name`) rather than
+grepping reports.
+
+★ Still NOT measured: the counterfactual — that `.enable(1'b1)` *removes*
+`enable_r` at fit. That needs a second full compile of the control. Until it is
+run, "the fitter folds it" remains the handoff's account, not this fork's
+measurement. It does not block the hardware gate (which tests the fix, not the
+theory), but it is the one experiment that would close the mechanism.
+
+**Fit (seed 12):** 14,191 / 18,480 ALMs (77 %), **275 / 308 M10K (89 %)**,
+10,429 registers, timing met — worst slack **+0.118 ns**, zero negative paths.
+★ 89 % M10K is the density band where the 08-20 lottery ran ~3-of-4 bad on
+first roll, so a bad hardware verdict here is NOT automatically evidence
+against the fix — re-roll the seed once before drawing any conclusion, and
+remember the second half of the rule: two failures of ONE netlist means stop
+rolling and build a control (`docs/BUILD_INSTABILITY.md`).
+
+### ★ Honest caveat — this is why the HW gate is not optional
+
+Because the fix is structural rather than a root-cause logic change, its
+robustness on a *different* fitter/placement is **not guaranteed by the value
+change alone**. MiSTer's isolated proof is `MacLC_varA.rbf` = md5 `8896c2b2`,
+commit `ad53af0`, seed 4, STA met (worst slack +0.627), user-confirmed on
+hardware in the crashing config. The Pocket needs its own.
+
+### Reproduce (the gate this fix must pass)
+
+1. System 7.5.5: Monitors ▸ **256 colors**; Memory ▸ **32-bit addressing ON**.
+   (This core can also force the latter from the **32-Bit Memory** menu row.)
+2. **Special ▸ Shut Down** — this is what writes 8bpp+32-bit to PRAM. In-core
+   Restart is separately broken; do not rely on it.
+3. Reload the core and let it boot.
+4. Open a few Finder windows / normal window traffic.
+
+→ release bombs, fixed build stays clean. **A core reload alone cold-boots to
+1-bit if PRAM was never written — that will look like "can't reproduce."**
+
+Also worth running: Prince of Persia 2 launch (6.0.8 and 7.1), and Speedometer
+3.23 (expect ~3.59 mix / ~97% — the fix keeps the immediate hit answer, so
+there should be **no** perf regression; a regression means the answer path
+changed, not just its structure).
+
+### Offline gates (from `verilator/`, Verilator 5.x — currently unported here)
+
+- `tb_icache_transient` — truth invariant, every CPU-consumed word == memory.
+  PASS = 747 checks, 0 errors.
+- `tb_icache_seam` — done-birth discipline. Run normal (PASS) **and** the
+  negative control `+define+SDRAM_NO_DONE_LEVEL_FIX` (must FAIL).
+- `tb_fetch_cache` — hit-data currency. Run normal (PASS) **and**
+  `+define+FETCH_CACHE_HOSTILE_RDW +define+FETCH_CACHE_NO_RDW_FIX` (must FAIL).
+
+These live on the MiSTer tree; this fork's Verilator harness is still stale
+(§-6). They gate the cache's *function*, which this change does not touch —
+the Pocket gate here is the hardware repro.
+
+### ★★★ The law this leaves behind
+
+**Do not "simplify" `.enable( icache_en )` back to `1'b1`.** It is not dead
+configurability. Same class as `pocket_sdram`'s `t == 3'd1` start
+quantization: RTL that is provably equivalent on paper and not equivalent in
+silicon. Comments marking it are in both files.
 
 ## -6. ★★ 08-19: the MiSTer CPU-perf mission ported (Phase B + C + I-cache)
 
