@@ -830,13 +830,21 @@ module ncr5380 #(parameter DEVS = 2,
 			// and drops the oversized Toolbox transfer buffer on target 0:
 			// TB_ADDRW 12 -> 8 turns two 4 KB dpram halves (32,768 bits each,
 			// ~8 M10K) into two 256-byte ones.
-			// RING_LOG: boot disk (i==0, "Hard Disk 1") gets a 64-sector/32 KB
-			// read ring — deepened 2026-08-19 after the CPU-perf port raised
-			// the guest's drain rate ~30%; disk 2 stays at 32 sectors/16 KB.
-			// Post-prefetch-redesign cost is linear: +16 M10K for the doubling
-			// (measured 8+8 -> 16+16 on the two byte-lane buffers).
+			// RING_LOG asymmetric (hd32b, 2026-08-22): HD1 (boot, i==0) = 64-sector
+			// /32 KB ring; HD2 (i==1) = 2-sector minimum. Restores Case 5's only
+			// known mitigation on the BOOT disk while reclaiming HD2's M10K so the
+			// total stays out of the ~89% placement-lottery band (target ~84-85%).
+			// Why HD1 needs 32 KB when MiSTer runs 16 KB fine: apf_blockdev refills
+			// the ring ONE sector at a time, on demand, no prefetch/overlap (a full
+			// clk_sys->74a->bridge->SD round-trip each). MiSTer's HPS keeps a 16 KB
+			// ring fed under 7.5.5's Easy Open read load; the serialized Pocket
+			// refill cannot -- the ring empties and the shared ncr5380 host face
+			// shifts a byte at the refill boundary (Case 5, A0=$50F06060). 32 KB just
+			// buffers 2x in front of the same slow refill; the real fix is to
+			// PIPELINE apf_blockdev (gate on tb_scsi_face). Cost of HD2=2-sector:
+			// HD2 is Case-5-prone under HEAVY HD2 reads; the boot path (HD1) is safe.
 			scsi #(.ID(i[2:0]), .TOOLBOX_ENABLE(0),
-			       .RING_LOG(i == 0 ? 6 : 5),
+			       .RING_LOG(i == 0 ? 6 : 1),
 			       .TB_ADDRW(8)) target
 			(
 				.clk    ( clk ),
