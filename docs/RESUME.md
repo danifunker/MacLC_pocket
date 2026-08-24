@@ -1,4 +1,61 @@
-# RESUME — MacLC Pocket (2026-08-24: guest-time fixes ported as v1.2.0 and ★HW-VALIDATED★; 7.5.5 now crashes CONSISTENTLY at boot = photographed EXACT Case-5 fingerprint, worse than the 3/4 residual — date-jump/desktop-rebuild amplifier suspected)
+# RESUME — MacLC Pocket (2026-08-24 PM: warm-restart soft-reset ported (§-9, HW gate owed); v1.2.0 time fixes released-ready + HW-validated (§-8, seed 4 clean after the s12/s7 Case-5-fingerprint lottery))
+
+## -9. 08-24: Special ▸ Restart fix ported — RESET-instruction peripheral soft reset
+
+**Status: ★ HW-VALIDATED on seed 7 (user 08-24 ~16:20: "the build seems to be
+working"; the twice-in-a-row Restart gate was not explicitly itemized —
+re-confirm opportunistically). Seed ledger below: s4 bad fit, s7 good.**
+Port of MiSTer `fc73a58` (branch
+pds-enet-icache-fix, HW-validated there 08-24; same set independently
+HW-validated on MacIIvi `e653e74`). Root cause: both guest restart flavors
+(Special ▸ Restart and the shutdown screen's Restart button) execute the
+68020 RESET instruction + jump — NO Egret reset — so the warm ROM inherited
+the dying OS's peripheral state. Three stacked wedges:
+
+| piece | what |
+|---|---|
+| soft_periph_rst | `mac_lc_pocket.sv`: 16-clk stretched pulse off `tg68_reset_n` (new block after `_cpuReset_o`) |
+| via6522 + TIP | `dataController_top.sv`: VIA full reset on the pulse (real 6522 /RES); `via_tip_latched` → idle |
+| pseudovia | new `soft_rst` port clears INTERRUPT state ONLY (ifr/slot_ier/ier/irq_out/vbl flag) — ram_cfg/video_config SURVIVE or the ROM's own T+4s RESET would unmap RAM mid-cold-boot. Was the black-screen wedge #1: inherited live slot_ier + every-frame vblank ⇒ eternal slot-interrupt handler probing $F1xxxx |
+| pseudovia model | MAME-exact VBL flag (edge-driven reg, guest-ackable via reg $02 bit-6 — the ack was a NO-OP before) + ASC IFR bit 4 edge-latched with guest W1C (was auto-tracking the level). SCSI bits STAY LEVEL (LBMacTwo edge-model deadlock lesson) |
+| ASC | joins the soft reset (chime-phase quiet-wait wedge) |
+| SWIM | `._reset(_cpuReset && !softRst)` — THE decisive wedge: early ROM's ISM→IWM switch-back poll never exits against inherited ISM state (eternal loop $A009CE, video blanked). Media/mount state lives in floppy.v — untouched, tb_disk_swap-class behavior preserved |
+
+**Deliberately NOT reset: NCR/SCC** — the ROM sets up SCSI ~T+2.8s, RESETs
+~T+4s, and expects survival; resetting them regressed MiSTer cold boot to a
+blinking «?» (2026-06-12 lesson).
+
+**Pocket seam notes:** `rtl/pseudovia.sv` is now byte-identical to MiSTer
+post-fix except our pre-existing 8bpp video_config clamp. dataController
+hunks applied in the diverged Phase-B/C file at the same three sites (VIA
+reset, TIP latch, SWIM reset); the port comment here states the FINAL truth
+(SWIM included) where MiSTer's carries a stale pre-2dfcd1a clause.
+`verilator/sim.v` deliberately NOT touched (harness unported, §-6).
+
+**★ Item 5 of the mission (force-cold ROM patch removal) is a NO-OP here:**
+this tree has NO active ROM patch of either polarity — the inherited
+force-cold patch was found dormant (address typo, never fired) and the
+buildU forced-WARM patch was retired 08-12 ("honest branch runs on clean
+code", comment at mac_lc_pocket.sv ~2104). Restarts already take the genuine
+warm ROM path — which is exactly why they wedged — so this port alone is the
+complete fix AND delivers the fast warm restart (MiSTer measured
+Restart→Finder 55-65 s). Nothing to remove, no second commit needed.
+
+**Gates:** the ROM's own T+4s RESET exercises the soft-reset path on EVERY
+cold boot ⇒ a clean cold boot to desktop is a true regression gate, not a
+smoke test (sim boot gate unavailable here — MiSTer's passed). HW: cold boot
+to Finder, mouse alive, then **Special ▸ Restart to the desktop TWICE in a
+row** (once is not a verdict on a timing-dependent class). Fit-lottery
+caveat applies (fresh netlist): a boot that looks clean then crashes with
+garbage instructions at differing addresses on first interaction is a bad
+FIT — reseed before suspecting this RTL (twice this session: §-8).
+
+**Seed ledger (this netlist):** s4 (`1.2.0-rst-s4`, rbf_r 534271f7, STA met,
+14,110 ALMs/261 M10K) — **user verdict 08-24 ~15:55: bad, "reseed"**
+(signature not recorded). s7 rolled ~15:57. Remember the §-8 lesson cuts
+both ways: an identical failure on s7 would NOT yet prove the RTL guilty,
+but two bad rolls is where we pause and get the failure signature before
+burning a third.
 
 ## -8. 08-24: ALL guest-time fixes ported (frozen clock, 1960 dates) — v1.2.0
 
