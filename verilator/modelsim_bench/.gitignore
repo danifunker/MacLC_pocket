@@ -6,3 +6,4 @@ ncr5380_bench_gen.v
 scsi_dpram_gen.v
 obj_face/
 face_vsim.log
+obj_ring/
