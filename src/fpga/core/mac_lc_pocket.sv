@@ -1757,8 +1757,8 @@ module mac_lc_pocket
 		//
 		// Note also that simulation cannot reproduce hardware startup timing:
 		// dataController_top.sv:197/209 uses resetDelay 0x0200 under
-		// SIMULATION vs 0xFFFFF (129 ms) on FPGA, and egret_wrapper.sv:232
-		// uses ONESEC_PERIOD 8192 (~2 ms) vs 4000000 (~1 s). That, not "the
+		// SIMULATION vs 0xFFFFF (129 ms) on FPGA, and egret_wrapper.sv
+		// uses ONESEC_PERIOD 8192 (~2 ms) vs 4062499 (1 s). That, not "the
 		// behavioural Egret drives CB1 slowly", is why boot-timing faults are
 		// FPGA-only — the behavioural Egret is not even compiled in any more.
 		.via_sr_dbg_bit_cnt(dbg_sr_bit_cnt),

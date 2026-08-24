@@ -1,4 +1,99 @@
-# RESUME — MacLC Pocket (2026-08-22: I-cache enable-constant fix applied, HW gate owed)
+# RESUME — MacLC Pocket (2026-08-24: guest-time fixes ported as v1.2.0 and ★HW-VALIDATED★; 7.5.5 now crashes CONSISTENTLY at boot = photographed EXACT Case-5 fingerprint, worse than the 3/4 residual — date-jump/desktop-rebuild amplifier suspected)
+
+## -8. 08-24: ALL guest-time fixes ported (frozen clock, 1960 dates) — v1.2.0
+
+**Status: ★ HW-VALIDATED ON POCKET (same day).** User verdict on the seed-12
+fit (`MacLCtest` "1.2.0", rbf_r sha1 f312a6d9…): **"clock seems to be ticking
+correctly and the date is set correct"** — both headline defects confirmed
+fixed on hardware. Same build: **7.5.5 fails to boot, 7.1 fine** — that is the
+Case 5 discriminator exactly (7.5.5's Easy Open scan vs 7.1's lighter SCSI
+load, see the cpuperf status memory + `docs/F-Line_Build_Errors.md` Case 5),
+i.e. the KNOWN pre-existing residual: even the parked rc1 (same hd32b ring,
+same seed 12, no Egret change) booted 7.5.5 only 3-of-4. Not attributed to the
+time fixes — the Egret change is nowhere near the SCSI/ring path. Per the
+user's call, one SEED-ONLY re-roll (seed 7; next would be 4; 11 has failed
+twice historically) was launched 08-24 ~09:02 to hunt a cleaner placement.
+
+**★ s7 verdict (same day, ~09:40): SAME failure — and now the diagnosis is
+photographic.** User reports 7.5.5 crashing **consistently at beginning of
+boot** (worse than rc1's 3/4; 7.5.5 always on HD1, so the hd32b-protected
+ring); Pocket screenshots `20260824_094040/095902.png` (byte-identical pair,
+archived to scratch/) show MacsBug: `Bus Error at 00A02000 _InternalWait+C00`,
+insn `CLR.W CurApRefNum`, **A0=$50F06060 / A1=$50F10050 / A3=$50F00000** —
+the EXACT documented Case-5 register fingerprint (cpuperf memory 08-22 shot
+was `+C08 CLR.L $12(A0)`, 8 bytes later in the same sequence, same regs).
+**Two seeds (12, 7), same crash ⇒ mechanism, not placement.** Why consistent
+now when v1.1.3 was "fine" (3/4): prime suspect is the DATE FIX AS AMPLIFIER,
+not a new defect — the volume's clock jumped 1960→2026, which plausibly makes
+Easy Open/Desktop Mgr rescan or rebuild desktop state EVERY boot, i.e. a
+larger sustained SCSI read burst inside exactly the window Case 5 lives in
+(the documented crash was "during Macintosh Easy Open load" — also
+boot-time). Discriminator/unblocker to try on guest: **Shift-boot 7.5.5
+(extensions off)** — Easy Open never loads; if it boots clean, rebuild the
+desktop once (Cmd-Opt held at boot), then retry normal boots. Also prudent:
+Disk First Aid over the 7.5.5 volume from 7.1 (repeated crashes mid-scan
+with live SCSI writes can leave FS damage that mimics an RTL bug). Seed 4
+rolled anyway at user request (~10:04). Root fix unchanged: pipeline
+apf_blockdev refill, gated on tb_scsi_face.
+Fit s12 for the record: 14,250 ALMs (77%), 261/308 M10K (85%), worst setup
++2.041 ns, TNS 0 everywhere. `.sof` archived
+`scratch/builds/2026-08-24-v1.2.0-egret-time-s12.sof`.
+
+Verbatim port of the
+MiSTer fixes (branch `pds-enet-icache-fix`, commits `8c62ccf` + `97b7928`),
+which ARE HW-validated there (menu clock ticks, lowmem Time `$20C` advances
+1/s). Full mechanism + gates: the 2026-08-24 handoff (MiSTer commit `47e392d`,
+`docs/` there). Version bumped 1.1.3 → 1.2.0 (root core.json — the release.sh
+version source; dist stays 1.1.3 until this build is promoted). First HW try
+went to the card's MacLCtest slot labeled "1.2.0".
+
+Four defects, one subsystem (Egret one-second delivery — the Mac LC has **no
+VIA1 CA2 one-second wire**; the HC05 firmware sends a TIMER packet `[00 03]`
+over the VIA SR channel each second, enabled by the ROM's `[01 1B 03]`):
+
+1. **`rtl/egret/m68hc05_core.sv` — interrupt deadlock (THE frozen clock).**
+   onesec/timer interrupts were edge-detected and an edge landing inside the
+   firmware's SEI windows was dropped; the line stays asserted until the
+   never-run ISR acks `$12` bit 6 ⇒ permanent deadlock, mouse keeps working.
+   Now LEVEL-sensitive (real 68HC05/MAME semantics), latched only at opcode
+   fetch (`mainFSM == 4'h2`); ext IRQ pin (tied high) keeps edge semantics via
+   `ext_irq_pending`.
+2. **`rtl/egret/egret_wrapper.sv` — `$12` reads expose the fired flag in
+   bit 6** (MAME m68hc05e1 parity) so firmware RMW bit ops can't spuriously
+   ack a pending second.
+3. **`ONESEC_PERIOD` 4,000,000 → 4,062,499.** Verified for THIS fork's clock
+   tree, not copied blind: dataController_top instantiates egret_wrapper with
+   `.clk(clk32)` = `clk_sys` = 32.5 MHz, `cen = clk/8` = 4.0625 MHz —
+   identical to MiSTer, so `cen_Hz − 1` is the same constant. (Counter spans
+   `0..PERIOD` inclusive; old value ran the guest wall clock 1.56% fast.)
+4. **RTC seed now in the Mac epoch:** `mac_seconds = timestamp + 2,082,844,800`
+   (1904↔1970 offset) seeds intram `$AB-$AE`. Was raw Unix ⇒ guest lived in
+   1960 (offset is exactly 24,107 days; same leap-day count 1904→1970 as
+   1960→2026, so wall time was right and only dates showed it). The MiSTer
+   DST half of the handoff **does not apply here**: the seed is APF
+   `rtc_epoch_seconds` (core_bridge_cmd `host_20`), which Analogue OS derives
+   from the user-set LOCAL wall clock with no timezone math — already what
+   Mac Time wants.
+
+**Port fidelity:** both Egret files diff clean against the MiSTer post-fix
+blobs except the pre-existing buildAN `dbg_pc`/`dbg_hc05_pc` taps and two
+Pocket-adapted comments. `check_hierarchy` PASS. The handoff's sim gates
+(tick cadence, FIRE/ACK witness — the witness is in the wrapper under
+`SIMULATION`) are **not runnable here** — the Verilator harness is still
+unported (§-6) — so this leans on MiSTer's sim A/B (pre-fix sends collapse
+`…316, 325, 2, 1, 0…` after the enable; post-fix ~470/s to end of run,
+FIRE==ACK 8970/8970) plus shared-RTL byte identity.
+
+**HW gates:** ✅ menu clock advances (user-confirmed); ✅ dates correct
+(user-confirmed); ✅ mouse/ADB alive (implied — 7.1 runs fine on the same
+build). Still open: the §-7 I-cache gate (7.5.5 @ 8bpp + 32-bit), blocked
+behind the 7.5.5/Case-5 boot residual above, and the long-run drift check
+(the old constant ran the clock 1.56% fast — a multi-hour session should now
+hold wall time). Trap from the handoff, kept for the record: the deadlock was
+probabilistic per tick — "clock right at boot, then frozen" is the tell, and
+the boot-time re-seed masks a frozen HC05 RTC between core loads. Note the
+seed overwrites the guest clock at EVERY core load (host-wins policy, kept
+deliberately — guest-set Date & Time lasts only until the next load).
 
 ## -7. ★★★ 08-22: the I-cache 8bpp+32-bit Finder crash — `.enable` must not be a constant
 
