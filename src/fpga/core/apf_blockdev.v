@@ -184,7 +184,7 @@ module apf_blockdev #(
 	localparam integer SECTOR_WORDS = 256;   // 16-bit words
 
 	// ======================================================================
-	// Sector buffers — TWO simple-dual-port RAMs, 128 x 32
+	// Sector buffers — TWO simple-dual-port RAMs, rdbuf 256 x 32, wrbuf 128 x 32
 	// ======================================================================
 	// Deliberately NOT one shared true-dual-port array. Quartus rejects a reg
 	// array driven from two always blocks ("Error (10028): Can't resolve
@@ -203,11 +203,17 @@ module apf_blockdev #(
 	// and the 68020 is big-endian, so file order survives.
 	localparam integer BUF_DEPTH = SECTOR_WORDS/2;   // 128 x 32 = 512 bytes
 
-	(* ramstyle = "M10K,no_rw_check" *) reg [31:0] rdbuf [0:BUF_DEPTH-1];
+	// ★ 2026-08-24 (blockdev-pipeline): rdbuf doubled to TWO 512-byte halves
+	// (256 x 32 — still one M10K) so the fetch of sector N+1 can land in one
+	// half while sector N drains from the other. Address bit [7] selects the
+	// half; the bridge window widens to 1 KB (BUF_BASE must stay 1KB-aligned)
+	// and each transfer's bridgeaddr carries its half (T_IDLE below). wrbuf
+	// (writes) is untouched — every write/PRAM transfer stays in the low 512B.
+	(* ramstyle = "M10K,no_rw_check" *) reg [31:0] rdbuf [0:2*BUF_DEPTH-1];
 	(* ramstyle = "M10K,no_rw_check" *) reg [31:0] wrbuf [0:BUF_DEPTH-1];
 
 	wire       buf_hit  = (bridge_addr[31:24] == BUF_BASE[31:24]);
-	wire [6:0] buf_widx = bridge_addr[8:2];
+	wire [7:0] buf_widx = bridge_addr[9:2];
 
 	// ★ 2026-08-13: BRIDGE READBACK LAG COMPENSATION (-1 word). Measured on
 	// hardware, not inferred: the OS pairs each bulk-read response with the
@@ -227,7 +233,10 @@ module apf_blockdev #(
 	// ★ If an Analogue OS update ever changes the association, writes shift
 	// again by ±1 word — re-run the write round-trip (in-guest write, pull
 	// card, diff) after OS updates.
-	wire [6:0] buf_ridx = buf_widx - 7'd1;
+	// (wrbuf readback: the OS only ever reads back the low 512B window —
+	// write transfers and PRAM saves both post bridgeaddr = BUF_BASE — so
+	// the -1 compensation index stays 7 bits, exactly as before.)
+	wire [6:0] buf_ridx = bridge_addr[8:2] - 7'd1;
 
 	reg [31:0] wrbuf_rd_74;
 always @(posedge clk_74a) begin
@@ -237,11 +246,11 @@ end
 assign bridge_rd_data = wrbuf_rd_74;
 
 	reg [31:0] rdbuf_rd_sys;
-	reg [6:0]  buf_addr_sys;
+	reg [7:0]  buf_addr_sys;      // [7] = rdbuf half (wrbuf ignores it)
 	reg [31:0] buf_wdata_sys;
 	reg        buf_we_sys;
 always @(posedge clk_sys) begin
-	if (buf_we_sys) wrbuf[buf_addr_sys] <= buf_wdata_sys;
+	if (buf_we_sys) wrbuf[buf_addr_sys[6:0]] <= buf_wdata_sys;
 	rdbuf_rd_sys <= rdbuf[buf_addr_sys];
 end
 
@@ -323,7 +332,43 @@ end
 	reg        req_is_wr = 1'b0;
 	reg [1:0]  req_slot  = 2'd0;    // 0/1 = HDD slots, 2 = CD-ROM
 	reg [31:0] req_lba   = 32'd0;
+	reg        req_buf   = 1'b0;    // which rdbuf half the transfer targets
 	reg        done_seen = 1'b0;
+
+	// ---- pipelined-refill state (clk_sys) --------------------------------
+	// ★ 2026-08-24 (blockdev-pipeline; gated on tb_scsi_face at real cadence,
+	// which cleared the shared ncr5380 host face — the corruption class is
+	// refill STARVATION). One OS transfer is still ever in flight (the APF
+	// target-command interface is single-transaction; the 74a T-FSM below is
+	// untouched), but it no longer has to be the sector being served: after
+	// serving sector L of a SEQUENTIAL HDD read stream, the fetch of L+1 is
+	// posted speculatively and runs during L's drain, scsi.v's ring serve,
+	// and the Mac's own consumption — the parts of the round trip that are
+	// ours rather than the OS's. A demand for a sector already fetched (or
+	// in flight — the common starved case) skips its OS round trip entirely.
+	// Speculation is bounded by the slot's image size (a phantom read past
+	// image end would error/226ms-stall the shared sequencer) and launches
+	// only when the demand stream is sequential, so random reads never wait
+	// out a wasted speculative transfer.
+	localparam X_DEMAND = 1'b0, X_PF = 1'b1;
+	reg        x_busy = 1'b0;       // a transfer job is posted/in flight
+	reg        x_kind = X_DEMAND;   // who consumes its completion
+	reg        pf_valid = 1'b0;     // rdbuf half pf_buf holds (pf_slot, pf_lba)
+	reg  [1:0] pf_slot = 2'd0;
+	reg [31:0] pf_lba = 32'd0;
+	reg        pf_buf = 1'b0;
+	reg        pf_want = 1'b0;      // decided at pick, posted at drain
+	reg  [1:0] pf_want_slot = 2'd0;
+	reg [31:0] pf_want_lba = 32'd0;
+	reg        pf_want_buf = 1'b0;
+	reg        pf_mnt_kill = 1'b0;  // media changed under the in-flight fetch
+	reg        drain_half = 1'b1;   // rdbuf half the serve path reads
+	                                // (init 1 so the first miss fetches half 0)
+	reg        last_valid = 1'b0;   // sequential-stream tracker
+	reg  [1:0] last_slot = 2'd0;
+	reg [31:0] last_lba = 32'd0;
+	reg [22:0] blks0_sys = 23'd0;   // per-slot image size in 512B blocks
+	reg [22:0] blks1_sys = 23'd0;
 
 	reg [2:0]  done_s;
 	reg        done_tgl  = 1'b0;    // clk_74a: the transfer finished
@@ -359,7 +404,8 @@ end
 	                 C_PR_B   = 5'd15,  // PRAM load: emit 4 bytes to the Egret
 	                 C_PV_A   = 5'd16,  // PRAM validate: present rdbuf address
 	                 C_PV_W   = 5'd17,  // PRAM validate: RAM read latency
-	                 C_PV_B   = 5'd18;  // PRAM validate: accumulate blankness
+	                 C_PV_B   = 5'd18,  // PRAM validate: accumulate blankness
+	                 C_HITWAIT= 5'd20;  // demand == the speculative fetch in flight
 
 	// PRAM save states live in a second small FSM (below) so the 4-bit cstate
 	// encoding above stays as-is and the SCSI/floppy paths are untouched.
@@ -434,6 +480,29 @@ end
 	reg [31:0] flp_total    = 32'd0;  // image size in bytes
 	reg [24:0] flp_byte     = 25'd0;  // running byte offset for dio_addr
 
+	// ---- demand pick + speculation decision (combinational) --------------
+	// Same priority the C_IDLE arm always had: HDD slot 1, HDD slot 0, CD.
+	wire [1:0]  pick_slot = (sd_rd[1] | sd_wr[1]) ? 2'd1 :
+	                        (sd_rd[0] | sd_wr[0]) ? 2'd0 : 2'd2;
+	wire        pick_wr   = (sd_rd[1] | sd_wr[1]) ? sd_wr[1] :
+	                        (sd_rd[0] | sd_wr[0]) ? sd_wr[0] : 1'b0;
+	wire [31:0] pick_lba  = (sd_rd[1] | sd_wr[1]) ? sd_lba1 :
+	                        (sd_rd[0] | sd_wr[0]) ? sd_lba0 : sd_lba2;
+	wire        pick_hdd_rd = !pick_wr && (pick_slot != 2'd2);
+	// hit: the demanded sector is already in the speculative half, or is the
+	// very transfer in flight (the common case under a starved ring)
+	wire        pf_hit_valid  = pf_valid && pick_hdd_rd &&
+	                            (pf_slot == pick_slot) && (pf_lba == pick_lba);
+	wire        pf_hit_flight = x_busy && (x_kind == X_PF) && pick_hdd_rd &&
+	                            (pf_slot == pick_slot) && (pf_lba == pick_lba);
+	// speculate on L+1 only for a sequential HDD read stream, and never at
+	// or past the image end (a phantom read there errors / 226ms-stalls)
+	wire [22:0] pick_blks = (pick_slot == 2'd1) ? blks1_sys : blks0_sys;
+	wire        pf_seq = pick_hdd_rd && last_valid &&
+	                     (last_slot == pick_slot) && (pick_lba == last_lba + 32'd1);
+	wire        pf_ok  = (pf_seq || pf_hit_valid || pf_hit_flight) &&
+	                     ((pick_lba + 32'd1) < {9'd0, pick_blks});
+
 always @(posedge clk_sys) begin
 	sd_buff_wr   <= 1'b0;
 	buf_we_sys   <= 1'b0;
@@ -441,6 +510,57 @@ always @(posedge clk_sys) begin
 	pram_load_wr <= 1'b0;   // 1-cycle strobe, re-asserted in C_PR_B
 
 	done_s <= {done_s[1:0], done_tgl};
+
+	// ---- transfer completion (demand AND speculative) --------------------
+	// xfer_err is settled before done_tgl toggles (74a contract below), so
+	// it is read directly on the completion edge, as C_WAIT always did.
+	if (done_s[2] ^ done_s[1]) begin
+		x_busy <= 1'b0;
+		// A speculative completion publishes its half — unless the medium
+		// changed under it or it errored. C_HITWAIT consumes the publish
+		// (level-waits on !x_busy and reads pf_valid as the success flag —
+		// edge-waiting there deadlocked when the completion landed on the
+		// same cycle as the demand pick).
+		if (x_kind == X_PF && !xfer_err && !pf_mnt_kill)
+			pf_valid <= 1'b1;
+	end
+
+	// ---- speculative-fetch post ------------------------------------------
+	// Posted only from the drain/finish states of a demand serve: the T-FSM
+	// is idle there by construction (the serve's own transfer, if any, just
+	// completed), and the drain proceeds from the OTHER rdbuf half while
+	// this fetch runs. Publish order is safe by the same mailbox rule as
+	// demand fetches: the OS writes rdbuf before done, done_tgl crosses
+	// before pf_valid rises, and pf_valid rises before any hit-drain reads.
+	if (pf_want && !x_busy && !(mnt0 | mnt1 | mnt2) &&
+	    (cstate == C_DRN_A || cstate == C_DRN_W ||
+	     cstate == C_DRN_B || cstate == C_FIN)) begin
+		req_is_pram <= 1'b0;
+		req_is_flp  <= 1'b0;
+		req_is_wr   <= 1'b0;
+		req_slot    <= pf_want_slot;
+		req_lba     <= pf_want_lba;
+		req_buf     <= pf_want_buf;
+		pf_slot     <= pf_want_slot;
+		pf_lba      <= pf_want_lba;
+		pf_buf      <= pf_want_buf;
+		pf_valid    <= 1'b0;
+		pf_mnt_kill <= 1'b0;
+		pf_want     <= 1'b0;
+		x_kind      <= X_PF;
+		x_busy      <= 1'b1;
+		req_tgl     <= ~req_tgl;
+	end
+
+	// ---- media change: all speculation is stale --------------------------
+	if (mnt0 | mnt1 | mnt2) begin
+		pf_valid   <= 1'b0;
+		pf_want    <= 1'b0;
+		last_valid <= 1'b0;
+		if (x_busy && x_kind == X_PF) pf_mnt_kill <= 1'b1;
+	end
+	if (mnt0) blks0_sys <= size0_74[31:9];
+	if (mnt1) blks1_sys <= size1_74[31:9];
 
 	// ---- PRAM save walker -------------------------------------------------
 	// Runs independently of cstate: it only reads the Egret's pram[] (async
@@ -493,6 +613,7 @@ always @(posedge clk_sys) begin
 			req_is_pram  <= 1'b1;
 			req_is_flp   <= 1'b0;
 			req_is_wr    <= 1'b0;
+			req_buf      <= 1'b0;
 			cstate       <= C_REQ;
 		end else if (pram_sv_todo && !pram_sv_busy) begin
 			// Save: the bytes are already staged in wrbuf by the save walker.
@@ -500,6 +621,7 @@ always @(posedge clk_sys) begin
 			req_is_pram  <= 1'b1;
 			req_is_flp   <= 1'b0;
 			req_is_wr    <= 1'b1;
+			req_buf      <= 1'b0;
 			cstate       <= C_REQ;
 		// SCSI requests take priority; a floppy bulk load is not time-critical
 		// and simply resumes between them.
@@ -507,6 +629,7 @@ always @(posedge clk_sys) begin
 			req_is_pram <= 1'b0;
 			req_is_flp <= 1'b1;
 			req_is_wr  <= 1'b0;
+			req_buf    <= 1'b0;
 			req_lba    <= {9'd0, flp_sector};
 			cstate     <= C_REQ;
 		end else if (sd_rd[0] | sd_rd[1] | sd_rd[2] | sd_wr[0] | sd_wr[1]) begin
@@ -521,26 +644,59 @@ always @(posedge clk_sys) begin
 			// slot of stale data. Unobservable with one disk mounted; real
 			// with two, and structural once the CD made it three.)
 			// A write must have the core's data in the buffer BEFORE the OS
-			// is asked to store it (C_FILL_*).
-			if (sd_rd[1] | sd_wr[1]) begin
-				req_is_wr <= sd_wr[1];
-				req_slot  <= 2'd1;
-				req_lba   <= sd_lba1;
-				sd_ack    <= 3'b010;
-				cstate    <= sd_wr[1] ? C_FILL_A : C_REQ;
-			end else if (sd_rd[0] | sd_wr[0]) begin
-				req_is_wr <= sd_wr[0];
-				req_slot  <= 2'd0;
-				req_lba   <= sd_lba0;
-				sd_ack    <= 3'b001;
-				cstate    <= sd_wr[0] ? C_FILL_A : C_REQ;
+			// is asked to store it (C_FILL_*). (Winner selection now lives in
+			// the pick_* wires above — same priority, one copy.)
+			req_is_wr <= pick_wr;
+			req_slot  <= pick_slot;
+			req_lba   <= pick_lba;
+			sd_ack    <= (pick_slot == 2'd1) ? 3'b010 :
+			             (pick_slot == 2'd0) ? 3'b001 : 3'b100;
+			// sequential tracker + the next-sector speculation decision.
+			// Both compare against the PREVIOUS pick (nonblocking order).
+			last_valid <= pick_hdd_rd;
+			last_slot  <= pick_slot;
+			last_lba   <= pick_lba;
+			pf_want      <= pf_ok;
+			pf_want_slot <= pick_slot;
+			pf_want_lba  <= pick_lba + 32'd1;
+			if (pick_wr) begin
+				cstate <= C_FILL_A;
+			end else if (pf_hit_valid) begin
+				// speculative hit: the sector is already in rdbuf — serve it
+				// with NO OS round trip. The envelope toward scsi.v keeps its
+				// exact shape (ack rise -> 256 sd_buff writes -> ack fall),
+				// it is simply short.
+				pf_valid    <= 1'b0;          // consumed
+				drain_half  <= pf_buf;
+				pf_want_buf <= ~pf_buf;
+				cstate      <= C_DRN_A;
+			end else if (pf_hit_flight) begin
+				// the speculative fetch of exactly this sector is still in
+				// flight (the common case under a starved ring): wait for it
+				// in C_HITWAIT, then drain — never a second fetch.
+				drain_half  <= pf_buf;
+				req_buf     <= pf_buf;        // for the error-path refetch
+				pf_want_buf <= ~pf_buf;
+				cstate      <= C_HITWAIT;
 			end else begin
-				req_is_wr <= 1'b0;
-				req_slot  <= 2'd2;
-				req_lba   <= sd_lba2;
-				sd_ack    <= 3'b100;
-				cstate    <= C_REQ;
+				// miss: demand-fetch into the half the last drain vacated
+				drain_half  <= ~drain_half;
+				req_buf     <= ~drain_half;
+				pf_want_buf <= drain_half;
+				cstate      <= C_REQ;
 			end
+		end
+	end
+
+	C_HITWAIT: begin
+		// Level-wait: x_busy clears at the fetch's completion and nothing
+		// can re-post while the serve sits here. pf_valid says whether it
+		// delivered; a failed/killed speculative transfer falls back to the
+		// demand path (C_REQ refetches the same sector into the same half).
+		if (!x_busy) begin
+			cidx     <= 9'd0;
+			pf_valid <= 1'b0;             // consumed (or refetching)
+			cstate   <= pf_valid ? C_DRN_A : C_REQ;
 		end
 	end
 
@@ -582,12 +738,21 @@ always @(posedge clk_sys) begin
 	end
 
 	C_REQ: begin
-		req_tgl <= ~req_tgl;
-		cstate  <= C_WAIT;
+		// Post the demand job once the T-FSM is free — an in-flight
+		// speculative fetch (posted from a previous drain) finishes first;
+		// it cannot be aborted, only waited out, and this wait is bounded by
+		// the 74a FSM's own 226 ms bailouts exactly like any transfer.
+		if (!x_busy) begin
+			pf_valid <= 1'b0;   // any demand transfer owns the buffers now
+			x_kind   <= X_DEMAND;
+			x_busy   <= 1'b1;
+			req_tgl  <= ~req_tgl;
+			cstate   <= C_WAIT;
+		end
 	end
 
 	C_WAIT: begin
-		if (done_s[2] ^ done_s[1]) begin
+		if ((done_s[2] ^ done_s[1]) && x_kind == X_DEMAND) begin
 			cidx <= 9'd0;
 			// A PRAM READ feeds the Egret; a PRAM WRITE is simply finished.
 			// Either way, a failed transfer must still release the boot, so
@@ -729,7 +894,7 @@ always @(posedge clk_sys) begin
 
 	// ---- read direction: rdbuf -> core, a 16-bit half at a time ----
 	C_DRN_A: begin
-		buf_addr_sys <= cidx[7:1];
+		buf_addr_sys <= {drain_half, cidx[7:1]};
 		cstate       <= C_DRN_W;
 	end
 
@@ -813,7 +978,10 @@ always @(posedge clk_74a) begin
 				// req_lba is a 512-byte sector index; the OS wants a BYTE
 				// offset into the file.
 				target_dataslot_slotoffset <= req_is_pram ? 32'd0 : (req_lba << 9);
-				target_dataslot_bridgeaddr <= BUF_BASE;
+				// req_buf selects the rdbuf half this transfer lands in
+				// (always 0 for PRAM/floppy/writes) — quasi-static before
+				// the req toggle, same convention as req_lba.
+				target_dataslot_bridgeaddr <= BUF_BASE | {22'd0, req_buf, 9'd0};
 				target_dataslot_length     <= req_is_pram ? PRAM_BYTES[31:0]
 				                                          : SECTOR_BYTES[31:0];
 				tmo                        <= 24'd0;
@@ -934,13 +1102,18 @@ assign dbg_stage = dlv_s[1]    ? 3'd5 :
 	reg [15:0] dbg_w0 = 16'd0, dbg_w1 = 16'd0;
 	reg [7:0]  dbg_dlv_cnt = 8'd0;
 	reg [23:0] dbg_last_lba = 24'd0;
+	reg [2:0]  dbg_ack_d = 3'd0;
 	always @(posedge clk_sys) begin
 		if (cstate == C_DRN_B) begin
 			if (cidx == 9'd0) dbg_w0 <= rdbuf_rd_sys[31:16];
 			if (cidx == 9'd1) dbg_w1 <= rdbuf_rd_sys[15:0];
 			if (cidx == SECTOR_WORDS-1) dbg_dlv_cnt <= dbg_dlv_cnt + 8'd1;
 		end
-		if (cstate == C_REQ && !req_is_pram && !req_is_flp && !req_is_wr)
+		// Latch on the ack rise (the demand pick) rather than in C_REQ:
+		// speculative hits are served without ever passing C_REQ, and C_REQ
+		// is multi-cycle now (it waits out an in-flight speculative fetch).
+		dbg_ack_d <= sd_ack;
+		if (sd_ack != 3'b000 && dbg_ack_d == 3'b000 && !req_is_wr)
 			dbg_last_lba <= req_lba[23:0];
 	end
 	assign dbg_bdw0 = { dbg_w0, dbg_w1 };
@@ -953,7 +1126,9 @@ assign dbg_stage = dlv_s[1]    ? 3'd5 :
 	reg [23:0] dbg_wr_lba   = 24'd0;
 	reg [15:0] dbg_ww0 = 16'd0, dbg_ww1 = 16'd0;
 	always @(posedge clk_sys) begin
-		if (cstate == C_REQ && req_is_wr && !req_is_pram && !req_is_flp) begin
+		// !x_busy = the accept cycle: C_REQ dwells while a speculative fetch
+		// finishes, and only the cycle that actually posts may count.
+		if (cstate == C_REQ && !x_busy && req_is_wr && !req_is_pram && !req_is_flp) begin
 			dbg_wr_cnt <= dbg_wr_cnt + 7'd1;
 			dbg_wr_lba <= req_lba[23:0];
 		end
