@@ -88,7 +88,8 @@ function [7:0] ramp(input [31:0] off);
 endfunction
 
 // stall behavior knobs (hierarchically set by the TB)
-integer stall_len = 0;          // REQ drop at each 512-boundary, clks
+integer stall_len = 0;          // per-sector ring refill latency, clks (0 = instant)
+integer ring_blks = 2;          // fetch-ahead depth (frontier may lead cur by this)
 
 localparam P_IDLE=0, P_CMD=1, P_DATAIN=2, P_STATUS=3, P_MSGIN=4;
 integer phase = P_IDLE;
@@ -96,9 +97,21 @@ integer cmd_i = 0;
 reg [7:0] cdb [0:5];
 reg [31:0] data_cnt = 0;
 reg [31:0] data_len = 0;
-integer stall_t = 0;
+// Ring-frontier refill model (2026-08-24, real-cadence extension). The old
+// model dropped REQ for stall_len exactly at data_cnt%512==0; the real
+// scsi.v serve gate (io_busy read clause) stalls REQ whenever the CURRENT
+// byte or the +3 look-ahead byte (din_pair_next capture) lies at/past the
+// fetched frontier (rd_hps_blk), with the look-ahead clamped at the transfer
+// tail (rd_ahead_needed). That pauses REQ at byte 509/510/512 depending on
+// the host's train grid — alignments the boundary model never produced —
+// and re-initializes per command (scsi.v:406). frontier_blk mirrors
+// rd_hps_blk; refill_t models apf_blockdev's per-sector round trip, running
+// CONCURRENTLY with serving (scsi.v's fetch engine posts sector N+1 while
+// the Mac drains N), one refill outstanding, bounded by ring_blks.
+integer frontier_blk = 0;       // sectors delivered to the ring this command
+integer refill_t = 0;           // countdown of the in-flight sector fetch
 reg mounted = 0;
-// 4-state power-up: every output reg must have a defined value � the CD
+// 4-state power-up: every output reg must have a defined value � the CD
 // instance and an unmounted disk target never execute an assigning branch,
 // and an X bsy poisons bus_busy for everyone (the t-counter lesson, again).
 initial begin bsy = 0; msg = 0; cd = 0; io = 0; req = 0; io_wr = 0; end
@@ -110,7 +123,22 @@ reg [31:0] vis_cnt = 0;         // the data_cnt the OUTPUTS currently show
 assign dout           = ramp(vis_cnt);
 assign dout_pair      = {ramp(vis_cnt), ramp(vis_cnt + 1)};
 assign dout_pair_next = {ramp(vis_cnt + 2), ramp(vis_cnt + 3)};
-assign req_bus = req || (phase == P_DATAIN && stall_t != 0);
+
+// serve gate = scsi.v's io_busy read clause on the frontier model.
+// eff_cnt folds in the 2-clk advance pipeline so the gate sees the
+// post-train position immediately, as the real combinational io_busy does
+// (there the ncr's dma_settle window hides the transient; the stub's req
+// is registered, so a stale count would place the pause one train late).
+wire [31:0] eff_cnt    = data_cnt + adv_pipe[0] + adv_pipe[1];
+wire [31:0] cur_blk    = eff_cnt >> 9;
+wire [31:0] ahead_blk  = (eff_cnt + 3) >> 9;
+wire [31:0] total_blks = data_len >> 9;
+wire stalled = (stall_len != 0) &&
+               ((cur_blk >= frontier_blk) ||
+                ((ahead_blk < total_blks) && (ahead_blk >= frontier_blk)));
+
+// req_bus stays up across ring-refill stalls in the data phase (scsi.v:535)
+assign req_bus = req || (phase == P_DATAIN && stalled && data_cnt < data_len);
 
 assign io_lba = 0; assign io_rd = 0; assign sd_buff_din = 0;
 assign tb_lba = 0; assign tb_rd = 0; assign tb_wr = 0; assign tb_buff_din = 0;
@@ -128,13 +156,25 @@ always @(posedge clk) begin
 	if (img_mounted) mounted <= 1;
 	if (rst) begin
 		phase <= P_IDLE; bsy <= 0; msg <= 0; cd <= 0; io <= 0; req <= 0;
-		cmd_i <= 0; adv_pipe <= 0; adv_vis <= 0; stall_t <= 0;
+		cmd_i <= 0; adv_pipe <= 0; adv_vis <= 0;
+		frontier_blk <= 0; refill_t <= 0;
 	end else begin
 		// delivery pipeline: ack FALL -> 2 clks -> data_cnt++ -> 1 clk -> visible
 		adv_pipe <= {adv_pipe[0], (ack_d && !ack && phase == P_DATAIN)};
 		if (adv_pipe[1]) data_cnt <= data_cnt + 1;
 		adv_vis <= adv_pipe[1];
 		if (adv_vis) vis_cnt <= data_cnt;
+
+		// ring refill engine: one sector fetch outstanding, stall_len clks
+		// each, launched while serving continues (the scsi.v fetch engine +
+		// apf_blockdev round trip), at most ring_blks ahead of the reader
+		if (phase == P_DATAIN && stall_len != 0) begin
+			if (refill_t != 0) begin
+				refill_t <= refill_t - 1;
+				if (refill_t == 1) frontier_blk <= frontier_blk + 1;
+			end else if (frontier_blk < total_blks && (frontier_blk - cur_blk) < ring_blks)
+				refill_t <= stall_len;
+		end
 
 		case (phase)
 		P_IDLE: begin
@@ -158,8 +198,10 @@ always @(posedge clk) begin
 					data_len <= {24'd0, cdb[4]} * 512;
 					phase <= P_DATAIN;
 					cd <= 0; io <= 1; msg <= 0;
-					stall_t <= 0;
-					req <= 1;
+					// per-command ring re-init (scsi.v:406): the frontier
+					// starts EMPTY — the first REQ waits out the first refill
+					frontier_blk <= 0; refill_t <= 0;
+					req <= (stall_len == 0);
 				end else begin
 					cmd_i <= cmi(cmd_i);
 					req <= 1;
@@ -167,23 +209,16 @@ always @(posedge clk) begin
 			end
 		end
 		P_DATAIN: begin
-			// sector-boundary fetch stall: drop REQ for stall_len clks
-			if (stall_t != 0) begin
-				stall_t <= stall_t - 1;
-				if (stall_t == 1) req <= 1;
-			end else if (req && ack) begin
+			if (req && ack) begin
 				req <= 0;           // this byte is being taken (ack train edge)
 			end else if (!req && !ack) begin
 				if (data_cnt >= data_len) begin
 					phase <= P_STATUS;
 					cd <= 1; io <= 1; msg <= 0;
 					req <= 1;
-				end else if (data_cnt != 0 && data_cnt[8:0] == 9'd0 && stall_len != 0 && data_cnt != vis_cnt) begin
-					// boundary reached (count advanced past it): hold REQ down
-					stall_t <= stall_len;
-				end else if (data_cnt[8:0] == 9'd0 && data_cnt != 0 && stall_len != 0) begin
-					stall_t <= stall_len;
-				end else
+				end else if (!stalled)
+					// level gate, like io_busy: REQ simply stays down while
+					// the current/+3-ahead byte is past the fetched frontier
 					req <= 1;
 			end
 		end
@@ -266,7 +301,9 @@ end endtask
 
 task reg_write(input [2:0] rs, input [7:0] v); begin
 	@(posedge clk); #2;
-	bus_cs = 1; iow = 1; ior = 0; dack = 0; bus_rs = rs; wdata = {8'h00, v};
+	// byte write mirrored on both lanes, as TG68K/68000 byte writes are
+	// (ODR latches wdata[15:8], ICR latches wdata[7:0] — both must see v)
+	bus_cs = 1; iow = 1; ior = 0; dack = 0; bus_rs = rs; wdata = {v, v};
 	tickn(2); bus_release; tickn(2);
 end endtask
 
@@ -305,8 +342,9 @@ task dma_read16(input word, input lw, input second,
 	dma_word = word; dma_longword = lw; dma_second_word = second;
 	@(posedge clk);
 	w = 0; ok = 1;
-	while (!dreq && w < 30000) begin @(posedge clk); w = w + 1; end
-	if (w >= 30000) begin ok = 0; timeouts = timeouts + 1; bus_release; end
+	// budget covers the real-cadence refill stalls (up to ~1 ms = 32.5k clks)
+	while (!dreq && w < 150000) begin @(posedge clk); w = w + 1; end
+	if (w >= 150000) begin ok = 0; timeouts = timeouts + 1; bus_release; end
 	else begin
 		tickn(ds);
 		out = rdata;
@@ -325,21 +363,29 @@ task run_read(input integer mode, input integer sectors,
               input integer ds, input integer gap, input integer stall);
 	integer len, d, i, errs;
 	reg ok; reg [15:0] v1, v2; reg [7:0] cdb_b;
-begin
+// vlt >= 5.05 mis-resolves `disable <taskname>` self-return (later calls
+// bind to a 0-arg block) — disable a named body block instead.
+begin : run_read_body
 	dut.target[0].target.stall_len = stall;
 	bus_release; img_mounted = 0;
 	reset = 1; tickn(8); reset = 0; tickn(4);
+	// SCSI bus reset: the module reset above only resets the NCR — the
+	// targets' rst port is scsi_rst (ICR bit 7). Without this pulse a run
+	// inherits the previous run's target state (P_STATUS still BSY, or a
+	// mid-DATA abort) and every subsequent run cascades corrupt.
+	reg_write(WREG_ICR, 8'h80); tickn(4);
+	reg_write(WREG_ICR, 8'h00); tickn(4);
 	img_size = 32'd131072; img_mounted = 2'b01; tickn(1);
 	img_mounted = 0; tickn(4);
 	reg_write(WREG_ODR, 8'h01);
 	reg_write(WREG_ICR, ICR_DATA | ICR_SEL);
 	wait_csr(CSR_BSY, CSR_BSY, ok);
-	if (!ok) begin $display("SELECT TIMEOUT"); timeouts = timeouts + 1; bus_release; disable run_read; end
+	if (!ok) begin $display("SELECT TIMEOUT"); timeouts = timeouts + 1; bus_release; disable run_read_body; end
 	reg_write(WREG_ICR, ICR_DATA);
 	for (i = 0; i < 6; i = i + 1) begin
 		cdb_b = (i == 0) ? 8'h08 : (i == 4) ? sectors[7:0] : 8'h00;
 		pio_put(cdb_b, ok);
-		if (!ok) begin $display("CMD TIMEOUT byte=%0d", i); timeouts = timeouts + 1; bus_release; disable run_read; end
+		if (!ok) begin $display("CMD TIMEOUT byte=%0d", i); timeouts = timeouts + 1; bus_release; disable run_read_body; end
 	end
 	reg_write(WREG_ICR, 8'h00);
 	reg_write(WREG_TCR, 8'h01);
@@ -350,43 +396,43 @@ begin
 	case (mode)
 	0: for (d = 0; d < len; d = d + 2) begin
 		dma_read16(1, 0, 0, ds, gap, v1, ok);
-		if (!ok) begin $display("DREQ TIMEOUT W d=%0d", d); disable run_read; end
+		if (!ok) begin $display("DREQ TIMEOUT W d=%0d", d); disable run_read_body; end
 		collect16(v1);
 	end
 	1: for (d = 0; d < len; d = d + 4) begin
 		dma_read16(1, 1, 0, ds, gap, v1, ok);
-		if (!ok) begin $display("DREQ TIMEOUT L d=%0d", d); disable run_read; end
+		if (!ok) begin $display("DREQ TIMEOUT L d=%0d", d); disable run_read_body; end
 		dma_read16(1, 1, 1, ds, gap, v2, ok);
-		if (!ok) begin $display("DREQ TIMEOUT L2 d=%0d", d); disable run_read; end
+		if (!ok) begin $display("DREQ TIMEOUT L2 d=%0d", d); disable run_read_body; end
 		collect16(v1); collect16(v2);
 	end
 	2: begin
 		dma_read16(1, 0, 0, ds, gap, v1, ok);
-		if (!ok) begin $display("DREQ TIMEOUT LS pre"); disable run_read; end
+		if (!ok) begin $display("DREQ TIMEOUT LS pre"); disable run_read_body; end
 		collect16(v1);
 		d = 2;
 		while (len - d >= 6) begin
 			dma_read16(1, 1, 0, ds, gap, v1, ok);
-			if (!ok) begin $display("DREQ TIMEOUT LS d=%0d", d); disable run_read; end
+			if (!ok) begin $display("DREQ TIMEOUT LS d=%0d", d); disable run_read_body; end
 			dma_read16(1, 1, 1, ds, gap, v2, ok);
-			if (!ok) begin $display("DREQ TIMEOUT LS2 d=%0d", d); disable run_read; end
+			if (!ok) begin $display("DREQ TIMEOUT LS2 d=%0d", d); disable run_read_body; end
 			collect16(v1); collect16(v2);
 			d = d + 4;
 		end
 		while (d < len) begin
 			dma_read16(1, 0, 0, ds, gap, v1, ok);
-			if (!ok) begin $display("DREQ TIMEOUT LSt d=%0d", d); disable run_read; end
+			if (!ok) begin $display("DREQ TIMEOUT LSt d=%0d", d); disable run_read_body; end
 			collect16(v1); d = d + 2;
 		end
 	end
 	3: begin
 		dma_read16(0, 0, 0, ds, gap, v1, ok);
-		if (!ok) begin $display("DREQ TIMEOUT WS pre"); disable run_read; end
+		if (!ok) begin $display("DREQ TIMEOUT WS pre"); disable run_read_body; end
 		got[got_cnt] = v1[7:0]; got_cnt = got_cnt + 1;
 		d = 1;
 		while (len - d >= 2) begin
 			dma_read16(1, 0, 0, ds, gap, v1, ok);
-			if (!ok) begin $display("DREQ TIMEOUT WS d=%0d", d); disable run_read; end
+			if (!ok) begin $display("DREQ TIMEOUT WS d=%0d", d); disable run_read_body; end
 			collect16(v1); d = d + 2;
 		end
 	end
@@ -415,18 +461,32 @@ initial begin
 	$display("=== sample-distance sweep on LONG at the gap floor ===");
 	for (s = 1; s <= 3; s = s + 1)
 		run_read(1, 3, s, 2, 0);
-	$display("=== sector-boundary REQ stalls (ring-fetch model) x skew modes ===");
+	$display("=== ring-frontier REQ stalls (refill model) x skew modes ===");
 	for (m = 0; m < 4; m = m + 1) begin
 		run_read(m, 4, 2, 2, 12);
 		run_read(m, 4, 2, 2, 60);
 	end
+	$display("=== REAL apf_blockdev refill cadence (hundreds of us/sector) ===");
+	// 32.5 MHz clk: 3250 = 100 us, 9750 = 300 us, 32500 = 1 ms per sector —
+	// brackets the OS target_dataslot round trip the serialized refill pays.
+	// The Case-5 mechanism lives here: sustained reads against a starved
+	// ring, every sector boundary a full-latency REQ pause at the alignment
+	// the host's poll/DACK cadence happens to land on.
+	for (m = 0; m < 4; m = m + 1) begin
+		run_read(m, 4, 2, 2, 3250);
+		run_read(m, 4, 2, 2, 9750);
+		run_read(m, 4, 2, 2, 32500);
+	end
+	$display("=== sustained-read soak at real cadence (Easy Open shape) ===");
+	run_read(1, 8, 2, 2, 9750);
+	run_read(2, 8, 2, 2, 9750);
 	$display("");
 	if (mismatches == 0 && timeouts == 0) $display("ALL FACE CHECKS PASSED");
 	else $display("FAILED: %0d mismatches, %0d timeouts", mismatches, timeouts);
 	$finish;
 end
 
-initial begin #60000000; $display("WATCHDOG TIMEOUT"); $finish; end
+initial begin #300000000; $display("WATCHDOG TIMEOUT"); $finish; end
 
 // heartbeat: where is the handshake sitting?
 integer hb;
