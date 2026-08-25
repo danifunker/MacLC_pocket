@@ -1,4 +1,129 @@
-# RESUME — MacLC Pocket (2026-08-24 PM: warm-restart soft-reset ported (§-9, HW gate owed); v1.2.0 time fixes released-ready + HW-validated (§-8, seed 4 clean after the s12/s7 Case-5-fingerprint lottery))
+# RESUME — MacLC Pocket (2026-08-24 eve: blockdev refill PIPELINED (§-10, bench-green, HW A/B owed on `1.2.0-bd-s12`); restart §-9 + time fixes §-8 HW-validated; v1.2.0 released-ready)
+
+## -10. 08-24 eve: apf_blockdev pipelined — the Case-5 root fix (bench-green, HW A/B owed)
+
+**Status: MERGED to main (`229e3e3`, ff from `blockdev-pipeline`), BUILT
+(seed 12: STA met all corners, worst setup +2.039, 14,304 ALMs, 261/308 M10K
+— the results doc's ZERO M10K delta held), ON CARD as `1.2.0-bd-s12`
+(rbf_r sha1 7381fd5b…), .sof archived. UNCOMMITTED here: qsf seed-12 +
+build_id (commit with the HW verdict).** The macOS box ran the whole
+bench-gated mission — `docs/blockdev_pipeline_results.md` is the authority:
+tb_scsi_face **first successful run anywhere** (3 bench-side fixes, none in
+the DUT) = **face CLEAN at stock AND real refill cadence** ⇒ starvation
+confirmed ⇒ pipeline path: rdbuf 128×32→256×32 (two 512 B halves, same
+M10K), thin job layer, sequential-HDD-only speculation posted at drain
+start, one-rule invalidation + mount kill, mailbox-ordered CDC. Zero port
+changes; scsi.v/ncr5380.sv untouched. tb_blockdev REWRITTEN (old oracle
+predated buildAA little-endian face and failed against known-good RTL).
+All gates green there: scsi_face (stock+real cadence), tb_blockdev,
+scsi_ring, tb_disk_swap, check_hierarchy.
+
+**HW A/B owed (this box's half of the contract):** repeated 7.5.5 + Easy
+Open boots — COLD and WARM restarts (this fit is the first with both the
+restart soft reset AND the pipeline); whole-disk Finder copy; PoP2 launch;
+subjective disk speed vs MiSTer (sequential streams should feel markedly
+faster — bench measured 48 µs hit-serve vs 133 µs demand). The RTL verdict
+is bench-proven; what HW answers is the placement-marginality question —
+the pipeline removes how OFTEN reads sit on the starved boundary, not the
+boundary's existence (results doc caveat). Seed-lottery patience applies.
+
+**★★ 20:30-21:00 FINAL TONIGHT — the ledger closes at 0-for-4 seeds (12, 4,
+7, 6) and the verdict shifts:** bd-s6 with FRESH disks = cold boots CLEAN,
+warm restart worked TWICE then bus error, and after that crash even core
+reloads hung ("no safe boot") — which is — ★ CORRECTED ~21:15: NOT disk corruption. User: **quit-the-core +
+relaunch recovers fully, no power-off, and "the volume didn't get damaged"**
+— a corrupt volume would hang the reload too. The unsafe-boot state is
+STALE SESSION STATE that survives the OSD/core-restart path but not a full
+core teardown. Prime suspect located: `apf_blockdev` HAS `reset_n` (line
+46) but carries state DELIBERATELY outside it (the buildY dataslot-update
+latch, apf_blockdev.v:274 — must not clear on reset because Analogue sends
+updates during reset) and, since tonight, the pf_* speculation state; and
+the req/done TOGGLE PAIRS span two clock domains — a reset that clears one
+domain's phase but not the other's desyncs the handshake permanently
+(every later transfer pairs wrong ⇒ hang) until a full reload re-inits
+both. So the warm-restart crash AND the post-crash OSD-restart hang are
+one family: PARTIAL STATE SURVIVAL at the blockdev seam across each reset
+flavor. Fix mission (Mac bench first): make every reset flavor leave the
+seam phase-consistent — guest soft reset ⇒ quiesce/abort + clear
+speculation; core reset_n ⇒ atomic toggle-pair handling (preserving the
+buildY update-latch exemption); tb_blockdev gains BOTH cases
+(reset-mid-transfer for each flavor). Recovery procedure until then:
+after any crash, QUIT the core and relaunch (documented, cheap).
+bd-s7 = F-line on restored 7.1.
+Reading the whole night: (1) the intermittent warm-restart crash tracks the
+apf_blockdev cross-restart state gap (NO reset flavor reaches it; in-flight
+transfer + speculation survive the guest RESET — the afternoon audit
+covered scsi.v/ncr but missed this); (2) the extension-parade crash class
+survived the pipeline across four placements with varied faces ⇒ the
+starvation-dwell theory is NOT the whole story — placement marginality in
+the SCSI cones remains the standing explanation, and the structural answer
+is LOGICLOCK-PINNING those cones (queued since 08-20 as the M10K-relief/
+placement mission); (3) the pipeline's digital contract is bench-proven —
+keep it, but its HW benefit is unprovable until the marginality and the
+corruption loop stop destroying evidence. NEXT SESSION ORDER: [a] disposable
+-image test discipline (restore before every verdict); [b] blockdev quiesce
+on soft_periph_rst — small, tb_blockdev-benchable on the Mac (add the
+guest-reset-mid-transfer case); [c] LogicLock pin the SCSI/host-face/CDC
+cones from the best fit and END the lottery; [d] only then re-judge the
+crash class. v1.1.3 main slot remains the stable daily driver; v1.2.0's
+validated wins (clock, dates, restart-mostly-works) are real and keep.
+
+**Seed ledger (blockdev netlist):** s12 (`1.2.0-bd-s12`, rbf 7381fd5b) —
+**user 08-24 ~19:15: "same error as before"**; screenshot
+`scratch/20260824_191513.png` = the EXACT fingerprint again (Bus Error
+$A02000 `_InternalWait+C00` `CLR.W CurApRefNum`, A0=$50F06060,
+A1=$50F10050, A3=$50F00000 — SP differs: $4FE9A2 vs the earlier $779Bxx,
+so different RAM layout, same crash site). s4 rolled ~19:20.
+
+**★ 19:30-19:45 EVIDENCE CORRECTION (control run):** bd-s4's only strike
+was on 7.1 (`scratch/20260824_192636.png`, same fingerprint) — but the
+control experiment (byte-identical rst-s7 re-flash, sha 464b4073) showed
+7.1 misbehaving there too, and the user then established: **the 7.1 disk
+image is CORRUPT** (a casualty of the day's crash loops with live SCSI
+writes) while **the 7.5.5 image is HEALTHY** (works on the v1.1.3 main
+slot). Therefore: (a) the "7.1 newly affected ⇒ pipeline regression"
+inference is RETRACTED — contaminated evidence; (b) 7.5.5-on-control
+(rst-s7) still crashes = that fit's known Case-5 marginality, consistent
+with the afternoon; (c) **bd-s4 has never had a fair trial** — its 7.5.5
+verdict is UNKNOWN. Re-staged bd-s4 from the archived .sof (sha match
+a958edfe) for the fair trial: healthy 7.5.5 image, cold + warm boots +
+Easy Open. Clean ⇒ pipeline exonerated AND promote candidate; the same
+fingerprint on a healthy disk ⇒ a genuine golden-seed strike on the
+pipelined netlist ⇒ structural escalation (LogicLock pinning /
+first-fill coverage / no_rw_check+hit-drain timing review on the Mac
+bench). The 7.1 image needs Disk First Aid or replacement before it
+counts as evidence again (user has backups, will restore when needed).
+
+**★ Screenshot decode (scratch/20260824_19{3338,4131,5954}.png) — the
+failure is VARIED-SITE now, not one wedge:** 19:33 = Finder RUNNING then
+`Unimplemented Instruction` at $13CD7E on `DC.W $F6FF` garbage, regs full
+of $AAAAAAAA (boots-then-garbage shape; corrupt-7.1-disk era). 19:41 = the
+canonical Bus Error `_InternalWait+C00` **with MacsBug itself printing "(It
+looks like 'Macintosh Easy Open' was loading.)"** — the Case-5 context is
+now self-documented. 19:59 (bd-s4, HEALTHY 7.5.5) = `Unimplemented
+Instruction at 00000003` during **"Foreign File Access"** load — wild jump
+to $3, A0=$FFFFFFFF. Same disk-heavy extension-parade phase, three
+different crash faces ⇒ intermittent corrupted READ DATA reaching the
+guest, not one deterministic wedge. Variance across boots on one fit+disk
+argues timing-dependent intermittency (marginality or alignment-dependent
+staleness), not a systematically-wrong-sector protocol bug.
+
+**~19:55: bd-s4 fair trial ⇒ user ordered more rolls** ("lets re-roll a
+couple more times" — read as the same crash on the healthy 7.5.5 disk,
+exact outcome not itemized). That IS a golden-seed strike on the pipelined
+netlist per the agreed criterion; the user chose dice over escalation for
+now — s7 rolled ~19:55, s6 queued behind it. If both fail 7.5.5 the same
+way, the structural path (LogicLock pinning / no_rw_check + hit-drain
+review / first-fill coverage) has four-strikes standing and should not be
+deferred again.
+**Escalation criterion agreed:** if s4 AND s7 also express it (3 strikes on
+the PIPELINED netlist), starvation-dwell stops being the dominant
+explanation — next levers are STRUCTURAL, not dice: LogicLock-pin the
+marginal SCSI cones (the queued M10K-relief/placement mission),
+first-fill speculation coverage (prefetch at command receipt), and/or
+dma_settle hardening — plus note the fingerprint's instruction-level
+determinism keeps the 08-22 "stale/wrong FETCH vs SCSI data" ambiguity
+alive (A0 expected -$400(A6)=RAM, holds the SCSI pDMA port).
 
 ## -9. 08-24: Special ▸ Restart fix ported — RESET-instruction peripheral soft reset
 
